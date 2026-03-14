@@ -1,0 +1,39 @@
+# macOS
+.DS_Store
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Rust
+/target/
+Cargo.lock
+
+# Python helpers / local tooling
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Environment and local config
+.env
+.env.*
+scarecrow.toml
+
+# Runtime data
+data/
+recordings/
+transcripts/
+summaries/
+logs/
+state/
+
+# Model and cache artifacts
+.cache/
+models/
+
+# Temporary files
+tmp/
+*.tmp
