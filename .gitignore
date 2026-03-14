@@ -22,13 +22,14 @@ __pycache__/
 .env.*
 scarecrow.toml
 
-# Runtime data
+# Runtime data (matches SPEC.md data directory structure)
 data/
-recordings/
-transcripts/
-summaries/
+audio/
 logs/
 state/
+*.db
+*.db-wal
+*.db-shm
 
 # Model and cache artifacts
 .cache/
@@ -37,3 +38,6 @@ models/
 # Temporary files
 tmp/
 *.tmp
+
+# Audio artifacts
+*.opus
