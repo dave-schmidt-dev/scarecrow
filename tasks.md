@@ -26,7 +26,7 @@ only when its exit gate passes.
 | P2 | Recording Pipeline | M2 + M4 | Capture audio reliably and classify it correctly before higher-level features | Continuous chunk capture works with correct routing and silence handling |
 | P3 | Live Transcription Surface | M3 + M5 + M6.1 + M6.2 + M6.4 | Deliver the first usable operator experience: captions, health, notes, pause, lifecycle commands | User can run daemon/TUI daily and trust the basic recording loop |
 | P4 | Cold-Path Intelligence | M7 | Add canonical transcripts, summaries, degraded modes, and worker lifecycle | Background processing is correct, bounded, and recoverable |
-| P5 | Query and Recall | M8 + M6.3 | Make stored conversations retrievable through queries and markers | Queries return useful answers with provenance and acceptable latency |
+| P5 | Query and Recall | M8 | Make stored conversations retrievable through queries and markers | Queries return useful answers with provenance and acceptable latency |
 | P6 | Operations and First-Run UX | M9 + M10 + M6.5 | Make the system maintainable for real use on a personal machine | Retention, setup, deletion, and disk warnings work safely |
 | P7 | Hardening and Release Readiness | M11 | Prove resilience under long runs, crashes, and edge conditions | Soak, crash, concurrency, restart, and disk-full gates all pass |
 
@@ -111,6 +111,7 @@ notes, pause/resume, and operator health.
 - M5
 - M6.1
 - M6.2
+- M6.3a
 - M6.4
 
 **Exit gate:**
@@ -156,7 +157,6 @@ workflows.
 
 **Build scope:**
 - M8
-- M6.3
 
 **Exit gate:**
 - Time-window and marker-based queries return grounded answers against known
@@ -225,9 +225,9 @@ capture.
 1. P0: M1.1
 2. P1: M1.2, M1.3, M1.6, M1.4, M1.7, M1.5, M1.9, M1.8
 3. P2: M2.1, M4.1, M4.2, M2.2, M2.3, M2.4
-4. P3: M3.1, M3.2, M5.1, M5.3, M5.2, M6.1, M6.2, M6.4
+4. P3: M3.1, M3.2, M5.1, M5.3, M5.2, M6.1, M6.2, M6.3a, M6.4
 5. P4: M7.1a, M7.2, M7.5, M7.3, M7.4, M7.1b
-6. P5: M8.1, M8.2, M8.3, M8.4, M6.3
+6. P5: M8.1, M8.2, M8.3, M8.4
 7. P6: M9.1, M9.2, M10.1, M6.5
 8. P7: M11.1 through M11.6
 
@@ -284,6 +284,9 @@ A task or milestone is done only when all of the following are true:
 - **Validate:** Run with no config file — default config is written to disk
   and matches SPEC.md defaults. Run with a custom config that overrides
   `chunk_duration_secs = 15` — verify parsed value is 15, not 30.
+  Run with `[llm] backend = "llama-cli"` and `model_dirs = ["~/Models"]` —
+  verify those values parse correctly and defaults for `cleanup_model`,
+  `summary_model`, and `query_model` remain empty strings.
   `stat -f %Lp scarecrow.toml` returns `600`.
 
 ### M1.3 — SQLite schema bootstrap
@@ -312,7 +315,9 @@ A task or milestone is done only when all of the following are true:
 - **Validate:** Create a mock `daemon.json` with known values. Run
   `scarecrow status` — output includes those values. Delete PID file, run
   again — output says "not running". Create PID file with non-existent PID,
-  run again — output says "not running" (stale PID detected).
+  run again — output says "not running" (stale PID detected). Verify the PID
+  file lives at `$SCARECROW_DATA/state/daemon.pid` and is not created outside
+  the protected `state/` directory.
 
 ### M1.5 — Crash recovery and socket cleanup
 - [ ] On startup, detect and clean up stale PID file (process not running)
@@ -578,7 +583,7 @@ A task or milestone is done only when all of the following are true:
   `scarecrow pause` from second terminal without TUI — daemon stops recording
   (no new chunks). Run `scarecrow resume` — recording resumes.
 
-### M6.3 — Query panel (placeholder)
+### M6.3a — Query panel shell (pre-backend)
 - [ ] `q` opens query text input
 - [ ] Shows "query engine not yet available" placeholder response
 - [ ] `Esc` closes panel
@@ -599,6 +604,8 @@ A task or milestone is done only when all of the following are true:
 - [ ] `scarecrow delete-last <duration>` CLI command (e.g., `5m`, `1h`)
 - [ ] Deletes audio files and transcripts within the specified window
 - [ ] Removes deleted transcript content from `transcripts_fts`
+- [ ] Removes affected stored query responses/provenance and summaries derived
+      solely from deleted material
 - [ ] Ensures deleted content is not returned by later queries or summaries
 - [ ] Logs what was deleted
 - **Validate:** Record for 3 minutes. Run `scarecrow delete-last 2m`. Verify
@@ -607,7 +614,8 @@ A task or milestone is done only when all of the following are true:
   `SELECT * FROM transcripts_fts WHERE transcripts_fts MATCH 'known_deleted_term'`
   returns 0 rows. Query for deleted content returns no result or an explicit
   "no matching context" response. Any summary spanning only deleted material is
-  deleted or clearly marked unavailable. Remaining chunks are unaffected.
+  deleted or clearly marked unavailable. Stored `queries` rows that quote only
+  deleted material are removed or redacted. Remaining chunks are unaffected.
 
 ---
 
@@ -623,13 +631,15 @@ A task or milestone is done only when all of the following are true:
 - [ ] Create worker Python virtualenv at `$SCARECROW_DATA/venv/` if missing
 - [ ] Discover GGUF models from configured `model_dirs` and build a local
       model catalog with validation status
+- [ ] Persist the model catalog at `$SCARECROW_DATA/state/model_catalog.json`
 - **Validate:** Trigger cold-path run. `SELECT * FROM cold_path_runs ORDER BY
   id DESC LIMIT 1` shows `status = 'completed'` with valid `processed_through`
   and `chunks_processed > 0`. Kill worker during run — `status` becomes
   `'failed'`, next scheduled run starts from last good watermark. Set
   `cold_interval_mins = 0` — verify no scheduled runs occur (only on-demand).
   Point `model_dirs` at a directory with known GGUF files — verify Scarecrow
-  catalogs them and records healthy/unhealthy status after a smoke test.
+  catalogs them and records healthy/unhealthy status after a smoke test in
+  `$SCARECROW_DATA/state/model_catalog.json`.
 
 ### M7.1b — Query preemption and worker.sock
 - [ ] Worker preemption via SIGUSR1 (flag checked between chunk transactions)
@@ -718,7 +728,8 @@ A task or milestone is done only when all of the following are true:
 - [ ] Retrieves all `is_current = TRUE` transcripts for the window (mixed
       draft mic + canonical merged is expected and acceptable)
 - [ ] Sanitizes query text before LLM prompt construction
-- [ ] Generates response via local LLM
+- [ ] Generates response via direct `llama.cpp` invocation using configured
+      `query_model` or discovered fallback, not an agent wrapper
 - [ ] Writes query + response + provenance to `queries` table (window_start,
       window_end, marker_ids, transcript_ids, transcript_tiers)
 - [ ] Sends response back to daemon via `worker.sock`
@@ -728,7 +739,8 @@ A task or milestone is done only when all of the following are true:
   incremented. `window_start` and `window_end` are non-null. `transcript_ids`
   JSON array is non-empty. Query again immediately after new speech (before
   cold path) — response still works using draft transcripts.
-  `transcript_tiers` shows `{"draft": N}` for the recent portion.
+  `transcript_tiers` shows `{"draft": N}` for the recent portion. Worker logs
+  show direct `llama.cpp` invocation using `query_model` or discovered fallback.
 
 ### M8.2 — Marker-based name queries with window boundaries
 - [ ] Query engine searches `markers_fts` for name/keyword matches
@@ -743,6 +755,8 @@ A task or milestone is done only when all of the following are true:
   bounded by next marker). `queries.marker_ids` contains the Justin marker ID.
   `queries.window_start` = T, `queries.window_end` = T+3min. Query "summarize
   the call with Sarah" (no marker) — response indicates no matching context.
+  If `query_model` is unset but a healthy discovered summary/query-capable
+  model exists, verify fallback selection is deterministic and logged.
 
 ### M8.3 — Worker warm mode for follow-ups
 - [ ] After query, worker keeps `worker.sock` open for `idle_timeout_secs`
@@ -799,14 +813,18 @@ A task or milestone is done only when all of the following are true:
 - [ ] Steps: mic permission check, BlackHole detection/setup guide (including
       sample rate and clock source verification), HuggingFace token for
       pyannote (via `huggingface-cli login`, with note about accepting terms
-      on two model pages), model pre-download option, cloud backup exclusion
-      warning
+      on two model pages), GGUF model discovery/configuration, `llama-server`
+      vs `llama-cli` backend selection, model pre-download option, cloud backup
+      exclusion warning
 - [ ] Writes config to `scarecrow.toml` with 0600 permissions
 - [ ] Creates data directory with 0700 permissions
 - [ ] Each optional step can be skipped with clear degraded-mode explanation
 - [ ] Sets `com.apple.metadata:com_apple_backup_excludeItem` xattr on data dir
 - **Validate:** Run on clean install with all components available — config
-  file created with correct device names. Run again skipping BlackHole —
+  file created with correct device names and `[llm]` settings. Wizard discovers
+  GGUF files from default locations or lets the user choose model directories,
+  writes `backend`, and validates a direct `llama.cpp` invocation against the
+  selected cleanup/summary/query model path. Run again skipping BlackHole —
   config has no `system_device`, wizard prints "mic-only mode" explanation.
   Run again skipping pyannote — wizard prints "no speaker labels" explanation.
   Run `scarecrow start` after setup — daemon starts without errors.

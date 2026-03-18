@@ -106,6 +106,8 @@ Three processes:
 - **Music filtering:** Handled by transcription confidence thresholds, not audio routing
 - **Local LLM runtime:** Prefer `llama.cpp` with GGUF models for transcript
   cleanup, summaries, and query answering
+- **Live captions:** Stay on a dedicated speech-to-text engine; Apple
+  Foundation Models are not the live-caption path for this project
 - **Name-based retrieval:** Resolves through user-provided markers, not automatic speaker ID
 - **Privacy:** Auto-pauses on screen lock; `delete-last` purges recent recordings
 - **Security:** All data files 0600, directories 0700; model checksums verified; no secrets in config
@@ -158,6 +160,8 @@ Manual developer setup before the wizard exists:
 5. Grant microphone access when the daemon first requests it.
 6. If testing diarization, log in with `huggingface-cli` and accept the
    required pyannote model terms before running worker validations.
+7. Place GGUF files in `~/Models` or `~/.cache/llama.cpp`, or plan to point
+   `[llm].model_dirs` at a custom directory.
 
 ## Validation Workflow
 
@@ -171,6 +175,11 @@ This command is expected to grow with the implementation. During planning and
 bootstrap it validates repo readiness and reports which build/test layers are
 not available yet. During implementation it will become the standard local gate
 for formatting, linting, tests, and smoke checks.
+
+Validator maturity:
+
+- planning/bootstrap: doc presence plus scaffold-aware checks
+- implementation: milestone-specific checks must be added as each phase lands
 
 ## Documentation
 

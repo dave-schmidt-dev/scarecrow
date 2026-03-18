@@ -25,6 +25,7 @@ Install these first:
 Suggested commands:
 
 ```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 xcode-select --install
 brew install rustup-init python sqlite ffmpeg opus-tools llama.cpp
 rustup-init
@@ -64,6 +65,32 @@ huggingface-cli login
 
 Then accept the model terms for the required pyannote models in the browser.
 
+## GGUF Provisioning
+
+Scarecrow expects GGUF files to exist locally for cleanup, summary, and query
+tasks. Default search locations are:
+
+- `~/Models`
+- `~/.cache/llama.cpp`
+
+Recommended starting layout:
+
+```text
+~/Models/
+├── qwen2.5-3b-instruct-q4_k_m.gguf
+└── qwen2.5-7b-instruct-q4_k_m.gguf
+```
+
+Recommended backend choice:
+
+- use `llama-server` when you want a persistent warm local API and lower
+  repeated query latency
+- use `llama-cli` for simpler one-shot subprocess execution and smaller
+  orchestration surface
+
+The setup wizard should validate that the selected backend can invoke the
+chosen model successfully before Scarecrow treats it as healthy.
+
 ## Local Model Direction
 
 Use `llama.cpp` as the default local runtime for:
@@ -102,6 +129,23 @@ Scarecrow should maintain a local model catalog with:
 - intended use tags: `cleanup`, `summary`, `query`
 - validation status: `untested`, `ok`, `failed`
 
+Recommended persisted catalog path:
+
+- `~/.local/share/scarecrow/state/model_catalog.json`
+
+Example catalog entry:
+
+```json
+{
+  "path": "/Users/dave/Models/qwen2.5-7b-instruct-q4_k_m.gguf",
+  "size_bytes": 4680000000,
+  "quantization": "Q4_K_M",
+  "last_modified": "2026-03-18T14:30:00Z",
+  "intended_use": ["summary", "query"],
+  "validation_status": "ok"
+}
+```
+
 Recommended config shape:
 
 ```toml
@@ -119,9 +163,13 @@ Fallback heuristics only apply when config is missing:
 - prefer larger instruct models with more context for summary and query work
 - skip models that exceed the current RAM budget
 - validate a candidate with a short smoke test before marking it healthy
+- if multiple healthy candidates exist for the same role, choose deterministically
+  by explicit role match, then context suitability, then smaller resource cost
 
 Hot-path live captions remain a speech-to-text problem, not a text-generation
-problem. Keep their implementation on a dedicated STT path.
+problem. Keep their implementation on a dedicated STT path. Apple Foundation
+Models are not the live-caption engine for Scarecrow; if an Apple-native path
+is explored later, it would be via Apple's speech stack instead.
 
 ## Validation
 
@@ -140,3 +188,10 @@ Expected evolution:
 
 Every milestone should add its checks to this command rather than creating
 isolated ad hoc validation workflows.
+
+Validator maturity expectations:
+
+- P0/P1: docs present, scaffolding present, config/schema smoke checks
+- P2/P3: add audio/TUI/IPC smoke checks to `./scripts/validate.sh`
+- P4/P5: add worker, model-selection, and query smoke checks
+- P6/P7: add setup, retention, and integration/hardening checks

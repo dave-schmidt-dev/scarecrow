@@ -52,6 +52,28 @@
   Scarecrow's worker-side text generation tasks and document how model
   discovery and selection should work.
 
+## 2026-03-18 — Audit remediation pass
+
+### Why
+- A fresh internal audit found remaining contradictions in deletion semantics,
+  query-panel sequencing, validator maturity, and operational details for the
+  new `llama.cpp` model path.
+
+### Decision
+- Clarified that `delete-last` is a privacy purge that removes retrieval
+  artifacts, not just audio.
+- Split early query-panel placeholder behavior from the real query-engine phase
+  by renaming it `M6.3a`.
+- Extended config, setup, and worker tasks to cover `[llm]`, GGUF discovery,
+  backend selection, model catalog persistence, and direct `llama.cpp`
+  invocation for queries as well as summaries.
+- Documented validator maturity expectations and made the Apple Foundation
+  Models non-goal for live captions explicit.
+
+### Outcome
+- The planning set is materially closer to a single coherent implementation
+  contract and should produce fewer ambiguities in a third-party audit.
+
 ## 2026-03-14 — Project bootstrap and spec v1
 
 ### Initial decisions

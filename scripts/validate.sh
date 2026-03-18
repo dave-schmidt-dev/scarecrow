@@ -23,6 +23,18 @@ done
 
 echo "- docs present"
 
+if ! rg -q "\[llm\]" SPEC.md tasks.md; then
+  echo "missing [llm] config coverage in planning docs" >&2
+  exit 1
+fi
+
+if ! rg -q "llama.cpp" README.md SPEC.md tasks.md DEVELOPMENT.md; then
+  echo "missing llama.cpp runtime references in planning docs" >&2
+  exit 1
+fi
+
+echo "- planning doc consistency checks passed"
+
 if [[ -f "Cargo.toml" ]]; then
   echo "- running cargo fmt --check"
   cargo fmt --check

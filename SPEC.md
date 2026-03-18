@@ -88,9 +88,10 @@ does work, and exits. It is never resident long-term.
 
 Responsibilities:
 - Re-transcription with `large-v3` whisper model for accuracy
+- Transcript cleanup and normalization via `llama.cpp`
 - Speaker diarization (see Diarization Engine section)
-- Summary generation via local LLM
-- Answering user queries against transcript history
+- Summary generation via direct `llama.cpp` invocation
+- Answering user queries against transcript history via direct `llama.cpp`
 - Writes canonical transcripts, summaries, and query responses back to SQLite
 
 Resource requirements (peak, during cold-path run with all features):
@@ -354,10 +355,12 @@ On submit:
   while the user is away. Auto-pause is enabled by default and configurable
   via `auto_pause_on_lock` in the config.
 - **Delete recent recordings:** `scarecrow delete-last <duration>` purges
-  audio files and transcripts from the last N minutes. For example,
-  `scarecrow delete-last 5m` deletes the last 5 minutes of audio, draft
-  transcripts, and any canonical transcripts covering that window. This is
-  a safety valve for accidental capture of sensitive content. The delete is
+  audio files and all retrieval artifacts from the last N minutes. For
+  example, `scarecrow delete-last 5m` deletes the last 5 minutes of audio,
+  draft transcripts, any canonical transcripts covering that window, FTS
+  entries, summaries derived solely from deleted material, and stored query
+  responses/provenance that quote or depend on the deleted window. This is a
+  safety valve for accidental capture of sensitive content. The delete is
   permanent and logged.
 
 ### 9. Context and Retrieval
@@ -703,9 +706,12 @@ A chunk's lifecycle involves two orthogonal state dimensions:
 2. **Audio retention** (`audio_pruned`): FALSE → TRUE when the retention sweep
    deletes the audio file. Irreversible.
 
-These are independent. A chunk in state `canonical` + `audio_pruned = TRUE`
-means: the audio file has been deleted, but the canonical transcript and any
-summaries that reference it remain fully searchable and usable.
+These are independent for retention sweeps only. A chunk in state
+`canonical` + `audio_pruned = TRUE` means: the audio file has been deleted by
+retention policy, but the canonical transcript and any summaries that reference
+it remain searchable and usable. This does not apply to `delete-last`, which is
+an explicit privacy purge and removes retrieval artifacts for the deleted
+window.
 
 ### Pause Intervals
 
@@ -764,6 +770,7 @@ cleanup_model = ""                 # Preferred GGUF for cleanup; empty = auto-di
 summary_model = ""                 # Preferred GGUF for summaries; empty = auto-discover
 query_model = ""                   # Preferred GGUF for queries; empty = auto-discover
 backend = "llama-server"           # "llama-server" or "llama-cli"
+catalog_path = "~/.local/share/scarecrow/state/model_catalog.json"
 
 [query]
 idle_timeout_secs = 300            # How long the worker stays warm after last query
@@ -831,6 +838,8 @@ For each discovered model, the worker should track a local catalog with:
 - intended use (`cleanup`, `summary`, `query`)
 - validation status (`untested`, `ok`, `failed`)
 
+The catalog is stored at `$SCARECROW_DATA/state/model_catalog.json`.
+
 Fallback heuristics:
 - prefer smaller instruct models for transcript cleanup
 - prefer larger instruct models with more context for summaries and queries
@@ -839,6 +848,18 @@ Fallback heuristics:
 
 Shell aliases such as `cclocal` are explicitly out of scope for runtime
 integration. They are developer conveniences only, not product dependencies.
+
+### Staged TUI Delivery
+
+The full v1 TUI main view includes mic, system audio, transcription, cold-path,
+and disk indicators. Implementation is staged:
+
+- M5 delivers the baseline view: captions plus mic/system/transcription health
+- M7 adds live cold-path state
+- M9 adds live disk state and warnings
+
+This is a delivery sequence only; the full v1 contract remains the five-part
+health bar described in the main view section.
 
 ## Diarization Engine
 
@@ -1175,12 +1196,13 @@ breakdown with measurable validation steps.
 - Note panel, query panel (without LLM backend), and pause/resume work.
   Markers persisted to SQLite.
 - **Done when:** `n` opens note panel, markers appear in DB. `p` pauses
-  recording with timeline gap. Query panel shows placeholder.
+  recording with timeline gap. Query panel shell exists and can show a
+  placeholder before backend integration.
 
 ### M7: Cold-Path Worker
 - Python worker runs on schedule. Re-transcribes with `large-v3`. Diarization
-  with pyannote (or graceful fallback). Summaries via local LLM. Query
-  preemption works.
+  with pyannote (or graceful fallback). Transcript cleanup and summaries via
+  direct `llama.cpp`. Query preemption works.
 - **Done when:** Canonical merged transcripts appear in DB after cold-path run.
   `is_current` flags update correctly. FTS5 returns merged text, not
   per-channel. Summaries cover the processed window. A query sent during a
