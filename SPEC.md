@@ -241,7 +241,10 @@ live captions. The cold path handles them.
 - Input: both channels, resampled to 16 kHz before inference, processed
   independently then merged
 - Diarization: speaker labels (see Diarization Engine section)
-- Summary: local LLM (MLX-optimized model via mlx-lm or similar)
+- Transcript cleanup and normalization: local GGUF model via `llama.cpp`
+- Summary: local GGUF model via `llama.cpp`
+- Invocation path: direct `llama.cpp` process integration (`llama-server` or
+  `llama-cli`), not an agent wrapper or editor/CLI assistant alias
 - Confidence filter: segments below threshold on system audio channel are
   discarded (catches music, notification sounds, etc.)
 - Re-processes all chunks since the last completed or interrupted cold-path run
@@ -755,6 +758,13 @@ confidence_threshold = 0.4         # Minimum confidence to keep system audio tra
 enable_summaries = true            # Set false to skip LLM summaries (saves ~5 GB RAM)
 enable_diarization = true          # Set false to skip pyannote diarization (saves ~300 MB RAM)
 
+[llm]
+model_dirs = ["~/Models", "~/.cache/llama.cpp"]
+cleanup_model = ""                 # Preferred GGUF for cleanup; empty = auto-discover
+summary_model = ""                 # Preferred GGUF for summaries; empty = auto-discover
+query_model = ""                   # Preferred GGUF for queries; empty = auto-discover
+backend = "llama-server"           # "llama-server" or "llama-cli"
+
 [query]
 idle_timeout_secs = 300            # How long the worker stays warm after last query
 marker_window_max_mins = 60        # Max duration of a marker-resolved window
@@ -794,7 +804,7 @@ $SCARECROW_DATA/
 |------------------|----------|--------------------------------------------------|
 | scarecrow-daemon | Rust     | Low memory, no GC, direct FFI to whisper.cpp, CoreAudio bindings |
 | scarecrow (TUI)  | Rust     | Shares types/IPC protocol with daemon, single toolchain |
-| scarecrow-worker | Python   | pyannote-audio, mlx-lm, and LLM ecosystem are Python-native |
+| scarecrow-worker | Python   | pyannote-audio plus `llama.cpp` orchestration for cleanup, summaries, and query answering |
 | Build system     | Cargo    | Workspace with daemon and TUI as separate crates  |
 
 The Rust workspace contains two binary crates (`scarecrow-daemon`, `scarecrow`)
@@ -803,6 +813,32 @@ and shared library crates for types, IPC protocol, and database access.
 The Python worker is a standalone script invoked by the daemon as a subprocess.
 Its dependencies are managed in a dedicated virtualenv at
 `$SCARECROW_DATA/venv/`.
+
+### Local Model Discovery and Selection
+
+Scarecrow uses a config-first selection policy for local GGUF models.
+
+Selection order:
+1. Explicit model names/paths from `[llm]` in `scarecrow.toml`
+2. Auto-discovery from configured `model_dirs`
+3. Feature disablement with a clear error if no compatible model is available
+
+For each discovered model, the worker should track a local catalog with:
+- file path
+- file size
+- quantization
+- last modified time
+- intended use (`cleanup`, `summary`, `query`)
+- validation status (`untested`, `ok`, `failed`)
+
+Fallback heuristics:
+- prefer smaller instruct models for transcript cleanup
+- prefer larger instruct models with more context for summaries and queries
+- skip candidates that exceed the current memory budget
+- smoke-test a model on first use before marking it healthy
+
+Shell aliases such as `cclocal` are explicitly out of scope for runtime
+integration. They are developer conveniences only, not product dependencies.
 
 ## Diarization Engine
 

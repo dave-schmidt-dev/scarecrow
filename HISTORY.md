@@ -1,5 +1,57 @@
 # Scarecrow Decision History
 
+## 2026-03-18 — Task planning restructured into phase gates
+
+### Why
+- The existing `tasks.md` had strong milestone-level detail, but it behaved
+  like a backlog rather than a delivery plan. It was difficult to tell what
+  needed to happen first, which milestones could be grouped into a usable
+  slice, and what objective gate had to pass before moving forward.
+
+### Decision
+- Added a phase-based roadmap to `tasks.md` with:
+  - P0 through P7 delivery phases
+  - explicit goals, entry criteria, build scope, and exit gates
+  - sequencing rules to prevent building on top of failing foundations
+  - a recommended near-term execution order across milestones
+  - a shared definition of done for tasks and milestones
+- Tightened the roadmap after review to:
+  - make phase gates more objective
+  - fix sequencing contradictions between P3, M7, and M9
+  - add developer bootstrap and validation-entrypoint requirements to P0
+  - expand validation coverage for privacy deletion, IPC schema rejection,
+    startup mic fallback, transcript cleanup, and summary grounding
+
+### Outcome
+- The repo now supports both detailed implementation tracking and higher-level
+  delivery management. This should make it easier to execute on a new machine,
+  stage work for portfolio-visible progress, and know when the project is
+  ready for demos versus actual daily use.
+
+## 2026-03-18 — Prefer `llama.cpp` for local cleanup and summaries
+
+### Why
+- The primary development machine now has `llama.cpp` installed.
+- Using local GGUF models through `llama.cpp` keeps cleanup, summaries, and
+  query answering fully local while reducing dependency sprawl relative to an
+  MLX-specific path.
+
+### Decision
+- Prefer `llama.cpp` as the local LLM runtime for:
+  - transcript cleanup and normalization after cold-path ASR
+  - rolling summaries
+  - query answering
+- Product runtime should call `llama.cpp` directly (`llama-server` or
+  `llama-cli`). `cclocal` remains a development convenience for manual prompt
+  testing only and is not part of the Scarecrow runtime architecture.
+- Model selection should be config-first, then auto-discovery from configured
+  GGUF directories, then graceful degradation if no healthy local model exists.
+
+### Outcome
+- The planning docs now treat `llama.cpp` as the default local LLM runtime for
+  Scarecrow's worker-side text generation tasks and document how model
+  discovery and selection should work.
+
 ## 2026-03-14 — Project bootstrap and spec v1
 
 ### Initial decisions

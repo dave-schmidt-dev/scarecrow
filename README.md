@@ -26,7 +26,10 @@ code has been implemented yet. Everything below describes planned behavior.
 - Save audio in 30-second Opus chunks so recorder failures lose at most one chunk.
 - Filter silence via VAD — only chunks with detected speech are kept.
 - Show live captions only when recording and transcription are both healthy.
-- Re-transcribe with a larger model every 30 minutes for accuracy, diarization, and summaries.
+- Re-transcribe with a larger model every 30 minutes for accuracy, diarization,
+  transcript cleanup, and summaries.
+- Use local `llama.cpp` GGUF models for transcript cleanup, summaries, and
+  query answering.
 - Persist recordings, transcripts, and summaries locally in SQLite.
 - Answer questions against the transcript timeline using time windows and user-provided context markers.
 
@@ -52,6 +55,8 @@ code has been implemented yet. Everything below describes planned behavior.
 │    (Python)      │
 │                  │
 │ • large-v3 STT   │
+│ • transcript     │
+│   cleanup        │
 │ • Diarization    │
 │ • LLM summaries  │
 │ • Query answers  │
@@ -61,7 +66,9 @@ code has been implemented yet. Everything below describes planned behavior.
 Three processes:
 - **Daemon** (Rust): Headless, always running. Captures audio, runs fast transcription, manages storage and worker lifecycle.
 - **TUI** (Rust): Connects/disconnects freely. No effect on recording. Modal panels for notes and queries.
-- **Worker** (Python): Short-lived, spawned by daemon. Loads heavy models for accurate transcription, diarization, summaries, and query answers. Exits when done.
+- **Worker** (Python): Short-lived, spawned by daemon. Loads heavy models for
+  accurate transcription, transcript cleanup, diarization, summaries, and
+  query answers. Exits when done.
 
 ## Planned Commands
 
@@ -97,6 +104,8 @@ Three processes:
 - **Audio retention:** 14 days, then auto-pruned
 - **Disk warning:** Alert at 10 GB total usage
 - **Music filtering:** Handled by transcription confidence thresholds, not audio routing
+- **Local LLM runtime:** Prefer `llama.cpp` with GGUF models for transcript
+  cleanup, summaries, and query answering
 - **Name-based retrieval:** Resolves through user-provided markers, not automatic speaker ID
 - **Privacy:** Auto-pauses on screen lock; `delete-last` purges recent recordings
 - **Security:** All data files 0600, directories 0700; model checksums verified; no secrets in config
@@ -113,11 +122,63 @@ Three processes:
 - [HuggingFace account](https://huggingface.co) for pyannote diarization models
   (optional — works without diarization)
 
+## Developer Bootstrap
+
+Until `scarecrow setup` exists, development on a clean MacBook should use a
+manual bootstrap path.
+
+Recommended local tools:
+
+- Homebrew
+- Xcode Command Line Tools
+- `rustup` / Rust toolchain
+- `python3`
+- `sqlite3`
+- `ffmpeg`
+- `opus-tools` (`opusenc`)
+- BlackHole 2ch
+- `llama.cpp`
+
+Suggested install flow:
+
+```bash
+xcode-select --install
+brew install rustup-init python sqlite ffmpeg opus-tools llama.cpp
+rustup-init
+source ~/.cargo/env
+```
+
+Manual developer setup before the wizard exists:
+
+1. Install BlackHole 2ch if testing dual-channel capture.
+2. Create the Multi-Output Device in Audio MIDI Setup.
+3. Ensure the physical output device is the clock source and BlackHole drift
+   correction is enabled.
+4. Keep all devices on the same sample rate, typically 48 kHz.
+5. Grant microphone access when the daemon first requests it.
+6. If testing diarization, log in with `huggingface-cli` and accept the
+   required pyannote model terms before running worker validations.
+
+## Validation Workflow
+
+The canonical validation entrypoint is:
+
+```bash
+./scripts/validate.sh
+```
+
+This command is expected to grow with the implementation. During planning and
+bootstrap it validates repo readiness and reports which build/test layers are
+not available yet. During implementation it will become the standard local gate
+for formatting, linting, tests, and smoke checks.
+
 ## Documentation
 
 - `SPEC.md` — Full v1 specification, data model, state management, and milestones
 - `tasks.md` — Implementation task breakdown with acceptance criteria
 - `HISTORY.md` — Project decision log
+- `DEVELOPMENT.md` — Developer bootstrap and validation expectations for a
+  clean machine
 
 ## License
 

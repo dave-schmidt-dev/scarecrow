@@ -4,6 +4,245 @@ Tracks implementation work against SPEC.md milestones. Each task maps to a
 milestone and has acceptance criteria ("done when") and measurable validation
 steps.
 
+## Delivery Model
+
+This file now serves two purposes:
+
+1. Phase-level roadmap: what order to build in, why that order exists, and
+   what gates must pass before advancing.
+2. Milestone-level backlog: the concrete tasks and validation checks required
+   to satisfy each phase.
+
+The intent is to keep implementation work small, sequenced, and objectively
+verifiable. A phase is not complete because code exists. A phase is complete
+only when its exit gate passes.
+
+## Phase Overview
+
+| Phase | Name | Milestones | Goal | Exit Gate |
+|-------|------|------------|------|-----------|
+| P0 | Environment and Bootstrap | M1.1 only | Create a buildable Rust workspace, developer bootstrap path, and repo validation baseline | Clean local build, baseline validation command passes, repo structure is stable enough for parallel work |
+| P1 | Core Foundation | Remaining M1 | Establish config, storage, status, recovery, logging, and first-run safety | Daemon can start safely, write state durably, and fail cleanly |
+| P2 | Recording Pipeline | M2 + M4 | Capture audio reliably and classify it correctly before higher-level features | Continuous chunk capture works with correct routing and silence handling |
+| P3 | Live Transcription Surface | M3 + M5 + M6.1 + M6.2 + M6.4 | Deliver the first usable operator experience: captions, health, notes, pause, lifecycle commands | User can run daemon/TUI daily and trust the basic recording loop |
+| P4 | Cold-Path Intelligence | M7 | Add canonical transcripts, summaries, degraded modes, and worker lifecycle | Background processing is correct, bounded, and recoverable |
+| P5 | Query and Recall | M8 + M6.3 | Make stored conversations retrievable through queries and markers | Queries return useful answers with provenance and acceptable latency |
+| P6 | Operations and First-Run UX | M9 + M10 + M6.5 | Make the system maintainable for real use on a personal machine | Retention, setup, deletion, and disk warnings work safely |
+| P7 | Hardening and Release Readiness | M11 | Prove resilience under long runs, crashes, and edge conditions | Soak, crash, concurrency, restart, and disk-full gates all pass |
+
+## Phase Gates
+
+### P0 — Environment and Bootstrap
+
+**Goal:** turn the repository into a real build target with the minimum shared
+crate structure needed for implementation.
+
+**Entry criteria:**
+- Toolchain available on the development machine (`cargo`, `rustc`, Python 3)
+- Repository clean enough to scaffold without conflicting edits
+
+**Build scope:**
+- M1.1 only
+
+**Exit gate:**
+- Developer bootstrap documentation exists for a clean MacBook
+- `cargo build` exits 0 for the workspace
+- `cargo clippy --all-targets --all-features -- -D warnings` exits 0
+- Canonical repo validation entrypoint exists and runs the current phase checks
+- Binary crates and shared crate exist with initial ownership boundaries
+
+**Do not start P1 until:**
+- Workspace layout is stable enough that future milestones have a clear home
+
+### P1 — Core Foundation
+
+**Goal:** make the daemon safe to start, inspect, and recover before touching
+real audio or model work.
+
+**Entry criteria:**
+- P0 exit gate passed
+
+**Build scope:**
+- M1.2 through M1.9
+
+**Exit gate:**
+- Config auto-creation and overrides behave as specified
+- SQLite schema and FTS bootstrap succeed on a clean machine
+- `scarecrow status` works without a running daemon
+- Crash recovery, atomic `daemon.json`, and structured logging are verified
+- Permission-denied microphone path is explicit and non-destructive
+
+**Do not start P2 until:**
+- The daemon can safely create, read, and recover its state on disk
+
+### P2 — Recording Pipeline
+
+**Goal:** produce trustworthy chunks and speech classification so downstream
+features are operating on valid inputs.
+
+**Entry criteria:**
+- P1 exit gate passed
+- Local machine has microphone access
+
+**Build scope:**
+- M2
+- M4
+
+**Exit gate:**
+- Mic capture writes durable chunks continuously
+- BlackHole routing works when available and degrades safely when absent
+- Device changes and lock/unlock transitions are handled without undefined state
+- Silence filtering and channel-aware routing match DB flags and file outcomes
+
+**Do not start P3 until:**
+- Chunk boundaries, audio retention decisions, and VAD outputs are trusted
+
+### P3 — Live Transcription Surface
+
+**Goal:** deliver the first real daily-driver slice: recording, captions, TUI,
+notes, pause/resume, and operator health.
+
+**Entry criteria:**
+- P2 exit gate passed
+- Reference audio fixture exists for hot-path transcription validation
+
+**Build scope:**
+- M3
+- M5
+- M6.1
+- M6.2
+- M6.4
+
+**Exit gate:**
+- Draft transcripts are created for mic speech with latency validated by M3.2
+- TUI connects/disconnects cleanly and shows captions plus baseline health
+  states for mic, system audio, and transcription
+- Lifecycle commands (`start`, `stop`, default TUI open) behave consistently
+- Notes, pause/resume, local disk detail overlay, and help overlays work end
+  to end
+
+**Release value at exit:**
+- First internal dogfood build
+- Good checkpoint for early demo or architecture review
+
+### P4 — Cold-Path Intelligence
+
+**Goal:** turn draft capture into a canonical local record with worker-managed
+background processing.
+
+**Entry criteria:**
+- P3 exit gate passed
+- Python worker environment strategy is decided and repeatable
+
+**Build scope:**
+- M7
+
+**Exit gate:**
+- Scheduled worker runs complete and record watermarks/status correctly
+- Query preemption is validated as transaction-safe within the M7.1b SLA
+- Canonical transcripts supersede drafts without stale FTS state
+- Diarization and summaries work when enabled and degrade cleanly when disabled
+
+**Do not start P5 until:**
+- Canonical transcript generation is stable enough to serve retrieval
+
+### P5 — Query and Recall
+
+**Goal:** convert stored transcripts and markers into useful recall and summary
+workflows.
+
+**Entry criteria:**
+- P4 exit gate passed
+
+**Build scope:**
+- M8
+- M6.3
+
+**Exit gate:**
+- Time-window and marker-based queries return grounded answers against known
+  transcript fixtures
+- Query provenance is stored for debugging wrong answers later
+- Warm worker follow-ups demonstrably reuse the same worker process
+- TUI query states handle loading, errors, and follow-ups cleanly
+
+**Release value at exit:**
+- First feature-complete v1 behavior from the user perspective
+
+### P6 — Operations and First-Run UX
+
+**Goal:** reduce friction and risk for actual personal use on a new machine.
+
+**Entry criteria:**
+- P5 exit gate passed
+
+**Build scope:**
+- M9
+- M10
+- M6.5
+
+**Exit gate:**
+- Retention sweeps and disk warnings behave safely
+- `scarecrow setup` can bootstrap a clean machine without manual file editing
+- `delete-last` purges recent data correctly and predictably
+
+**Do not start P7 until:**
+- First-run and operational guardrails are in place
+
+### P7 — Hardening and Release Readiness
+
+**Goal:** prove the system is durable enough to trust for long-running local
+capture.
+
+**Entry criteria:**
+- P6 exit gate passed
+
+**Build scope:**
+- M11
+
+**Exit gate:**
+- Full pipeline integration passes
+- Crash recovery and supersession consistency are verified
+- Soak test, concurrent writer safety, disk-full handling, and restart
+  continuity all pass
+
+**Release value at exit:**
+- Candidate for public repo promotion and portfolio-grade demonstration
+
+## Sequencing Rules
+
+- Do not run multiple milestones in parallel until P0 and P1 are complete.
+- Any task that changes persistent schema, IPC messages, or config format must
+  update `SPEC.md` and `HISTORY.md` in the same change.
+- A milestone is only marked complete when its `Validate:` checks are runnable,
+  not merely implemented.
+- Every phase gate must map to an explicit local validation command, query, or
+  manual checklist item recorded in this file.
+- If a phase exit gate fails, fix the gate failure before starting the next
+  phase. Do not build around broken foundations.
+
+## Recommended Near-Term Execution Order
+
+1. P0: M1.1
+2. P1: M1.2, M1.3, M1.6, M1.4, M1.7, M1.5, M1.9, M1.8
+3. P2: M2.1, M4.1, M4.2, M2.2, M2.3, M2.4
+4. P3: M3.1, M3.2, M5.1, M5.3, M5.2, M6.1, M6.2, M6.4
+5. P4: M7.1a, M7.2, M7.5, M7.3, M7.4, M7.1b
+6. P5: M8.1, M8.2, M8.3, M8.4, M6.3
+7. P6: M9.1, M9.2, M10.1, M6.5
+8. P7: M11.1 through M11.6
+
+## Definition of Done
+
+A task or milestone is done only when all of the following are true:
+
+- The implementation exists in the intended crate or module
+- Validation steps have been run successfully on the local machine
+- `./scripts/validate.sh` has been run and any relevant phase-specific checks
+  have passed
+- Documentation affected by the change is updated
+- No known regressions were introduced into an earlier phase gate
+- Remaining compromises are explicitly recorded as TODOs or in `HISTORY.md`
+
 ## Milestone Key
 
 | Milestone | Name                       | Status  |
@@ -25,16 +264,20 @@ steps.
 ## M1: Foundation
 
 ### M1.1 — Rust workspace scaffolding
+- [ ] Add developer bootstrap documentation for a clean macOS machine
+- [ ] Add canonical repo validation entrypoint at `./scripts/validate.sh`
 - [ ] Create Cargo workspace with `scarecrow-daemon` and `scarecrow` binary crates
 - [ ] Create `scarecrow-shared` library crate for types, IPC protocol, DB access
 - [ ] Workspace compiles with `cargo build`
-- **Validate:** `cargo build` exits 0. `cargo clippy` reports no warnings.
-  Both binary targets exist in `target/debug/`.
+- **Validate:** Developer bootstrap doc is sufficient to install required
+  local tools on a clean machine. `./scripts/validate.sh` exits 0 for the
+  current repo state. `cargo build` exits 0. `cargo clippy` reports no
+  warnings. Both binary targets exist in `target/debug/`.
 
 ### M1.2 — Config parsing
 - [ ] Define `scarecrow.toml` schema matching SPEC.md Configuration section
-  (including `[audio]`, `[transcription]`, `[worker]`, `[query]`, `[storage]`,
-  `[logging]`)
+  (including `[audio]`, `[transcription]`, `[worker]`, `[llm]`, `[query]`,
+  `[storage]`, `[logging]`)
 - [ ] Parse config with defaults using `serde` + `toml` crate
 - [ ] Create default config if none exists on first run
 - [ ] Set 0600 permissions on created config file
@@ -45,6 +288,7 @@ steps.
 
 ### M1.3 — SQLite schema bootstrap
 - [ ] Create `$SCARECROW_DATA/` directory with 0700 permissions
+- [ ] Create `$SCARECROW_DATA/state/` directory with 0700 permissions
 - [ ] Create database at `$SCARECROW_DATA/scarecrow.db` with 0600 permissions
 - [ ] Apply all table schemas from SPEC.md Data Model section (chunks,
       transcripts, summaries, markers, pauses, cold_path_runs, queries)
@@ -59,6 +303,7 @@ steps.
   markers_fts WHERE markers_fts MATCH 'test'` returns 0 rows without error.
   `stat -f %Lp scarecrow.db` returns `600`.
   `stat -f %Lp $SCARECROW_DATA` returns `700`.
+  `stat -f %Lp $SCARECROW_DATA/state` returns `700`.
 
 ### M1.4 — Status command
 - [ ] `scarecrow status` reads `daemon.json` and prints health summary
@@ -122,15 +367,17 @@ steps.
   oldest is deleted.
 
 ### M1.8 — Model download and integrity verification
-- [ ] On first daemon run, auto-download `tiny` model if missing
+- [ ] On first daemon startup path, auto-download `tiny` model if missing
 - [ ] Verify SHA256 checksum after download before loading
 - [ ] Reject, delete, and retry if checksum does not match
 - [ ] Cold-path model (`large-v3`) downloaded on first cold-path run, not
       at daemon startup
-- **Validate:** Remove `tiny` model from `models/`. Start daemon — model
-  downloads, checksum logged, daemon starts normally. Corrupt the model file
-  (truncate it) — daemon rejects it, re-downloads, and starts. Place a file
-  with wrong checksum — daemon rejects it and logs checksum mismatch.
+- **Validate:** Remove `tiny` model from `models/`. Trigger the daemon startup
+  path that stages the hot-path model — model downloads and checksum is logged.
+  Corrupt the model file (truncate it) — daemon rejects it and re-downloads.
+  Place a file with wrong checksum — daemon rejects it and logs checksum
+  mismatch. Actual runtime model load and inference readiness are validated in
+  M3.1.
 
 ### M1.9 — macOS microphone permission handling
 - [ ] On first run, handle macOS microphone permission prompt
@@ -177,6 +424,8 @@ steps.
 ### M2.3 — Device change handling
 - [ ] Register CoreAudio device-change callbacks (via `coreaudio-rs`) for
       input AND output devices
+- [ ] If configured mic is unavailable at startup, fall back to system default
+      input and log a warning
 - [ ] Log input device changes without interrupting mic capture
 - [ ] Detect output device changes that break BlackHole routing
 - [ ] Pause and warn if configured mic device is physically removed
@@ -184,9 +433,13 @@ steps.
 - **Validate:** Connect Bluetooth headset during recording — with
   `follow_system_default = false`, verify mic recording continues from
   configured device (check `input_device` in chunks table unchanged).
-  Change system output to built-in speakers — verify warning logged within
-  5 seconds and `sys_channel_healthy` flips to false. Change back — verify
-  recovery logged and flag flips to true.
+  Configure a missing mic device and start daemon — verify fallback to system
+  default input with warning logged, recording still starts. Remove configured
+  mic during runtime — verify warning logged and behavior matches
+  `follow_system_default` (pause or switch to default). Change system output to
+  built-in speakers — verify warning logged within 5 seconds and
+  `sys_channel_healthy` flips to false. Change back — verify recovery logged
+  and flag flips to true.
 
 ### M2.4 — Auto-pause on screen lock
 - [ ] Monitor macOS screen lock/unlock notifications
@@ -234,10 +487,12 @@ steps.
 - [ ] Run VAD on both channels of each chunk independently (16 kHz mono each)
 - [ ] Write `has_speech`, `mic_has_speech`, `sys_has_speech` to chunks table
 - **Validate:** Record 30 seconds of silence, 30 seconds of speech, 30 seconds
-  of music on system audio. Check DB: silence chunk has all speech flags FALSE.
-  Speech chunk has `mic_has_speech = TRUE`. Music chunk has
-  `sys_has_speech = TRUE`, `mic_has_speech = FALSE`. VAD wall-clock processing
-  time (logged) must be <100 ms per chunk.
+  of system-channel spoken speech only, and 30 seconds of music on system
+  audio only. Check DB: silence chunk has all speech flags FALSE. Mic speech
+  chunk has `mic_has_speech = TRUE`. System spoken-speech chunk has
+  `sys_has_speech = TRUE`, `mic_has_speech = FALSE`. Music-only chunk is
+  recorded and classified without forcing a false speech-positive requirement.
+  VAD wall-clock processing time (logged) must be <100 ms per chunk.
 
 ### M4.2 — Channel-aware routing
 - [ ] Silent chunks (neither channel): discard audio, write metadata only
@@ -260,27 +515,30 @@ steps.
 - [ ] Implement JSON + 4-byte length-prefix framing protocol
 - [ ] Define message types in `scarecrow-shared` crate
 - [ ] Enforce max message size (1 MB)
+- [ ] Reject malformed or schema-invalid IPC payloads with logged warning
 - [ ] TUI connects, receives caption stream and health updates
 - [ ] Handle connection refused gracefully (daemon not running)
 - **Validate:** Start daemon, connect TUI — captions flow. Kill TUI process,
   verify daemon continues (PID still alive, new chunks still written). Start
   TUI without daemon — error message within 2 seconds, no hang. Send a
   message exceeding 1 MB — daemon logs warning and drops it, does not crash.
-  `stat -f %Lp scarecrow.sock` returns `600`.
+  Send malformed JSON and schema-invalid JSON — daemon logs warning, drops the
+  message, and stays healthy. `stat -f %Lp scarecrow.sock` returns `600`.
 
 ### M5.2 — TUI main view
 - [ ] Scrolling live captions from daemon caption stream
-- [ ] Health bar with distinct indicators per SPEC.md:
+- [ ] Baseline health bar with distinct indicators for:
       mic (recording/paused/lost), system audio (healthy/degraded/off),
-      transcription (active/idle/error), cold path (idle/running/last run/failed),
-      disk (usage + warning)
+      transcription (active/idle/error)
+- [ ] Reserve UI slots for cold-path and disk states; full live states land in
+      M7.1 and M9.2
 - [ ] Graceful handling of daemon disconnect (message, no crash)
 - **Validate:** Open TUI, speak — captions appear within 5 seconds of speech.
   Kill daemon while TUI is open — TUI shows disconnect message, does not crash
-  (exit code 0 or reconnect prompt). Health bar shows all 5 indicator
-  categories. With BlackHole configured: system audio shows "healthy".
-  Without: shows "off". During cold-path run: cold-path indicator shows
-  "running", then switches to last run time when complete.
+  (exit code 0 or reconnect prompt). Health bar shows mic, system audio, and
+  transcription categories. With BlackHole configured: system audio shows
+  "healthy". Without: shows "off". Cold-path and disk sections may show
+  placeholder/unavailable states until M7.1 and M9.2 are complete.
 
 ### M5.3 — Daemon lifecycle commands
 - [ ] `scarecrow start` starts daemon in background, writes PID file
@@ -332,18 +590,24 @@ steps.
 - [ ] `d` opens disk usage detail overlay (breakdown by audio, DB, logs)
 - [ ] `?` opens keybinding help overlay
 - [ ] `Esc` closes either overlay
-- **Validate:** Press `d` — disk detail shows sizes for audio/, scarecrow.db,
-  logs/. Press `Esc` — overlay closes. Press `?` — help shows all keybindings
-  from SPEC.md. Press `Esc` — overlay closes.
+- **Validate:** Press `d` — disk detail shows a local snapshot of sizes for
+  audio/, scarecrow.db, and logs/ even before live disk monitoring exists.
+  Press `Esc` — overlay closes. Press `?` — help shows all implemented
+  keybindings from SPEC.md. Press `Esc` — overlay closes.
 
 ### M6.5 — Delete recent recordings
 - [ ] `scarecrow delete-last <duration>` CLI command (e.g., `5m`, `1h`)
 - [ ] Deletes audio files and transcripts within the specified window
+- [ ] Removes deleted transcript content from `transcripts_fts`
+- [ ] Ensures deleted content is not returned by later queries or summaries
 - [ ] Logs what was deleted
 - **Validate:** Record for 3 minutes. Run `scarecrow delete-last 2m`. Verify
   last 2 minutes of audio files are deleted. Corresponding chunk rows have
   `audio_pruned = TRUE`. Transcript rows for those chunks are deleted.
-  Remaining chunks are unaffected.
+  `SELECT * FROM transcripts_fts WHERE transcripts_fts MATCH 'known_deleted_term'`
+  returns 0 rows. Query for deleted content returns no result or an explicit
+  "no matching context" response. Any summary spanning only deleted material is
+  deleted or clearly marked unavailable. Remaining chunks are unaffected.
 
 ---
 
@@ -357,21 +621,28 @@ steps.
 - [ ] Only one worker at a time
 - [ ] `cold_path_runs` table updated with run status and watermark
 - [ ] Create worker Python virtualenv at `$SCARECROW_DATA/venv/` if missing
+- [ ] Discover GGUF models from configured `model_dirs` and build a local
+      model catalog with validation status
 - **Validate:** Trigger cold-path run. `SELECT * FROM cold_path_runs ORDER BY
   id DESC LIMIT 1` shows `status = 'completed'` with valid `processed_through`
   and `chunks_processed > 0`. Kill worker during run — `status` becomes
   `'failed'`, next scheduled run starts from last good watermark. Set
   `cold_interval_mins = 0` — verify no scheduled runs occur (only on-demand).
+  Point `model_dirs` at a directory with known GGUF files — verify Scarecrow
+  catalogs them and records healthy/unhealthy status after a smoke test.
 
 ### M7.1b — Query preemption and worker.sock
 - [ ] Worker preemption via SIGUSR1 (flag checked between chunk transactions)
 - [ ] Worker opens `worker.sock` Unix socket when entering query mode
 - [ ] Daemon delivers query text to worker via `worker.sock`
+- [ ] `worker.sock` enforces max message size and schema validation
 - [ ] Preemption only acts between fully-committed chunk transactions
 - **Validate:** Send query during cold-path run — worker checkpoints
   (`status = 'interrupted'`), opens `worker.sock`, transitions to query mode
   within 30 seconds. Verify `worker.sock` exists while in query mode, removed
-  after exit. Verify preemption safety: after interrupted run, every chunk with
+  after exit. Send malformed and oversize query payloads — worker logs warning
+  and drops them without crashing. Verify preemption safety: after interrupted
+  run, every chunk with
   `transcription_state = 'canonical'` has a complete set of canonical
   transcript rows (mic + system + merged, all `is_current = TRUE`) — no
   partially-superseded chunks.
@@ -380,6 +651,8 @@ steps.
 - [ ] Worker loads `large-v3` model, re-transcribes chunks since watermark
 - [ ] Transcribes mic and system channels independently, produces merged output
 - [ ] Applies confidence threshold to system channel transcripts
+- [ ] Runs transcript cleanup/normalization with local `llama.cpp` GGUF model
+      before writing canonical merged text
 - [ ] Music deprioritization: flag extended sys-only activity without mic speech
 - [ ] In a single transaction: sets `is_current=TRUE` on canonical rows,
       `is_current=FALSE` on superseded drafts, removes draft from
@@ -391,7 +664,9 @@ steps.
   AND chunk_id IN (SELECT id FROM chunks WHERE transcription_state =
   'canonical')` returns 0 (all drafts superseded). FTS5 search for a known
   spoken word returns the merged canonical transcript, not the draft. Verify
-  no duplicate FTS5 hits for the same chunk.
+  no duplicate FTS5 hits for the same chunk. Feed low-confidence system-only
+  music/media audio — verify it is flagged/deprioritized and does not dominate
+  the merged canonical transcript or produce misleading queryable content.
 
 ### M7.3 — Diarization
 - [ ] Integrate pyannote-audio for speaker labels via pluggable interface
@@ -404,8 +679,10 @@ steps.
   populated, no error in worker logs.
 
 ### M7.4 — Summary generation
-- [ ] Load MLX-optimized local LLM (sequential loading, not concurrent with
-      whisper/pyannote)
+- [ ] Load local `llama.cpp` GGUF model (sequential loading, not concurrent
+      with whisper/pyannote)
+- [ ] Invoke local models directly through `llama.cpp` (`llama-server` or
+      `llama-cli`), not through `cclocal` or any other agent wrapper
 - [ ] Generate summary for each cold-path processing window
 - [ ] Include user marker text as context in summary prompt
 - [ ] Sanitize marker text before prompt construction (strip control chars,
@@ -414,7 +691,11 @@ steps.
 - **Validate:** After cold-path run with speech: `SELECT count(*) FROM
   summaries WHERE window_end > [run_start_time]` returns >0. Summary `text`
   is non-empty and >50 characters. Add marker "meeting about budget" before
-  run, verify summary text contains "budget" (marker context was included).
+  run, but speak a distinct transcript fact such as "budget is fifteen
+  thousand dollars". Verify the summary reflects the spoken fact, not just the
+  marker label. Marker context may influence framing, but the summary must
+  remain transcript-grounded. Worker logs show direct `llama.cpp` invocation,
+  not an agent wrapper command.
 
 ### M7.5 — Worker degraded modes
 - [ ] `enable_summaries = false`: skip LLM loading and summary generation
