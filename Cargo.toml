@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "crates/scarecrow-shared",
+    "crates/scarecrow-daemon",
+    "crates/scarecrow",
+]
+resolver = "2"
+

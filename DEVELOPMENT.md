@@ -20,6 +20,8 @@ Install these first:
 - `sqlite3`
 - `ffmpeg`
 - `opus-tools`
+- `ripgrep`
+- `cmake`
 - `llama.cpp`
 
 Suggested commands:
@@ -27,15 +29,17 @@ Suggested commands:
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 xcode-select --install
-brew install rustup-init python sqlite ffmpeg opus-tools llama.cpp
+brew install rustup-init python sqlite ffmpeg opus-tools ripgrep cmake llama.cpp
 rustup-init
 source ~/.cargo/env
+rustup component add rustfmt clippy
 python3 --version
 rustc --version
 cargo --version
 sqlite3 --version
 ffmpeg -version
 opusenc --version
+rg --version
 llama-cli --version || true
 ```
 
@@ -47,6 +51,14 @@ llama-cli --version || true
 
 ## Manual Audio Setup Before `scarecrow setup`
 
+Install the package if you want to validate dual-channel capture:
+
+```bash
+brew install blackhole-2ch
+```
+
+Then:
+
 1. Install BlackHole 2ch.
 2. Open Audio MIDI Setup and create a Multi-Output Device.
 3. Set the physical output device as the clock source.
@@ -54,16 +66,23 @@ llama-cli --version || true
 5. Keep all relevant devices on the same sample rate, preferably 48 kHz.
 6. Confirm system audio reaches BlackHole before testing Scarecrow capture.
 
-## Manual Worker Setup Before `scarecrow setup`
+## Manual Worker/Auth Setup Before `scarecrow setup`
 
-If testing diarization paths before the wizard exists:
+If preparing for future worker-side validation before the wizard exists:
 
 ```bash
-python3 -m pip install --user "huggingface_hub[cli]"
-huggingface-cli login
+mkdir -p ~/.local/share/scarecrow
+python3 -m venv ~/.local/share/scarecrow/venv
+~/.local/share/scarecrow/venv/bin/python -m pip install --upgrade pip jiwer "huggingface_hub[cli]"
+~/.local/share/scarecrow/venv/bin/huggingface-cli login
 ```
 
+This mirrors the default runtime location for the worker environment
+(`$SCARECROW_DATA/venv/` when `data_dir` is left at its default value).
 Then accept the model terms for the required pyannote models in the browser.
+The actual `pyannote-audio` / PyTorch worker runtime is not scaffolded in this
+repo yet; this step only prepares shared auth and WER tooling ahead of the
+worker milestone.
 
 ## GGUF Provisioning
 
@@ -90,6 +109,21 @@ Recommended backend choice:
 
 The setup wizard should validate that the selected backend can invoke the
 chosen model successfully before Scarecrow treats it as healthy.
+
+## Silero VAD Model
+
+The daemon uses Silero VAD for voice activity detection. The ONNX model file
+is not bundled with the `ort` crate and must be downloaded manually before the
+VAD integration milestone (M4):
+
+```bash
+mkdir -p ~/.local/share/scarecrow/models
+curl -L -o ~/.local/share/scarecrow/models/silero_vad.onnx \
+  https://github.com/snakers4/silero-vad/raw/master/files/silero_vad.onnx
+```
+
+The model is small (~2 MB) and does not require authentication. Once
+`scarecrow setup` exists, it will handle this download automatically.
 
 ## Local Model Direction
 
@@ -122,7 +156,6 @@ Selection order:
 Scarecrow should maintain a local model catalog with:
 
 - file path
-- filename
 - size
 - quantization
 - last modified time
@@ -146,18 +179,28 @@ Example catalog entry:
 }
 ```
 
-Recommended config shape:
+Recommended auto-discovery config shape:
 
 ```toml
 [llm]
 model_dirs = ["~/Models", "~/.cache/llama.cpp"]
-cleanup_model = "qwen2.5-3b-instruct-q4_k_m.gguf"
-summary_model = "qwen2.5-7b-instruct-q4_k_m.gguf"
-query_model = "qwen2.5-7b-instruct-q4_k_m.gguf"
+cleanup_model = ""
+summary_model = ""
+query_model = ""
 backend = "llama-server"          # or "llama-cli"
 ```
 
-Fallback heuristics only apply when config is missing:
+Optional explicit pinning can override discovery per role:
+
+```toml
+[llm]
+cleanup_model = "qwen2.5-3b-instruct-q4_k_m.gguf"
+summary_model = "qwen2.5-7b-instruct-q4_k_m.gguf"
+query_model = "qwen2.5-7b-instruct-q4_k_m.gguf"
+```
+
+Fallback heuristics apply whenever a role is unset or the selected model is
+missing, unhealthy, or incompatible:
 
 - prefer smaller instruct models for cleanup
 - prefer larger instruct models with more context for summary and query work
@@ -179,6 +222,10 @@ Use the repo-level validation entrypoint:
 ./scripts/validate.sh
 ```
 
+This command should fail closed when the current phase gate is not met. Missing
+workspace scaffolding or required local tools is a validation failure, not a
+skip.
+
 Expected evolution:
 
 - P0/P1: bootstrap, workspace, and basic repo validation
@@ -191,7 +238,8 @@ isolated ad hoc validation workflows.
 
 Validator maturity expectations:
 
-- P0/P1: docs present, scaffolding present, config/schema smoke checks
+- P0/P1: tool presence, docs present, scaffolding present, config/schema smoke
+  checks
 - P2/P3: add audio/TUI/IPC smoke checks to `./scripts/validate.sh`
 - P4/P5: add worker, model-selection, and query smoke checks
 - P6/P7: add setup, retention, and integration/hardening checks

@@ -1,5 +1,87 @@
 # Scarecrow Decision History
 
+## 2026-03-18 — Comprehensive audit remediation (rounds 3–4)
+
+### Why
+- A comprehensive documentation and delivery-plan audit found 12 initial
+  findings plus 6 additional findings on re-audit, across spec/task alignment,
+  bootstrap completeness, validation gaps, and documentation clarity.
+
+### Decision (round 3)
+- Fixed P2 execution order in `tasks.md`: M4.1 (VAD) now follows M2.2
+  (BlackHole) since VAD system-channel validation requires BlackHole capture.
+- Added `cmake` to developer bootstrap in `README.md`, `DEVELOPMENT.md`, and
+  `scripts/validate.sh` — required by `whisper-rs-sys` to build whisper.cpp.
+- Added Silero VAD ONNX model provisioning note to `SPEC.md` — the model is
+  not bundled and must be downloaded or setup-wizard-managed.
+- Clarified in `README.md` that GGUF models require manual provisioning while
+  whisper models auto-download.
+- Expanded SPEC.md M1 acceptance criteria to cover all nine sub-milestones
+  (logging, crash recovery, model integrity, mic permissions).
+- Expanded SPEC.md M6 acceptance criteria to reference sub-milestones and
+  `delete-last` placement in P6.
+- Added `delete-last` / active cold-path interaction validation to `tasks.md`
+  M6.5.
+- Clarified M4.1 music VAD validation to avoid asserting specific VAD
+  outcomes for music content.
+- Added `LICENSE` file check to `scripts/validate.sh`.
+- Added deferral note in `README.md` bootstrap pointing to `DEVELOPMENT.md`
+  for the complete path.
+
+### Decision (round 4)
+- Resolved `cold_interval_mins = 0` contradiction in SPEC.md: degraded modes
+  section now states on-demand queries still work when batch scheduling is
+  disabled, matching the Cold-Path Scheduling section.
+- Added query-disabled validation to M7.5 when `enable_summaries = false`,
+  matching SPEC.md's contract that summaries and queries are coupled.
+- Harmonized Silero VAD model download ownership: daemon requires the file
+  at startup and fails with clear error; `scarecrow setup` handles the
+  download; DEVELOPMENT.md provides manual pre-wizard instructions. Added
+  Silero VAD to M10.1 wizard steps.
+- Removed stale `filename` field from DEVELOPMENT.md model catalog schema
+  to match SPEC.md and the example JSON.
+- Updated stale `M7.1` references in tasks.md M5.2 to `M7.1a`.
+- Added per-flag degraded mode RAM target to M7.5 for the
+  `enable_diarization = false` (pyannote off, LLM still on) configuration.
+- Aligned SPEC.md M3 WER threshold from <30% to <25% to match tasks.md.
+
+### Outcome
+- All 18 audit findings remediated across two iterations. The documentation
+  set is internally consistent, bootstrap prerequisites are complete, and
+  acceptance criteria match between SPEC and tasks.
+
+## 2026-03-18 — Audit remediation alignment and bootstrap hardening
+
+### Why
+- A follow-up audit still found mismatches between the spec, roadmap, bootstrap
+  docs, and validator.
+- The repo needed a stronger privacy-purge contract, clearer model-selection
+  rules, and a validator that fails closed instead of reporting a false-green
+  bootstrap state.
+
+### Decision
+- Tightened `delete-last` into a hard-delete privacy purge that removes
+  overlapping chunks, retrieval artifacts, and related provenance rather than
+  setting `audio_pruned`.
+- Added M11 to `SPEC.md` so the roadmap and spec describe the same release
+  gates.
+- Clarified that empty `[llm]` role values intentionally request
+  auto-discovery, and that cleanup/summary/query selection is config-first
+  with deterministic healthy fallback.
+- Updated bootstrap docs to include `ripgrep`, the explicit `blackhole-2ch`
+  install command, and a dedicated manual worker virtualenv flow with
+  `jiwer` and `huggingface_hub[cli]`.
+- Removed the stale MLX-specific runtime note in favor of the current direct
+  `llama.cpp` worker strategy.
+- Hardened `scripts/validate.sh` so it checks per-file doc coverage, enforces
+  current bootstrap prerequisites, and fails when the Rust workspace gate is
+  missing.
+
+### Outcome
+- The documentation set now gives a more exact implementation contract, and
+  the validator is positioned to catch planning/bootstrap drift instead of
+  masking it.
+
 ## 2026-03-18 — Task planning restructured into phase gates
 
 ### Why
@@ -285,8 +367,9 @@
 - Recommended crates: `whisper-rs` for FFI, `ort` for Silero VAD ONNX,
   `cpal`+`coreaudio-rs` for audio, `rubato` for resampling, `ringbuf` for
   lock-free audio buffering, `ratatui` for TUI.
-- `mlx-lm` for local LLM inference (Python). Sequential model loading is
-  mandatory — do not load whisper + pyannote + LLM concurrently.
+- Local LLM inference in the Python worker must remain sequentially loaded —
+  do not load whisper + pyannote + LLM concurrently. The original MLX-specific
+  exploration was superseded by the later direct `llama.cpp` runtime decision.
 
 ### Integration and longevity testing (M11)
 - Added M11 milestone for cross-milestone integration tests: full pipeline

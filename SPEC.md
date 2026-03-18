@@ -116,9 +116,11 @@ Resource requirements (peak, during cold-path run with all features):
 - **Skip diarization + LLM:** Set `[worker] enable_diarization = false` and
   `enable_summaries = false`. Worker runs `large-v3` only (peak ~3.5 GB).
   Canonical transcripts work. No speaker labels, no summaries, no queries.
-- **Skip cold path entirely:** Set `cold_interval_mins = 0`. Only the hot-path
-  `tiny` model runs. Draft transcripts only, no canonical re-transcription.
-  Minimum viable mode for very constrained systems.
+- **Skip cold path entirely:** Set `cold_interval_mins = 0`. The daemon never
+  spawns the worker for scheduled batch processing. Only the hot-path `tiny`
+  model runs. Draft transcripts only, no canonical re-transcription. On-demand
+  queries still work (the daemon spawns a worker on request). Minimum viable
+  mode for very constrained systems.
 
 Lifecycle:
 - **Scheduled run:** Daemon spawns worker on cold-path interval. Worker
@@ -355,13 +357,19 @@ On submit:
   while the user is away. Auto-pause is enabled by default and configurable
   via `auto_pause_on_lock` in the config.
 - **Delete recent recordings:** `scarecrow delete-last <duration>` purges
-  audio files and all retrieval artifacts from the last N minutes. For
-  example, `scarecrow delete-last 5m` deletes the last 5 minutes of audio,
-  draft transcripts, any canonical transcripts covering that window, FTS
-  entries, summaries derived solely from deleted material, and stored query
-  responses/provenance that quote or depend on the deleted window. This is a
-  safety valve for accidental capture of sensitive content. The delete is
-  permanent and logged.
+  audio files and all retrieval artifacts from the last N minutes. The delete
+  window matches any chunk whose time interval overlaps the requested range.
+  For example, `scarecrow delete-last 5m` hard-deletes the last 5 minutes of
+  chunk rows, draft transcripts, canonical transcripts covering that window,
+  matching FTS entries, markers created in that window, summaries whose
+  summary windows overlap the deleted range, and stored query
+  responses/provenance whose resolved windows or provenance rows intersect the
+  deleted material. Overlapping pause rows are trimmed or deleted so the
+  deleted interval is not preserved in timeline metadata. `delete-last` does
+  NOT use `audio_pruned` and does NOT leave tombstones for the deleted
+  content. This is a safety valve for accidental capture of sensitive content.
+  The delete is permanent and logged only as counts and time range, never as
+  transcript, marker, or query text.
 
 ### 9. Context and Retrieval
 
@@ -537,6 +545,9 @@ writes and concurrent read access from the TUI.
 `canonical` with `audio_pruned = TRUE` — the audio is gone but the transcript
 and summary remain.
 
+`delete-last` is separate from retention sweeps. It hard-deletes overlapping
+chunk rows and associated records rather than setting `audio_pruned = TRUE`.
+
 `sys_channel_healthy` records the BlackHole routing state at the time of
 capture. This distinguishes "channel 2 was silent because nobody was talking"
 (`sys_has_speech = FALSE`, `sys_channel_healthy = TRUE`) from "channel 2 was
@@ -572,6 +583,10 @@ See State and Provenance for indexing and supersession rules.
 | model_version   | TEXT    | LLM model used                           |
 | created_at      | TEXT    | ISO 8601 timestamp                       |
 
+Summaries whose `[window_start, window_end]` range overlaps a `delete-last`
+window are deleted rather than redacted so deleted content cannot survive on a
+summary surface.
+
 ### markers
 
 | Column          | Type    | Description                              |
@@ -581,6 +596,9 @@ See State and Provenance for indexing and supersession rules.
 | label           | TEXT    | User-provided label or note text         |
 | marker_type     | TEXT    | 'note' (all user-entered markers)        |
 | created_at      | TEXT    | ISO 8601 timestamp                       |
+
+Markers whose timestamps fall inside a `delete-last` window are deleted and
+removed from `markers_fts`.
 
 ### pauses
 
@@ -629,6 +647,10 @@ The provenance columns (`window_start`, `window_end`, `marker_ids`,
 after the fact: what time window was resolved, which markers matched, which
 transcript rows were fed to the LLM, and whether those transcripts were
 draft or canonical at query time.
+
+Queries whose resolved windows overlap a `delete-last` window, or whose
+provenance references transcripts or markers removed by `delete-last`, are
+deleted rather than redacted.
 
 ### Future: calendar_events
 
@@ -710,8 +732,8 @@ These are independent for retention sweeps only. A chunk in state
 `canonical` + `audio_pruned = TRUE` means: the audio file has been deleted by
 retention policy, but the canonical transcript and any summaries that reference
 it remain searchable and usable. This does not apply to `delete-last`, which is
-an explicit privacy purge and removes retrieval artifacts for the deleted
-window.
+an explicit privacy purge and hard-deletes affected rows plus all retrieval
+artifacts for the deleted window.
 
 ### Pause Intervals
 
@@ -748,7 +770,7 @@ Config file: `$SCARECROW_CONFIG/scarecrow.toml` (default: `~/.config/scarecrow/s
 ```toml
 [audio]
 mic_device = "default"             # Mic device name, UID, or "default"
-system_device = "BlackHole 2ch"    # System audio device (BlackHole)
+system_device = ""                 # Empty = mic-only until BlackHole is configured
 multi_output_device = ""           # Multi-Output Device name (for health monitoring)
 chunk_duration_secs = 30
 follow_system_default = false      # If true, auto-switch mic on device change
@@ -786,6 +808,9 @@ level = "info"                     # trace, debug, info, warn, error
 max_file_size_mb = 50
 max_files = 5
 ```
+
+Leaving `system_device` empty is the default clean-machine state. The setup
+wizard fills this in only when BlackHole capture is configured.
 
 Data directory structure:
 ```
@@ -830,6 +855,9 @@ Selection order:
 2. Auto-discovery from configured `model_dirs`
 3. Feature disablement with a clear error if no compatible model is available
 
+An empty `cleanup_model`, `summary_model`, or `query_model` value is an
+intentional request to use auto-discovery for that role.
+
 For each discovered model, the worker should track a local catalog with:
 - file path
 - file size
@@ -845,6 +873,8 @@ Fallback heuristics:
 - prefer larger instruct models with more context for summaries and queries
 - skip candidates that exceed the current memory budget
 - smoke-test a model on first use before marking it healthy
+- if multiple healthy candidates exist for a role, choose deterministically by
+  intended-use match, then context suitability, then lower resource cost
 
 Shell aliases such as `cclocal` are explicitly out of scope for runtime
 integration. They are developer conveniences only, not product dependencies.
@@ -1026,6 +1056,8 @@ practices. The setup wizard configures the token via `huggingface-cli login`.
 - If BlackHole is not configured, the daemon operates in mic-only mode.
   This is a degraded but functional state — the user gets their own voice
   transcribed but not remote call participants.
+- Skipping BlackHole leaves `system_device = ""` and `multi_output_device = ""`
+  in the config rather than writing a placeholder device name.
 
 ### Diarization Setup
 
@@ -1137,6 +1169,17 @@ because the message rate is low (~1/second for captions, occasional commands).
 | Logging          | `tracing` + `tracing-subscriber` | JSON formatter with file rotation |
 | TUI              | `ratatui`     | Terminal UI framework                     |
 
+### Silero VAD Model
+
+The `ort` crate provides ONNX Runtime bindings but does not bundle the Silero
+VAD model. The model file (`silero_vad.onnx`) must be downloaded from the
+[Silero VAD repository](https://github.com/snakers4/silero-vad) and placed in
+`$SCARECROW_DATA/models/`. The daemon requires this file at startup alongside
+the whisper `tiny` model and fails with a clear error if it is missing.
+`scarecrow setup` downloads and verifies this file automatically. Before the
+wizard exists, developers download it manually (see DEVELOPMENT.md). The model
+is small (~2 MB) and does not require authentication.
+
 ### Opus Encoding Strategy
 
 For v1, the daemon shells out to the `opusenc` command-line tool to encode
@@ -1159,9 +1202,15 @@ breakdown with measurable validation steps.
 
 ### M1: Foundation
 - Rust workspace compiles. Config parsing works. SQLite schema created on
-  first run. `scarecrow status` reads a mock `daemon.json`.
+  first run. `scarecrow status` reads a mock `daemon.json`. Crash recovery,
+  structured logging, model integrity, and microphone permission handling
+  are implemented.
 - **Done when:** `cargo build` succeeds, `scarecrow status` prints health
   from a status file, database is created with all tables on first run.
+  Crash recovery cleans stale state on startup. Structured logging writes
+  valid JSON lines with rotation. Model download verifies SHA256 checksums.
+  Microphone permission denial produces a clear error. See `tasks.md`
+  M1.1 through M1.9 for sub-milestone detail.
 
 ### M2: Audio Capture
 - Daemon captures dual-channel audio from mic + BlackHole. Chunks written as
@@ -1175,7 +1224,7 @@ breakdown with measurable validation steps.
 - whisper.cpp FFI integrated. `tiny` model transcribes mic channel. Draft
   transcripts written to SQLite.
 - **Done when:** Draft transcript rows appear in DB within 2 seconds of chunk
-  completion. WER (word error rate) on a reference recording is <30% for
+  completion. WER (word error rate) on a reference recording is <25% for
   clear English speech. Daemon RSS stays under 200 MB after 10+ chunks.
 
 ### M4: VAD and Silence Filtering
@@ -1193,11 +1242,15 @@ breakdown with measurable validation steps.
   health for both mic and system audio.
 
 ### M6: TUI Panels and Pause
-- Note panel, query panel (without LLM backend), and pause/resume work.
-  Markers persisted to SQLite.
+- Note panel, query panel (without LLM backend), pause/resume, disk and
+  help overlays, and `delete-last` privacy purge. Markers persisted to
+  SQLite. Implementation is split across phases: M6.1–M6.4 land in P3,
+  M6.5 (`delete-last`) lands in P6 after the query engine exists.
 - **Done when:** `n` opens note panel, markers appear in DB. `p` pauses
   recording with timeline gap. Query panel shell exists and can show a
-  placeholder before backend integration.
+  placeholder before backend integration. `d` and `?` overlays work.
+  `scarecrow delete-last` hard-deletes chunks, transcripts, FTS entries,
+  markers, summaries, and query rows for the specified window.
 
 ### M7: Cold-Path Worker
 - Python worker runs on schedule. Re-transcribes with `large-v3`. Diarization
@@ -1228,4 +1281,14 @@ breakdown with measurable validation steps.
   HuggingFace token.
 - **Done when:** A clean install can go from zero to recording by following
   the setup wizard. Each optional component can be skipped with a clear
-  degraded-mode explanation.
+  degraded-mode explanation. Skipping BlackHole leaves mic-only config values.
+  Selected cleanup, summary, and query models are validated through direct
+  `llama.cpp` invocation before being marked healthy.
+
+### M11: Integration and Longevity
+- Cross-milestone validation verifies end-to-end data flow, crash recovery,
+  long-run stability, concurrent SQLite writers, disk-full behavior, and
+  daemon restart continuity.
+- **Done when:** Full pipeline integration passes. Crash during supersession
+  does not leave stale FTS or partial canonical state. Soak, concurrent
+  writer, disk-full, and restart-continuity checks all pass.

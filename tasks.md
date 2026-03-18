@@ -24,7 +24,7 @@ only when its exit gate passes.
 | P0 | Environment and Bootstrap | M1.1 only | Create a buildable Rust workspace, developer bootstrap path, and repo validation baseline | Clean local build, baseline validation command passes, repo structure is stable enough for parallel work |
 | P1 | Core Foundation | Remaining M1 | Establish config, storage, status, recovery, logging, and first-run safety | Daemon can start safely, write state durably, and fail cleanly |
 | P2 | Recording Pipeline | M2 + M4 | Capture audio reliably and classify it correctly before higher-level features | Continuous chunk capture works with correct routing and silence handling |
-| P3 | Live Transcription Surface | M3 + M5 + M6.1 + M6.2 + M6.4 | Deliver the first usable operator experience: captions, health, notes, pause, lifecycle commands | User can run daemon/TUI daily and trust the basic recording loop |
+| P3 | Live Transcription Surface | M3 + M5 + M6.1 + M6.2 + M6.3a + M6.4 | Deliver the first usable operator experience: captions, health, notes, pause, lifecycle commands | User can run daemon/TUI daily and trust the basic recording loop |
 | P4 | Cold-Path Intelligence | M7 | Add canonical transcripts, summaries, degraded modes, and worker lifecycle | Background processing is correct, bounded, and recoverable |
 | P5 | Query and Recall | M8 | Make stored conversations retrievable through queries and markers | Queries return useful answers with provenance and acceptable latency |
 | P6 | Operations and First-Run UX | M9 + M10 + M6.5 | Make the system maintainable for real use on a personal machine | Retention, setup, deletion, and disk warnings work safely |
@@ -104,7 +104,6 @@ notes, pause/resume, and operator health.
 
 **Entry criteria:**
 - P2 exit gate passed
-- Reference audio fixture exists for hot-path transcription validation
 
 **Build scope:**
 - M3
@@ -133,7 +132,6 @@ background processing.
 
 **Entry criteria:**
 - P3 exit gate passed
-- Python worker environment strategy is decided and repeatable
 
 **Build scope:**
 - M7
@@ -224,7 +222,7 @@ capture.
 
 1. P0: M1.1
 2. P1: M1.2, M1.3, M1.6, M1.4, M1.7, M1.5, M1.9, M1.8
-3. P2: M2.1, M4.1, M4.2, M2.2, M2.3, M2.4
+3. P2: M2.1, M2.2, M4.1, M4.2, M2.3, M2.4
 4. P3: M3.1, M3.2, M5.1, M5.3, M5.2, M6.1, M6.2, M6.3a, M6.4
 5. P4: M7.1a, M7.2, M7.5, M7.3, M7.4, M7.1b
 6. P5: M8.1, M8.2, M8.3, M8.4
@@ -271,8 +269,9 @@ A task or milestone is done only when all of the following are true:
 - [ ] Workspace compiles with `cargo build`
 - **Validate:** Developer bootstrap doc is sufficient to install required
   local tools on a clean machine. `./scripts/validate.sh` exits 0 for the
-  current repo state. `cargo build` exits 0. `cargo clippy` reports no
-  warnings. Both binary targets exist in `target/debug/`.
+  current repo state. `cargo fmt --check` exits 0. `cargo build` exits 0.
+  `cargo clippy --all-targets --all-features -- -D warnings` exits 0. Both
+  binary targets exist in `target/debug/`.
 
 ### M1.2 — Config parsing
 - [ ] Define `scarecrow.toml` schema matching SPEC.md Configuration section
@@ -286,7 +285,8 @@ A task or milestone is done only when all of the following are true:
   `chunk_duration_secs = 15` — verify parsed value is 15, not 30.
   Run with `[llm] backend = "llama-cli"` and `model_dirs = ["~/Models"]` —
   verify those values parse correctly and defaults for `cleanup_model`,
-  `summary_model`, and `query_model` remain empty strings.
+  `summary_model`, and `query_model` remain empty strings. Default
+  `system_device` remains an empty string until BlackHole is configured.
   `stat -f %Lp scarecrow.toml` returns `600`.
 
 ### M1.3 — SQLite schema bootstrap
@@ -300,11 +300,14 @@ A task or milestone is done only when all of the following are true:
 - [ ] Create FTS5 virtual table `transcripts_fts` on transcripts.text
 - [ ] Create FTS5 virtual table `markers_fts` on markers.label
 - **Validate:** Run once, then: `sqlite3 scarecrow.db "PRAGMA journal_mode"`
-  returns `wal`. `PRAGMA busy_timeout` returns `5000`. `.tables` lists all
-  7 tables plus 2 FTS5 virtual tables. `SELECT * FROM transcripts_fts WHERE
-  transcripts_fts MATCH 'test'` returns 0 rows without error. `SELECT * FROM
-  markers_fts WHERE markers_fts MATCH 'test'` returns 0 rows without error.
-  `stat -f %Lp scarecrow.db` returns `600`.
+  returns `wal`. `PRAGMA busy_timeout` returns `5000`. Query
+  `sqlite_schema` and verify the base tables `chunks`, `transcripts`,
+  `summaries`, `markers`, `pauses`, `cold_path_runs`, and `queries` exist.
+  Verify FTS virtual tables `transcripts_fts` and `markers_fts` exist.
+  `SELECT * FROM transcripts_fts WHERE transcripts_fts MATCH 'test'` returns
+  0 rows without error. `SELECT * FROM markers_fts WHERE markers_fts MATCH
+  'test'` returns 0 rows without error. `stat -f %Lp scarecrow.db` returns
+  `600`.
   `stat -f %Lp $SCARECROW_DATA` returns `700`.
   `stat -f %Lp $SCARECROW_DATA/state` returns `700`.
 
@@ -489,14 +492,20 @@ A task or milestone is done only when all of the following are true:
 ### M4.1 — Silero VAD integration
 - [ ] Integrate Silero VAD via `ort` crate (ONNX Runtime)
 - [ ] Handle LSTM hidden state correctly (reset at chunk boundaries)
+- [ ] Require `silero_vad.onnx` in `$SCARECROW_DATA/models/` at startup; fail with a clear error and download instructions if the model file is missing
 - [ ] Run VAD on both channels of each chunk independently (16 kHz mono each)
 - [ ] Write `has_speech`, `mic_has_speech`, `sys_has_speech` to chunks table
 - **Validate:** Record 30 seconds of silence, 30 seconds of speech, 30 seconds
   of system-channel spoken speech only, and 30 seconds of music on system
   audio only. Check DB: silence chunk has all speech flags FALSE. Mic speech
   chunk has `mic_has_speech = TRUE`. System spoken-speech chunk has
-  `sys_has_speech = TRUE`, `mic_has_speech = FALSE`. Music-only chunk is
-  recorded and classified without forcing a false speech-positive requirement.
+  `sys_has_speech = TRUE`, `mic_has_speech = FALSE`. Music-only chunk: VAD may
+  or may not detect speech on the system channel (music can trigger VAD).
+  Regardless of VAD outcome, the chunk is retained if `sys_has_speech = TRUE`
+  and produces no hot-path transcript (mic is silent). If VAD does not detect
+  speech on either channel, the chunk is treated as silent. The test must not
+  assert a specific VAD outcome for music — only that the routing table is
+  applied correctly given the actual VAD result.
   VAD wall-clock processing time (logged) must be <100 ms per chunk.
 
 ### M4.2 — Channel-aware routing
@@ -536,14 +545,15 @@ A task or milestone is done only when all of the following are true:
       mic (recording/paused/lost), system audio (healthy/degraded/off),
       transcription (active/idle/error)
 - [ ] Reserve UI slots for cold-path and disk states; full live states land in
-      M7.1 and M9.2
+      M7.1a and M9.2
 - [ ] Graceful handling of daemon disconnect (message, no crash)
-- **Validate:** Open TUI, speak — captions appear within 5 seconds of speech.
-  Kill daemon while TUI is open — TUI shows disconnect message, does not crash
-  (exit code 0 or reconnect prompt). Health bar shows mic, system audio, and
-  transcription categories. With BlackHole configured: system audio shows
-  "healthy". Without: shows "off". Cold-path and disk sections may show
-  placeholder/unavailable states until M7.1 and M9.2 are complete.
+- **Validate:** Open TUI, speak for one full chunk — captions appear within 5
+  seconds of that speech chunk completing. Kill daemon while TUI is open —
+  TUI shows disconnect message, does not crash (exit code 0 or reconnect
+  prompt). Health bar shows mic, system audio, and transcription categories.
+  With BlackHole configured: system audio shows "healthy". Without: shows
+  "off". Cold-path and disk sections may show placeholder/unavailable states
+  until M7.1a and M9.2 are complete.
 
 ### M5.3 — Daemon lifecycle commands
 - [ ] `scarecrow start` starts daemon in background, writes PID file
@@ -602,20 +612,35 @@ A task or milestone is done only when all of the following are true:
 
 ### M6.5 — Delete recent recordings
 - [ ] `scarecrow delete-last <duration>` CLI command (e.g., `5m`, `1h`)
-- [ ] Deletes audio files and transcripts within the specified window
-- [ ] Removes deleted transcript content from `transcripts_fts`
-- [ ] Removes affected stored query responses/provenance and summaries derived
-      solely from deleted material
-- [ ] Ensures deleted content is not returned by later queries or summaries
-- [ ] Logs what was deleted
+- [ ] Hard-deletes every chunk whose time interval overlaps the specified window
+- [ ] Deletes audio files plus chunk rows, transcript rows, and matching
+      `transcripts_fts` entries for those chunks
+- [ ] Deletes markers in the specified window and matching `markers_fts` entries
+- [ ] Deletes summaries whose summary windows overlap the deleted window
+- [ ] Deletes stored query rows whose resolved windows or provenance intersect
+      deleted chunks or markers
+- [ ] Trims or removes overlapping `pauses` rows so the deleted interval is not
+      preserved in timeline metadata
+- [ ] Does NOT set `audio_pruned`; retention and privacy purge remain separate
+- [ ] Logs only counts and time range, never transcript, marker, or query text
 - **Validate:** Record for 3 minutes. Run `scarecrow delete-last 2m`. Verify
-  last 2 minutes of audio files are deleted. Corresponding chunk rows have
-  `audio_pruned = TRUE`. Transcript rows for those chunks are deleted.
-  `SELECT * FROM transcripts_fts WHERE transcripts_fts MATCH 'known_deleted_term'`
-  returns 0 rows. Query for deleted content returns no result or an explicit
-  "no matching context" response. Any summary spanning only deleted material is
-  deleted or clearly marked unavailable. Stored `queries` rows that quote only
-  deleted material are removed or redacted. Remaining chunks are unaffected.
+  last 2 minutes of audio files are deleted. Overlapping `chunks` rows are
+  gone, not marked `audio_pruned = TRUE`. Transcript rows for those chunks are
+  deleted. `SELECT * FROM transcripts_fts WHERE transcripts_fts MATCH
+  'known_deleted_term'` returns 0 rows. Markers created in the deleted window
+  are gone from `markers` and `markers_fts`. Any `summaries` row whose
+  `[window_start, window_end]` overlaps the deleted window is deleted.
+  `queries` rows whose `window_start/window_end` overlap the deleted window or
+  whose `transcript_ids` / `marker_ids` reference deleted rows are deleted.
+  Query for deleted content returns no result or an explicit "no matching
+  context" response. Grep the logs for `known_deleted_term` and deleted marker
+  text — no matches. Remaining non-overlapping chunks are unaffected.
+- **Validate (cold-path interaction):** If a cold-path run is in progress when
+  `delete-last` runs, the daemon must either wait for the current chunk
+  transaction to complete or reject the delete with a retry-after message.
+  Validate: trigger `delete-last` while a cold-path run is active — verify no
+  partial state, no worker crash, and the worker either continues from a valid
+  watermark or exits cleanly.
 
 ---
 
@@ -663,6 +688,8 @@ A task or milestone is done only when all of the following are true:
 - [ ] Applies confidence threshold to system channel transcripts
 - [ ] Runs transcript cleanup/normalization with local `llama.cpp` GGUF model
       before writing canonical merged text
+- [ ] Selects cleanup model by `cleanup_model` config first, then deterministic
+      healthy discovered fallback
 - [ ] Music deprioritization: flag extended sys-only activity without mic speech
 - [ ] In a single transaction: sets `is_current=TRUE` on canonical rows,
       `is_current=FALSE` on superseded drafts, removes draft from
@@ -677,6 +704,9 @@ A task or milestone is done only when all of the following are true:
   no duplicate FTS5 hits for the same chunk. Feed low-confidence system-only
   music/media audio — verify it is flagged/deprioritized and does not dominate
   the merged canonical transcript or produce misleading queryable content.
+  With explicit `cleanup_model`, verify the worker uses that model. With
+  `cleanup_model = ""` and multiple healthy cleanup-capable candidates, verify
+  deterministic fallback selection is logged and stable across runs.
 
 ### M7.3 — Diarization
 - [ ] Integrate pyannote-audio for speaker labels via pluggable interface
@@ -693,6 +723,8 @@ A task or milestone is done only when all of the following are true:
       with whisper/pyannote)
 - [ ] Invoke local models directly through `llama.cpp` (`llama-server` or
       `llama-cli`), not through `cclocal` or any other agent wrapper
+- [ ] Selects summary model by `summary_model` config first, then deterministic
+      healthy discovered fallback
 - [ ] Generate summary for each cold-path processing window
 - [ ] Include user marker text as context in summary prompt
 - [ ] Sanitize marker text before prompt construction (strip control chars,
@@ -705,7 +737,10 @@ A task or milestone is done only when all of the following are true:
   thousand dollars". Verify the summary reflects the spoken fact, not just the
   marker label. Marker context may influence framing, but the summary must
   remain transcript-grounded. Worker logs show direct `llama.cpp` invocation,
-  not an agent wrapper command.
+  not an agent wrapper command. With explicit `summary_model`, verify that
+  model is used. With `summary_model = ""` and multiple healthy
+  summary-capable candidates, verify deterministic fallback selection is
+  logged and stable across runs.
 
 ### M7.5 — Worker degraded modes
 - [ ] `enable_summaries = false`: skip LLM loading and summary generation
@@ -714,9 +749,13 @@ A task or milestone is done only when all of the following are true:
 - [ ] Worker Python-side uses `structlog` for structured JSON logging
 - **Validate:** Set `enable_summaries = false` — cold-path run produces
   canonical transcripts but no summaries. `SELECT count(*) FROM summaries`
-  unchanged. Set `enable_diarization = false` — `speaker_labels` is NULL on
+  unchanged. Query panel shows "summaries and queries disabled" or equivalent.
+  Submitting a query returns a clear message that query answering requires
+  `enable_summaries = true`. Set `enable_diarization = false` — `speaker_labels` is NULL on
   all canonical transcripts. Set both false — worker peak RSS <4 GB (no LLM
-  or pyannote loaded). Worker logs are valid JSON with `structlog` format.
+  or pyannote loaded). Set `enable_diarization = false` only (summaries still
+  enabled) — worker peak RSS <8 GB (large-v3 + LLM, no pyannote). Worker logs
+  are valid JSON with `structlog` format.
 
 ---
 
@@ -802,7 +841,9 @@ A task or milestone is done only when all of the following are true:
 - **Validate:** Set `disk_warning_gb = 0.001` (1 MB) for testing. Start TUI
   — health bar shows disk usage in human-readable format (e.g., "42 MB").
   Warning indicator is visible. Set threshold back to 10 — warning disappears.
-  Disconnect TUI — disk usage printed to stdout on exit.
+  Disconnect and reconnect TUI — the latest disk usage is surfaced on both
+  lifecycle edges without crashing, and the reconnect view shows the same
+  current calculation.
 
 ---
 
@@ -813,9 +854,10 @@ A task or milestone is done only when all of the following are true:
 - [ ] Steps: mic permission check, BlackHole detection/setup guide (including
       sample rate and clock source verification), HuggingFace token for
       pyannote (via `huggingface-cli login`, with note about accepting terms
-      on two model pages), GGUF model discovery/configuration, `llama-server`
-      vs `llama-cli` backend selection, model pre-download option, cloud backup
-      exclusion warning
+      on two model pages), Silero VAD ONNX model download and verification,
+      GGUF model discovery/configuration, `llama-server` vs `llama-cli`
+      backend selection, model pre-download option, cloud backup exclusion
+      warning
 - [ ] Writes config to `scarecrow.toml` with 0600 permissions
 - [ ] Creates data directory with 0700 permissions
 - [ ] Each optional step can be skipped with clear degraded-mode explanation
@@ -825,8 +867,11 @@ A task or milestone is done only when all of the following are true:
   GGUF files from default locations or lets the user choose model directories,
   writes `backend`, and validates a direct `llama.cpp` invocation against the
   selected cleanup/summary/query model path. Run again skipping BlackHole —
-  config has no `system_device`, wizard prints "mic-only mode" explanation.
-  Run again skipping pyannote — wizard prints "no speaker labels" explanation.
+  config keeps `system_device = ""` and `multi_output_device = ""`, wizard
+  prints "mic-only mode" explanation. Run again with empty model-role values —
+  wizard writes empty strings and records discovered healthy candidates in the
+  model catalog after smoke tests. Run again skipping pyannote — wizard prints
+  "no speaker labels" explanation.
   Run `scarecrow start` after setup — daemon starts without errors.
   `xattr -l $SCARECROW_DATA` shows backup exclusion attribute.
 

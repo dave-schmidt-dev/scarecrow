@@ -1,0 +1,8 @@
+[package]
+name = "scarecrow"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+scarecrow-shared = { path = "../scarecrow-shared" }
+
