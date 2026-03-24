@@ -188,9 +188,13 @@ class ScarecrowApp(App[None]):
     def action_record(self) -> None:
         """Start recording — only valid from idle state."""
         if self.state is not AppState.IDLE:
+            self._show_error(f"Cannot record: state is {self.state.name}")
             return
-        if self._transcriber is None or not self._transcriber.is_ready:
-            self._show_error("Transcriber not ready.")
+        if self._transcriber is None:
+            self._show_error("Transcriber is None — not injected.")
+            return
+        if not self._transcriber.is_ready:
+            self._show_error("Transcriber not ready (recorder shut down).")
             return
 
         # Create session and audio recorder
