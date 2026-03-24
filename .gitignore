@@ -28,3 +28,4 @@ recordings/
 # Claude Code
 .claude/settings.local.json
 realtimesst.log
+scarecrow_debug.log
