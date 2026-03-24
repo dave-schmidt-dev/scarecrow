@@ -77,25 +77,13 @@ def main() -> None:
         print(f"Failed to start transcriber: {e}", file=sys.stderr)
         sys.exit(1)
 
-    t1 = time.monotonic()
-    print(f"  Live model ready ({t1 - t0:.1f}s)", flush=True)
-
-    # Pre-load the batch model so the first 30s tick isn't delayed
-    print(f"  Loading batch model ({batch})…", flush=True)
-    from faster_whisper import WhisperModel
-
-    batch_model = WhisperModel(
-        config.FINAL_MODEL,
-        device="cpu",
-        compute_type="int8",
-    )
-
     os.dup2(saved_stderr, stderr_fd)
     os.close(saved_stderr)
 
-    t2 = time.monotonic()
-    print(f"  Batch model ready ({t2 - t1:.1f}s)", flush=True)
-    print(f"  Starting TUI… (total {t2 - t0:.1f}s)", flush=True)
+    t1 = time.monotonic()
+    print(f"  Models ready ({t1 - t0:.1f}s)", flush=True)
+    print(f"  Batch model ({batch}) loads on first use", flush=True)
+    print("  Starting TUI…", flush=True)
     print(flush=True)
 
     # Suppress resource_tracker warnings on exit (leaked semaphores from
@@ -107,7 +95,6 @@ def main() -> None:
     warnings.filterwarnings("ignore", "resource_tracker:.*semaphore", UserWarning)
 
     app = ScarecrowApp(transcriber=transcriber)
-    app._batch_model = batch_model
     try:
         app.run()
     except KeyboardInterrupt:

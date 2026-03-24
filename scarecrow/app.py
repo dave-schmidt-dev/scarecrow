@@ -169,7 +169,7 @@ class ScarecrowApp(App[None]):
 
     def on_mount(self) -> None:
         self._tick_timer = self.set_interval(1, self._tick, pause=True)
-        self._level_timer = self.set_interval(0.1, self._update_audio_level)
+        self._level_timer = self.set_interval(0.5, self._update_audio_level)
         self._sync_info_bar()
         self.set_timer(0.1, self._auto_start)
 
@@ -225,12 +225,13 @@ class ScarecrowApp(App[None]):
         else:
             level = self._audio_recorder.peak_level
         self._audio_level = level
-        self.query_one(AudioMeter).level = level
+        meter = self.query_one(AudioMeter)
+        if meter.level != level:
+            meter.level = level
         self._audio_history.append(level)
         if len(self._audio_history) > 40:
             self._audio_history.pop(0)
-        spark = self.query_one("#audio-spark", Sparkline)
-        spark.data = list(self._audio_history)
+        self.query_one("#audio-spark", Sparkline).refresh()
 
     # ------------------------------------------------------------------
     # Info bar sync
@@ -444,27 +445,21 @@ class ScarecrowApp(App[None]):
             return
 
         self._tick_timer.pause()
+        self._level_timer.pause()
         if hasattr(self, "_batch_timer"):
             self._batch_timer.pause()
-
-        self._update_live("Transcribing remaining audio\u2026")
-        self._batch_transcribe()
 
         self.state = AppState.IDLE
 
         if self._audio_recorder is not None:
-            self._update_live("Releasing microphone\u2026")
             with contextlib.suppress(Exception):
                 self._audio_recorder.stop()
             self._audio_recorder = None
 
         if self._session is not None:
-            self._update_live(f"Saving to {self._session.transcript_path}")
             with contextlib.suppress(Exception):
                 self._session.finalize()
             self._session = None
-
-        self._update_live("Unloading models\u2026")
 
     # ------------------------------------------------------------------
     # Public API
