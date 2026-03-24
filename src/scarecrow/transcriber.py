@@ -3,10 +3,27 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 
+import torch.hub
 from RealtimeSTT import AudioToTextRecorder
 
 from scarecrow import config
+
+
+def _trust_silero_vad() -> None:
+    """Add silero-vad to torch hub trusted repos to avoid interactive prompt."""
+    hub_dir = Path(torch.hub.get_dir())
+    hub_dir.mkdir(parents=True, exist_ok=True)
+    trusted_list = hub_dir / "trusted_list"
+    entry = "snakers4/silero-vad"
+    if trusted_list.exists() and entry in trusted_list.read_text():
+        return
+    with trusted_list.open("a") as f:
+        f.write(entry + "\n")
+
+
+_trust_silero_vad()
 
 
 class Transcriber:
