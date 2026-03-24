@@ -269,6 +269,14 @@ class Transcriber:
         if not chunks or self._model is None:
             return
         audio = np.concatenate(chunks)
+
+        # For live updates, only transcribe the tail to cap CPU usage.
+        # For stabilized (utterance end), transcribe the full buffer.
+        if not stabilized:
+            max_samples = int(config.REALTIME_MAX_WINDOW * config.SAMPLE_RATE)
+            if len(audio) > max_samples:
+                audio = audio[-max_samples:]
+
         try:
             segments, _ = self._model.transcribe(
                 audio,

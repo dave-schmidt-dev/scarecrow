@@ -13,7 +13,8 @@ FINAL_MODEL = "medium.en"  # Accurate model for settled text (runs at sentence b
 LANGUAGE = "en"
 BEAM_SIZE = 5
 BEAM_SIZE_REALTIME = 3
-REALTIME_PROCESSING_PAUSE = 0.2  # seconds between realtime updates
+REALTIME_PROCESSING_PAUSE = 1.0  # seconds between realtime updates
+REALTIME_MAX_WINDOW = 5.0  # max seconds of audio to transcribe for live
 
 # VAD settings (Silero VAD, ONNX)
 VAD_THRESHOLD = 0.5  # speech probability above this = speech
