@@ -81,6 +81,41 @@ class ScarecrowApp(App[None]):
     def on_mount(self) -> None:
         self._timer = self.set_interval(1, self._tick, pause=True)
         self._sync_status()
+        self._preflight_check()
+
+    def _preflight_check(self) -> None:
+        """Verify at least one audio input device exists (no stream opened)."""
+        import sounddevice as sd
+
+        try:
+            devices = sd.query_devices()
+        except Exception:
+            log.exception("Failed to query audio devices")
+            self._show_error("Could not query audio devices — recording disabled.")
+            self._disable_record_binding()
+            return
+
+        try:
+            has_input = any(
+                d.get("max_input_channels", 0) > 0  # type: ignore[union-attr]
+                for d in devices
+            )
+        except TypeError:
+            # devices is a single DeviceInfo dict (returned when only one device)
+            has_input = devices.get("max_input_channels", 0) > 0  # type: ignore[union-attr]
+        if not has_input:
+            self._show_error("No audio input devices found — recording disabled.")
+            self._disable_record_binding()
+
+    def _show_error(self, message: str) -> None:
+        """Write an error message to the captions RichLog."""
+        self.query_one("#captions", RichLog).write(
+            f"[bold red]Error:[/bold red] {message}"
+        )
+
+    def _disable_record_binding(self) -> None:
+        """Remove the 'r' key binding so the user cannot start recording."""
+        self.BINDINGS = [b for b in self.BINDINGS if b.key != "r"]
 
     # ------------------------------------------------------------------
     # Timer
@@ -160,10 +195,30 @@ class ScarecrowApp(App[None]):
         )
 
         # Start audio recording
-        self._audio_recorder.start()
+        try:
+            self._audio_recorder.start()
+        except Exception as exc:
+            log.exception("Failed to start audio recorder")
+            self._show_error(f"Could not start audio recorder: {exc}")
+            self._audio_recorder = None
+            self._transcriber = None
+            self._session = None
+            return
 
         # Start transcription
-        self._transcriber.start()
+        try:
+            self._transcriber.start()
+        except Exception as exc:
+            log.exception("Failed to start transcriber")
+            self._show_error(f"Could not start transcriber: {exc}")
+            try:
+                self._audio_recorder.stop()
+            except Exception:
+                log.exception("Failed to stop audio recorder during cleanup")
+            self._audio_recorder = None
+            self._transcriber = None
+            self._session = None
+            return
 
         # Launch transcription worker thread
         self._transcription_worker = self.run_worker(
@@ -210,23 +265,35 @@ class ScarecrowApp(App[None]):
 
         # Stop transcription first (unblocks text() loop)
         if self._transcriber is not None:
-            self._transcriber.shutdown()
+            try:
+                self._transcriber.shutdown()
+            except Exception:
+                log.exception("Error shutting down transcriber")
             self._transcriber = None
 
         # Cancel worker if still running
         if self._transcription_worker is not None:
-            if self._transcription_worker.state is WorkerState.RUNNING:
-                self._transcription_worker.cancel()
+            try:
+                if self._transcription_worker.state is WorkerState.RUNNING:
+                    self._transcription_worker.cancel()
+            except Exception:
+                log.exception("Error cancelling transcription worker")
             self._transcription_worker = None
 
         # Stop audio recording
         if self._audio_recorder is not None:
-            self._audio_recorder.stop()
+            try:
+                self._audio_recorder.stop()
+            except Exception:
+                log.exception("Error stopping audio recorder")
             self._audio_recorder = None
 
         # Finalize session (close transcript file)
         if self._session is not None:
-            self._session.finalize()
+            try:
+                self._session.finalize()
+            except Exception:
+                log.exception("Error finalizing session")
             self._session = None
 
     # ------------------------------------------------------------------
