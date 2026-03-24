@@ -11,7 +11,6 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.reactive import reactive
 from textual.widgets import Footer, Header, RichLog, Static
-from textual.worker import Worker, WorkerState
 
 from scarecrow.recorder import AudioRecorder
 from scarecrow.session import Session
@@ -23,8 +22,6 @@ log = logging.getLogger(__name__)
 
 
 class AppState(Enum):
-    """Recording state machine states."""
-
     IDLE = auto()
     RECORDING = auto()
     PAUSED = auto()
@@ -38,13 +35,10 @@ _STATE_LABELS: dict[AppState, str] = {
 
 
 class StatusBar(Static):
-    """A status indicator widget showing the current app state."""
-
     state: reactive[AppState] = reactive(AppState.IDLE)
 
     def render(self) -> str:
-        label = _STATE_LABELS[self.state]
-        return f"[{label}]"
+        return f"[{_STATE_LABELS[self.state]}]"
 
     def watch_state(self, new_state: AppState) -> None:
         self.remove_class("state-idle", "state-recording", "state-paused")
@@ -70,46 +64,53 @@ class ScarecrowApp(App[None]):
         self._session: Session | None = None
         self._audio_recorder: AudioRecorder | None = None
         self._transcriber: Transcriber | None = transcriber
-        self._transcription_worker: Worker[None] | None = None
         self._suppress_live: bool = False
+        # Accumulate stabilized text for the transcript pane.
+        # RealtimeSTT fires on_realtime_transcription_stabilized with the
+        # full utterance so far. When text() would have returned (sentence
+        # boundary), the stabilized text resets. We detect this reset to
+        # know when to commit a sentence to the transcript.
+        self._prev_stabilized: str = ""
 
     def compose(self) -> ComposeResult:
-        yield Header()
-        yield StatusBar(id="status-bar")
         from scarecrow import config
 
+        yield Header()
+        yield StatusBar(id="status-bar")
         yield Static(
-            f"Transcript  [dim]({config.FINAL_MODEL})[/dim]", classes="pane-label"
+            f"Transcript  [dim]({config.REALTIME_MODEL} stabilized)[/dim]",
+            classes="pane-label",
         )
         yield RichLog(id="captions", highlight=True, markup=True, wrap=True)
         yield Static(
-            f"Live  [dim]({config.REALTIME_MODEL})[/dim]", classes="pane-label"
+            f"Live  [dim]({config.REALTIME_MODEL})[/dim]",
+            classes="pane-label",
         )
         yield RichLog(
-            id="live-log", highlight=False, markup=False, wrap=True, auto_scroll=True
+            id="live-log",
+            highlight=False,
+            markup=False,
+            wrap=True,
+            auto_scroll=True,
         )
         yield Footer()
 
     def on_mount(self) -> None:
         self._timer = self.set_interval(1, self._tick, pause=True)
         self._sync_status()
-        # Auto-start recording immediately
         self.set_timer(0.1, self._auto_start)
 
     def _auto_start(self) -> None:
-        """Start recording automatically on launch."""
         if not self._preflight_check():
             return
         self._start_recording()
 
     def _preflight_check(self) -> bool:
-        """Verify audio input exists and transcriber is ready. Returns True if OK."""
         import sounddevice as sd
 
         try:
             devices = sd.query_devices()
         except Exception:
-            log.exception("Failed to query audio devices")
             self._show_error("Could not query audio devices.")
             return False
 
@@ -131,7 +132,6 @@ class ScarecrowApp(App[None]):
         return True
 
     def _show_error(self, message: str) -> None:
-        """Write an error message to the captions RichLog."""
         self.query_one("#captions", RichLog).write(
             f"[bold red]Error:[/bold red] {message}"
         )
@@ -142,16 +142,13 @@ class ScarecrowApp(App[None]):
 
     def _tick(self) -> None:
         self._elapsed += 1
-        self._update_footer_time()
-
-    def _update_footer_time(self) -> None:
         h = self._elapsed // 3600
         m = (self._elapsed % 3600) // 60
         s = self._elapsed % 60
         self.sub_title = f"{h:02d}:{m:02d}:{s:02d}"
 
     # ------------------------------------------------------------------
-    # State helpers
+    # State
     # ------------------------------------------------------------------
 
     def _sync_status(self) -> None:
@@ -161,83 +158,71 @@ class ScarecrowApp(App[None]):
         self._sync_status()
 
     # ------------------------------------------------------------------
-    # Transcription worker (runs in Thread A)
+    # RealtimeSTT callbacks — these drive BOTH panes.
+    # No blocking text() loop. The realtime worker runs continuously.
     # ------------------------------------------------------------------
 
-    def _transcription_loop(self) -> None:
-        """Blocking loop that runs in a worker thread."""
-        assert self._transcriber is not None
-        self._safe_call_from_thread(self._stream_live_text, "Waiting for speech…")
-        while self.state in (AppState.RECORDING, AppState.PAUSED):
-            try:
-                text = self._transcriber.text()
-            except Exception as exc:
-                log.exception("Transcription error")
-                self._safe_call_from_thread(
-                    self._show_error, f"Transcription failed: {exc}"
-                )
-                break
-            if text and text.strip():
-                self._safe_call_from_thread(self._handle_final_text, text)
-            else:
-                self._safe_call_from_thread(
-                    self._stream_live_text, "Waiting for speech…"
-                )
-
-    def _handle_final_text(self, text: str) -> None:
-        """Called on the main thread when a sentence is finalized."""
-        self.append_caption(text)
-        if self._session is not None:
-            self._session.append_sentence(text)
-
-    # ------------------------------------------------------------------
-    # RealtimeSTT callbacks (fire on RealtimeSTT's internal thread)
-    # ------------------------------------------------------------------
-
-    def _safe_call_from_thread(self, callback, *args) -> None:
-        """call_from_thread that silently ignores 'App is not running'."""
+    def _safe_call(self, callback, *args) -> None:
         with contextlib.suppress(RuntimeError):
             self.call_from_thread(callback, *args)
 
     def _on_realtime_update(self, text: str) -> None:
-        if not self._suppress_live:
-            self._safe_call_from_thread(self._stream_live_text, text)
+        """Fires every ~0.2s with the raw live transcription."""
+        if not self._suppress_live and text:
+            self._safe_call(self._update_live, text)
 
     def _on_realtime_stabilized(self, text: str) -> None:
-        if not self._suppress_live:
-            self._safe_call_from_thread(self._stream_live_text, text)
+        """Fires with stabilized text. When it resets/shortens, a
+        sentence boundary was crossed — commit previous to transcript."""
+        if self._suppress_live:
+            return
+        if text:
+            self._safe_call(self._update_live, text)
+            self._safe_call(self._check_sentence_boundary, text)
 
-    def _stream_live_text(self, text: str) -> None:
-        """Replace the live log content with the current live text."""
+    def _update_live(self, text: str) -> None:
         live_log = self.query_one("#live-log", RichLog)
         live_log.clear()
         live_log.write(text)
 
+    def _check_sentence_boundary(self, new_stabilized: str) -> None:
+        """Detect when stabilized text resets — means previous sentence done."""
+        prev = self._prev_stabilized
+        # If new text is significantly shorter than previous, a sentence
+        # boundary was crossed. Commit the previous text to transcript.
+        if prev and len(new_stabilized) < len(prev) * 0.5:
+            self._commit_to_transcript(prev)
+        self._prev_stabilized = new_stabilized
+
+    def _commit_to_transcript(self, text: str) -> None:
+        text = text.strip()
+        if not text:
+            return
+        self.query_one("#captions", RichLog).write(text)
+        if self._session is not None:
+            self._session.append_sentence(text)
+
     # ------------------------------------------------------------------
-    # Actions (bound to keys via BINDINGS)
+    # Actions
     # ------------------------------------------------------------------
 
     def _start_recording(self) -> None:
-        """Start recording — called on launch or manually."""
         if self.state is not AppState.IDLE:
             return
         if self._transcriber is None or not self._transcriber.is_ready:
             self._show_error("Transcriber not ready.")
             return
 
-        # Create session and audio recorder
         self._session = Session()
         self._audio_recorder = AudioRecorder(
             output_path=self._session.audio_path,
         )
 
-        # Wire transcriber callbacks to this app instance
         self._transcriber.set_callbacks(
             on_realtime_update=self._on_realtime_update,
             on_realtime_stabilized=self._on_realtime_stabilized,
         )
 
-        # Start audio recording
         try:
             self._audio_recorder.start()
         except Exception as exc:
@@ -247,30 +232,27 @@ class ScarecrowApp(App[None]):
             self._session = None
             return
 
-        # Launch transcription worker thread
-        self._transcription_worker = self.run_worker(
-            self._transcription_loop,
-            thread=True,
-            name="transcription",
-        )
+        # Start continuous recording on the AudioToTextRecorder directly.
+        # We do NOT call text() — that would block and pause live callbacks.
+        # Instead, we manually start() the recorder and let realtime callbacks
+        # drive both panes continuously.
+        assert self._transcriber.recorder is not None
+        self._transcriber.recorder.start()
 
-        # Update state and timer
         self._elapsed = 0
         self._suppress_live = False
+        self._prev_stabilized = ""
         self.state = AppState.RECORDING
         self._timer.resume()
-        self._update_footer_time()
-        self._stream_live_text("Listening…")
+        self._update_live("Listening…")
 
     def action_pause(self) -> None:
-        """Toggle pause/resume — only valid when recording or paused."""
         if self.state is AppState.RECORDING:
             self.state = AppState.PAUSED
             self._timer.pause()
             self._suppress_live = True
             if self._audio_recorder is not None:
                 self._audio_recorder.pause()
-            self._stream_live_text("")
         elif self.state is AppState.PAUSED:
             self.state = AppState.RECORDING
             self._timer.resume()
@@ -279,32 +261,27 @@ class ScarecrowApp(App[None]):
                 self._audio_recorder.resume()
 
     def action_quit(self) -> None:
-        """Stop recording (if active) then quit."""
         self._stop_recording()
         self.exit()
 
     def _stop_recording(self) -> None:
-        """Stop recording components and finalize session."""
         if self.state not in (AppState.RECORDING, AppState.PAUSED):
             return
 
         self._timer.pause()
+
+        # Commit any remaining stabilized text
+        if self._prev_stabilized:
+            self._commit_to_transcript(self._prev_stabilized)
+            self._prev_stabilized = ""
+
         self.state = AppState.IDLE
 
-        # Cancel worker if still running
-        if self._transcription_worker is not None:
-            with contextlib.suppress(Exception):
-                if self._transcription_worker.state is WorkerState.RUNNING:
-                    self._transcription_worker.cancel()
-            self._transcription_worker = None
-
-        # Stop audio recording
         if self._audio_recorder is not None:
             with contextlib.suppress(Exception):
                 self._audio_recorder.stop()
             self._audio_recorder = None
 
-        # Finalize session (close transcript file)
         if self._session is not None:
             with contextlib.suppress(Exception):
                 self._session.finalize()
@@ -315,9 +292,7 @@ class ScarecrowApp(App[None]):
     # ------------------------------------------------------------------
 
     def update_live_preview(self, text: str) -> None:
-        """Update the live (partial) caption preview."""
-        self._stream_live_text(text)
+        self._update_live(text)
 
     def append_caption(self, text: str) -> None:
-        """Append settled caption text to the transcript log."""
         self.query_one("#captions", RichLog).write(text)

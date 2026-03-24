@@ -200,5 +200,6 @@ async def test_pane_labels_show_model_names() -> None:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
         labels = [w.render() for w in app.query(".pane-label")]
         label_text = " ".join(str(lbl) for lbl in labels)
-        assert config.FINAL_MODEL in label_text
         assert config.REALTIME_MODEL in label_text
+        assert "Transcript" in label_text
+        assert "Live" in label_text
