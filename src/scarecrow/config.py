@@ -8,8 +8,8 @@ CHANNELS = 1
 SUBTYPE = "PCM_16"
 
 # Transcription models
-REALTIME_MODEL = "tiny"  # Fast model for live preview
-FINAL_MODEL = "small"  # Accurate model for settled text
+REALTIME_MODEL = "tiny.en"  # Fast model for live preview (runs constantly)
+FINAL_MODEL = "medium.en"  # Accurate model for settled text (runs at sentence breaks)
 LANGUAGE = "en"
 BEAM_SIZE = 5
 BEAM_SIZE_REALTIME = 3
