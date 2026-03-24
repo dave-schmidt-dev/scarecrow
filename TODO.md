@@ -4,6 +4,8 @@
 - ~~Text clears after 1-3 sentences~~ Fixed: single RichLog with stable lines + in-place partial
 - ~~Partial text rendered outside bordered area~~ Fixed: removed two-widget split
 - ~~Repeated words from overlapping 5s windows~~ Fixed: partial replaces in-place, stabilized promotes to stable
+- ~~No scrolling during continuous speech~~ Fixed: REALTIME_MAX_SPEECH=10s forces utterance breaks
+- ~~Flicker on live pane updates~~ Fixed: batch_update() wraps clear+rewrite
 - Text tracking doesn't follow spoken words tightly (1s transcription interval)
 - Monitor: live pane may stop updating under heavy CPU load (base.en + medium.en overlap)
 
@@ -19,9 +21,10 @@
 - Investigate: can batch run at lower priority or be deferred if live is active?
 
 ## VAD tuning
-- Current thresholds: speech=0.5, silence=0.35, end=0.6s, min_speech=0.5s
+- Current thresholds: speech=0.5, silence=0.35, end=0.6s, min_speech=0.5s, max_speech=10s
 - May need adjustment based on testing with different environments and voices
 - Pre-buffer is 1.0s — verify speech onset is captured cleanly
+- Max speech (10s) forces utterance breaks — tune if it cuts mid-sentence too often
 
 ## Pause/resume
 - Needs thorough testing after RealtimeSTT replacement

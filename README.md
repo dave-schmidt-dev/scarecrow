@@ -62,7 +62,7 @@ sc          # start recording (auto-starts on launch)
 The TUI shows:
 - **Info bar** — recording state (`REC` / `PAUSED`), mic indicator, elapsed time, word count, batch countdown
 - **Transcript pane** — batch transcription output with timestamped dividers (upper, scrollable)
-- **Live pane** — real-time captions from the fast model (lower, bordered; stabilized lines scroll up, current partial updates in-place at bottom)
+- **Live pane** — real-time captions from the fast model (lower, bordered; text promotes to stable scrolling lines every ~10s or at natural pauses, current partial updates in-place at bottom)
 - **Footer** — keybindings
 
 ### Pause behavior
@@ -80,6 +80,7 @@ On quit (`q`), Scarecrow prints session metrics to the terminal:
 - Word count
 - Session directory path
 - Audio and transcript file sizes
+- "Press Enter to close" prompt (auto-closes after 30s)
 
 ### Startup output
 
@@ -88,14 +89,16 @@ On launch, Scarecrow prints:
 - Model cache locations (or whether they need downloading)
 - Where recordings and transcripts are saved
 
+Models load in offline mode (`HF_HUB_OFFLINE=1`) to avoid network stalls. Debug logs are written to `~/.cache/scarecrow/debug.log`.
+
 ### Two-model architecture
 
 | Role | Default model | Behaviour |
 |------|--------------|-----------|
-| **Live** (lower pane) | `base.en` | VAD-gated, transcribes during speech every ~1s |
+| **Live** (lower pane) | `base.en` | VAD-gated, transcribes during speech every ~1s, forced break every 10s |
 | **Batch** (upper pane) | `medium.en` | Runs every 30s on buffered audio, produces accurate transcript |
 
-A single 16kHz audio stream feeds both models. Silero VAD (ONNX, bundled) detects speech boundaries, triggering live transcription with base.en during speech. Batch transcription with medium.en runs independently every 30 seconds. No subprocesses — everything runs in a single process with one worker thread.
+A single 16kHz audio stream feeds both models. Silero VAD (ONNX, bundled) detects speech boundaries, triggering live transcription with base.en during speech. Continuous speech is force-broken every 10s so the live pane scrolls. Batch transcription with medium.en runs independently every 30 seconds. No subprocesses — everything runs in a single process with one worker thread.
 
 Models are configured in `scarecrow/config.py` or via `scripts/setup.py`.
 
