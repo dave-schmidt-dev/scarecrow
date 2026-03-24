@@ -18,7 +18,6 @@ def _mock_transcriber():
     """Return a mock Transcriber that doesn't load models."""
     mock = MagicMock()
     mock.is_ready = True
-    mock.text.side_effect = StopIteration
     mock.set_callbacks.return_value = None
     mock.shutdown.return_value = None
     return mock

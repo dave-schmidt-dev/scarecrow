@@ -26,7 +26,6 @@ def _mock_transcriber():
     """Return a mock Transcriber that doesn't load models."""
     mock = MagicMock()
     mock.is_ready = True
-    mock.text.side_effect = StopIteration
     mock.set_callbacks.return_value = None
     mock.shutdown.return_value = None
     return mock
@@ -594,3 +593,28 @@ async def test_shutdown_summary_contains_metrics() -> None:
 
         assert "00:02:05" in app._shutdown_summary
         assert "42" in app._shutdown_summary
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_pause_preserves_live_history(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """Pausing must not wipe accumulated live transcription lines."""
+    mock_recorder_cls.return_value = _mock_recorder()
+    mock_session_cls.return_value = MagicMock()
+
+    async with _app(with_transcriber=True).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause(delay=0.5)
+
+        app._append_live("first utterance")
+        app._append_live("second utterance")
+        await pilot.pause()
+
+        await pilot.press("p")
+        await pilot.pause()
+
+        text = _live_text(app)
+        assert "first utterance" in text
+        assert "second utterance" in text

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import warnings
 from pathlib import Path
 
@@ -40,9 +41,15 @@ class ModelManager:
     def __init__(self) -> None:
         self._live_model: WhisperModel | None = None
         self._batch_model: WhisperModel | None = None
+        self._lock = threading.Lock()
 
     def prepare(self) -> None:
         """Initialize runtime state and load the realtime model."""
+        with self._lock:
+            self._prepare_unlocked()
+
+    def _prepare_unlocked(self) -> None:
+        """Internal prepare — caller must hold self._lock."""
         configure_runtime_environment()
         warm_tqdm_lock()
         if self._live_model is None:
@@ -50,18 +57,20 @@ class ModelManager:
 
     def get_live_model(self) -> WhisperModel:
         """Return the realtime model, loading bootstrap state if needed."""
-        if self._live_model is None:
-            self.prepare()
-        assert self._live_model is not None
-        return self._live_model
+        with self._lock:
+            if self._live_model is None:
+                self._prepare_unlocked()
+            assert self._live_model is not None
+            return self._live_model
 
     def get_batch_model(self) -> WhisperModel:
         """Return the batch model, loading it on first use."""
-        if self._batch_model is None:
-            configure_runtime_environment()
-            warm_tqdm_lock()
-            self._batch_model = self._create_model(config.FINAL_MODEL)
-        return self._batch_model
+        with self._lock:
+            if self._batch_model is None:
+                configure_runtime_environment()
+                warm_tqdm_lock()
+                self._batch_model = self._create_model(config.FINAL_MODEL)
+            return self._batch_model
 
     @staticmethod
     def _create_model(model_name: str) -> WhisperModel:

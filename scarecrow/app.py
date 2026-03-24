@@ -211,7 +211,10 @@ class ScarecrowApp(App[None]):
         try:
             self.call_from_thread(callback, *args)
         except RuntimeError:
-            log.exception("Failed to deliver callback to Textual UI thread")
+            if self.state is not AppState.IDLE:
+                log.error("UI callback failed while app still active: %s", callback)
+            else:
+                log.debug("UI callback skipped during shutdown: %s", callback)
 
     def _bind_transcriber(self) -> None:
         if self._transcriber is None:
@@ -387,7 +390,7 @@ class ScarecrowApp(App[None]):
             if self._audio_recorder is not None:
                 self._audio_recorder.pause()
             self._set_status("Paused")
-            self._update_live("Paused")
+            self._set_live_partial("Paused")
             self._write_pause_marker()
             return
 
@@ -397,7 +400,8 @@ class ScarecrowApp(App[None]):
                 self._audio_recorder.resume()
             self._batch_countdown = BATCH_INTERVAL_SECONDS
             self._set_status("Listening…")
-            self._update_live("Listening…")
+            self._live_partial = ""
+            self._render_live()
             self._sync_info_bar()
 
     def action_quit(self) -> None:

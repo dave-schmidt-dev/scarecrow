@@ -36,8 +36,8 @@ def _resample(audio: np.ndarray, src_sr: int, dst_sr: int = 16000) -> np.ndarray
 
 
 @pytest.mark.skipif(
-    not _models_cached(),
-    reason="realtime and batch Whisper models must already be cached",
+    not _models_cached() or not _FIXTURE_PATH.exists(),
+    reason="models must be cached and audio fixture must exist",
 )
 def test_transcriber_pipeline_with_real_audio_fixture() -> None:
     """Feed a real recording through live and batch paths with actual models."""

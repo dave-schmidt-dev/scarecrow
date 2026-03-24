@@ -174,18 +174,24 @@ scarecrow/
   __main__.py      # entry point, model loading, startup output
   app.py           # Textual TUI, batch transcription scheduling
   config.py        # model names, audio/VAD settings, defaults
+  env_health.py    # editable-install .pth repair (macOS UF_HIDDEN)
   recorder.py      # sounddevice audio capture + WAV writing
+  runtime.py       # HF offline bootstrap, tqdm lock, Whisper model manager
   session.py       # timestamped session dirs + transcript files
   transcriber.py   # Silero VAD + faster-whisper live transcription
   models/          # bundled ONNX models (silero_vad.onnx)
   app.tcss         # TUI stylesheet
 scripts/
   setup.py         # interactive first-time setup
+  sync_env.py      # uv sync + editable-install repair
+  repair_venv.py   # standalone .pth repair/validation
 examples/
   scarecrow-iterm-profile.json  # iTerm2 dynamic profile template
 tests/
   test_app.py          # TUI integration tests
   test_behavioral.py   # behavioral contract tests
+  test_env_health.py   # editable-install repair tests
+  test_integration.py  # real-model pipeline tests
   test_recorder.py     # audio recorder unit tests
   test_session.py      # session/file management tests
   test_regressions.py  # regression tests for fixed bugs

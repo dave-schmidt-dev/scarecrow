@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 UF_HIDDEN = getattr(__import__("stat"), "UF_HIDDEN", 0x8000)
+_HAS_CHFLAGS = hasattr(os, "chflags")
 
 
 def editable_pth_path(project_name: str, venv_root: Path | None = None) -> Path:
@@ -22,11 +23,15 @@ def editable_pth_path(project_name: str, venv_root: Path | None = None) -> Path:
 
 def has_hidden_flag(path: Path) -> bool:
     """Return True when the macOS hidden flag is set for a path."""
+    if not _HAS_CHFLAGS:
+        return False
     return bool(os.stat(path).st_flags & UF_HIDDEN)
 
 
 def clear_hidden_flag(path: Path) -> bool:
     """Clear the macOS hidden flag if present. Returns True if it changed."""
+    if not _HAS_CHFLAGS:
+        return False
     flags = os.stat(path).st_flags
     if not flags & UF_HIDDEN:
         return False

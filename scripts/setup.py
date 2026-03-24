@@ -83,12 +83,7 @@ def choose_model(role: str, default: str) -> str:
 def check_cached(model_name: str) -> bool:
     """Check if a model is already downloaded."""
     cache_dir = Path.home() / ".cache" / "huggingface" / "hub"
-    # faster-whisper models are stored as Systran/faster-whisper-{name}
-    clean_name = (
-        model_name.replace(".", "-") if model_name != "large-v3" else "large-v3"
-    )
-    pattern = f"models--Systran--faster-whisper-{clean_name}"
-    return (cache_dir / pattern).exists()
+    return (cache_dir / f"models--Systran--faster-whisper-{model_name}").exists()
 
 
 def write_config(live_model: str, batch_model: str):

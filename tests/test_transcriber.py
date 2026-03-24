@@ -182,3 +182,37 @@ def test_batch_transcription_error_emits_callback() -> None:
     assert errors == [
         ("batch", "Batch transcription failed. See debug log for the stack trace.")
     ]
+
+
+def test_get_batch_model_thread_safety() -> None:
+    """Concurrent get_batch_model() calls must only create the model once."""
+    import threading
+
+    from scarecrow.runtime import ModelManager
+
+    manager = ModelManager()
+    call_count = 0
+
+    def counting_create(model_name: str) -> MagicMock:
+        nonlocal call_count
+        call_count += 1
+        return MagicMock()
+
+    manager._create_model = staticmethod(counting_create)
+
+    barrier = threading.Barrier(2)
+    results: list[object] = [None, None]
+
+    def worker(idx: int) -> None:
+        barrier.wait()
+        results[idx] = manager.get_batch_model()
+
+    t1 = threading.Thread(target=worker, args=(0,))
+    t2 = threading.Thread(target=worker, args=(1,))
+    t1.start()
+    t2.start()
+    t1.join(timeout=5)
+    t2.join(timeout=5)
+
+    assert call_count == 1, f"Expected 1 model creation, got {call_count}"
+    assert results[0] is results[1], "Both threads must get the same model instance"

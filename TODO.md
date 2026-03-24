@@ -39,5 +39,5 @@
 - Debug log moved to ~/.cache/scarecrow/debug.log (was CWD-relative, lost when iTerm launches from ~)
 
 ## Setup script
-- `scripts/setup.py` references old model cache path logic (dots vs dashes)
+- ~~`scripts/setup.py` references old model cache path logic (dots vs dashes)~~ Fixed: `check_cached` now uses the model name directly
 - Needs testing end-to-end with a fresh clone

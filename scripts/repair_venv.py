@@ -11,8 +11,6 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from scarecrow.env_health import (  # noqa: E402
-    clear_hidden_flag,
-    editable_pth_path,
     ensure_editable_install_visible,
     verify_import_outside_project,
 )
@@ -20,11 +18,6 @@ from scarecrow.env_health import (  # noqa: E402
 
 def main() -> int:
     project_root = PROJECT_ROOT
-    pth_path = editable_pth_path("scarecrow", venv_root=project_root / ".venv")
-    changed = False
-
-    if pth_path.exists():
-        changed = clear_hidden_flag(pth_path)
 
     repaired_path = ensure_editable_install_visible(
         "scarecrow",
@@ -37,8 +30,7 @@ def main() -> int:
         venv_root=project_root / ".venv",
     )
 
-    action = "repaired" if changed else "verified"
-    print(f"{action}: {repaired_path}")
+    print(f"ok: {repaired_path}")
     return 0
 
 

@@ -107,3 +107,53 @@ Scarecrow keeps a running bug ledger in this file. Append to it every time a bug
 - Fix: added `scarecrow/env_health.py`, `scripts/repair_venv.py`, and `scripts/sync_env.py` so sync now includes a post-repair import validation path.
 - Regression test: `tests/test_env_health.py::test_clear_hidden_flag_removes_hidden_bit`, `tests/test_env_health.py::test_ensure_editable_install_visible_repairs_hidden_pth`, `tests/test_startup.py::test_pth_file_not_hidden`
 - Notes: verified 2026-03-24. Exact upstream creator of the bad flag is still external, but the local project workflow now repairs and validates it automatically.
+
+## [BUG-20260324-on-audio-callback-crash]
+- Status: squashed
+- Found: 2026-03-24
+- Area: recorder, transcriber
+- Symptom: if the `_on_audio` callback (transcriber audio feed) raises inside the PortAudio callback, the callback thread dies silently. The recorder appears alive but no audio flows to the transcriber.
+- Root cause: the `_on_audio(indata)` call in `recorder.py._callback()` was unguarded — any exception propagated into the PortAudio thread, killing it.
+- Fix: wrapped the `_on_audio` call in try/except, logging the error. The PortAudio callback never propagates exceptions.
+- Regression test: `tests/test_recorder.py::test_on_audio_exception_does_not_crash_callback`
+- Notes: verified 2026-03-24.
+
+## [BUG-20260324-model-manager-race]
+- Status: squashed
+- Found: 2026-03-24
+- Area: runtime
+- Symptom: concurrent batch transcription workers could both see `_batch_model is None` and load the expensive batch model twice.
+- Root cause: `ModelManager.get_batch_model()` had no thread synchronization.
+- Fix: added `threading.Lock` to `ModelManager`, guarding all model creation paths.
+- Regression test: `tests/test_transcriber.py::test_get_batch_model_thread_safety`
+- Notes: verified 2026-03-24.
+
+## [BUG-20260324-pause-wipes-live-pane]
+- Status: squashed
+- Found: 2026-03-24
+- Area: app
+- Symptom: pressing pause wiped all accumulated live transcription lines, replacing them with just "Paused".
+- Root cause: `action_pause` called `_update_live("Paused")` which replaces all `_live_stable` lines.
+- Fix: pause now sets the partial text to "Paused" without clearing stable history. Resume clears the partial.
+- Regression test: `tests/test_behavioral.py::test_pause_preserves_live_history`
+- Notes: verified 2026-03-24.
+
+## [BUG-20260324-peak-level-overflow]
+- Status: squashed
+- Found: 2026-03-24
+- Area: recorder
+- Symptom: `np.abs(np.int16(-32768))` overflows to -32768, producing a negative peak level.
+- Root cause: int16 abs overflow — the most negative int16 has no positive counterpart.
+- Fix: cast to int32 before abs: `indata.astype(np.int32)`.
+- Regression test: `tests/test_recorder.py::test_peak_level_returns_correct_value`
+- Notes: verified 2026-03-24.
+
+## [BUG-20260324-stale-manual-scripts]
+- Status: squashed
+- Found: 2026-03-24
+- Area: scripts
+- Symptom: `scripts/test_transcription.py` and `scripts/test_dual_stream.py` crash with TypeError/AttributeError — they reference the old RealtimeSTT API (`Transcriber(on_realtime_update=...)`, `transcriber.recorder`).
+- Root cause: scripts were not updated after the runtime refactor replaced RealtimeSTT with Silero VAD + faster-whisper.
+- Fix: rewrote both scripts to use current API (`TranscriberBindings`, `accept_audio`, `AudioRecorder` with `on_audio` callback).
+- Regression test: n/a (manual verification scripts, not automated tests)
+- Notes: verified 2026-03-24.

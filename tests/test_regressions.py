@@ -263,23 +263,18 @@ def test_drain_buffer_clears_completely(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_live_pane_is_single_scrollable_container() -> None:
+async def test_live_pane_is_single_scrollable_container() -> None:
     """Live pane must render as one scrollable pane with a single content widget."""
     from textual.widgets import Static
 
     from scarecrow.app import ScarecrowApp
 
-    async def _check():
-        async with ScarecrowApp().run_test() as pilot:
-            app = pilot.app
-            live_pane = app.query_one("#live-pane")
-            live_content = app.query_one("#live-content", Static)
-            assert live_pane is not None
-            assert live_content is not None
-
-    import asyncio
-
-    asyncio.get_event_loop().run_until_complete(_check())
+    async with ScarecrowApp().run_test() as pilot:
+        app = pilot.app
+        live_pane = app.query_one("#live-pane")
+        live_content = app.query_one("#live-content", Static)
+        assert live_pane is not None
+        assert live_content is not None
 
 
 # ---------------------------------------------------------------------------
@@ -288,23 +283,18 @@ def test_live_pane_is_single_scrollable_container() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_shutdown_summary_saved_on_quit() -> None:
+async def test_shutdown_summary_saved_on_quit() -> None:
     """action_quit must save _shutdown_summary before exiting."""
     from scarecrow.app import ScarecrowApp
 
-    async def _check():
-        async with ScarecrowApp().run_test() as pilot:
-            app = pilot.app
-            with patch.object(app, "_deferred_quit"):
-                app.action_quit()
-                await pilot.pause()
-            assert hasattr(app, "_shutdown_summary")
-            assert "Duration" in app._shutdown_summary
-            assert "Words" in app._shutdown_summary
-
-    import asyncio
-
-    asyncio.get_event_loop().run_until_complete(_check())
+    async with ScarecrowApp().run_test() as pilot:
+        app = pilot.app
+        with patch.object(app, "_deferred_quit"):
+            app.action_quit()
+            await pilot.pause()
+        assert hasattr(app, "_shutdown_summary")
+        assert "Duration" in app._shutdown_summary
+        assert "Words" in app._shutdown_summary
 
 
 # ---------------------------------------------------------------------------

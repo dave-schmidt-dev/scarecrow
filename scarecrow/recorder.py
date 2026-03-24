@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -65,14 +66,19 @@ class AudioRecorder:
             else:
                 self._sound_file.write(indata)
                 # Track peak level for audio meter
-                peak = float(np.abs(indata).max()) / 32768.0
+                peak = float(np.abs(indata.astype(np.int32)).max()) / 32768.0
                 self._peak_level = peak
                 # Buffer for batch transcription
                 with self._buffer_lock:
                     self._audio_chunks.append(indata.copy())
                 # Feed to RealtimeSTT (or other consumer)
                 if self._on_audio is not None:
-                    self._on_audio(indata)
+                    try:
+                        self._on_audio(indata)
+                    except Exception:
+                        logging.getLogger(__name__).exception(
+                            "Audio feed callback failed; live transcription may stop"
+                        )
 
     def start(self) -> None:
         """Opens sounddevice InputStream with callback, opens SoundFile for writing."""
@@ -165,4 +171,5 @@ class AudioRecorder:
     @property
     def peak_level(self) -> float:
         """Current peak audio level, 0.0 to 1.0."""
-        return self._peak_level
+        with self._lock:
+            return self._peak_level
