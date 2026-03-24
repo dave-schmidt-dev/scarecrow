@@ -184,6 +184,7 @@ class Transcriber:
         transcribe_interval = int(config.REALTIME_PROCESSING_PAUSE * config.SAMPLE_RATE)
         min_speech = int(config.VAD_MIN_SPEECH_SECONDS * config.SAMPLE_RATE)
         silence_threshold = int(config.VAD_SILENCE_SECONDS * config.SAMPLE_RATE)
+        max_speech = int(config.REALTIME_MAX_SPEECH * config.SAMPLE_RATE)
         chunk_size = config.VAD_CHUNK_SAMPLES
 
         while True:
@@ -248,16 +249,21 @@ class Transcriber:
                         self._transcribe_and_notify(speech_audio, stabilized=False)
                         last_transcribe_samples = speech_samples
 
-                    # Utterance end: enough silence
-                    if silence_samples >= silence_threshold:
+                    # Utterance end: enough silence OR max duration reached
+                    force_break = speech_samples >= max_speech
+                    if silence_samples >= silence_threshold or force_break:
                         if speech_samples >= min_speech:
                             self._transcribe_and_notify(speech_audio, stabilized=True)
                         state = _VadState.SILENCE
                         speech_audio = []
                         speech_samples = 0
                         silence_samples = 0
+                        last_transcribe_samples = 0
                         vad.reset_states()
-                        log.debug("VAD: speech end")
+                        log.debug(
+                            "VAD: speech end%s",
+                            " (forced)" if force_break else "",
+                        )
 
     def _transcribe_and_notify(
         self,
