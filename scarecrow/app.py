@@ -76,9 +76,15 @@ class ScarecrowApp(App[None]):
     def compose(self) -> ComposeResult:
         yield Header()
         yield StatusBar(id="status-bar")
-        yield Static("Transcript", classes="pane-label")
+        from scarecrow import config
+
+        yield Static(
+            f"Transcript  [dim]({config.FINAL_MODEL})[/dim]", classes="pane-label"
+        )
         yield RichLog(id="captions", highlight=True, markup=True, wrap=True)
-        yield Static("Live", classes="pane-label")
+        yield Static(
+            f"Live  [dim]({config.REALTIME_MODEL})[/dim]", classes="pane-label"
+        )
         yield RichLog(
             id="live-log", highlight=False, markup=False, wrap=True, auto_scroll=True
         )
@@ -161,6 +167,7 @@ class ScarecrowApp(App[None]):
     def _transcription_loop(self) -> None:
         """Blocking loop that runs in a worker thread."""
         assert self._transcriber is not None
+        self._safe_call_from_thread(self._stream_live_text, "Waiting for speech…")
         while self.state in (AppState.RECORDING, AppState.PAUSED):
             try:
                 text = self._transcriber.text()
@@ -172,6 +179,10 @@ class ScarecrowApp(App[None]):
                 break
             if text and text.strip():
                 self._safe_call_from_thread(self._handle_final_text, text)
+            else:
+                self._safe_call_from_thread(
+                    self._stream_live_text, "Waiting for speech…"
+                )
 
     def _handle_final_text(self, text: str) -> None:
         """Called on the main thread when a sentence is finalized."""
