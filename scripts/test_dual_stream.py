@@ -51,7 +51,7 @@ def main() -> None:
     # Start Transcriber (RealtimeSTT/PyAudio)
     print("Starting Transcriber (RealtimeSTT)… (model load may take a moment)")
     try:
-        transcriber.start()
+        transcriber.prepare()
     except Exception as exc:
         transcriber_error = exc
         print(f"ERROR: Transcriber failed to start: {exc}", file=sys.stderr)

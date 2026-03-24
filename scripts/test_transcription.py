@@ -30,7 +30,7 @@ def main() -> None:
     )
 
     print("Starting transcriber… (this may take a moment to load models)")
-    transcriber.start()
+    transcriber.prepare()
     print("Speak into your microphone… (Ctrl+C to stop)\n")
 
     try:
