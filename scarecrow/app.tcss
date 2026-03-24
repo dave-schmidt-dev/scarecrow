@@ -38,8 +38,7 @@ Screen {
 /* ── Live pane (real-time captions) ── */
 
 #live-log {
-    height: 6;
-    min-height: 4;
+    height: 8;
     margin: 0 1;
     padding: 0 1;
     color: $text;

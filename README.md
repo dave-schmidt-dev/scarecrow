@@ -62,7 +62,7 @@ sc          # start recording (auto-starts on launch)
 The TUI shows:
 - **Info bar** — recording state (`REC` / `PAUSED`), mic indicator, elapsed time, word count, batch countdown
 - **Transcript pane** — batch transcription output with timestamped dividers (upper, scrollable)
-- **Live pane** — real-time captions from the fast model with scroll history (lower, fixed height)
+- **Live pane** — real-time captions from the fast model (lower, bordered; stabilized lines scroll up, current partial updates in-place at bottom)
 - **Footer** — keybindings
 
 ### Pause behavior
@@ -72,6 +72,14 @@ The TUI shows:
 - "Recording paused" markers are written to the transcript pane and file every 30s
 - Elapsed timer continues running (tracks total session time)
 - On resume, batch countdown resets for clean intervals
+
+### Shutdown output
+
+On quit (`q`), Scarecrow prints session metrics to the terminal:
+- Recording duration
+- Word count
+- Session directory path
+- Audio and transcript file sizes
 
 ### Startup output
 
@@ -84,10 +92,10 @@ On launch, Scarecrow prints:
 
 | Role | Default model | Behaviour |
 |------|--------------|-----------|
-| **Live** (lower pane) | `tiny.en` | VAD-gated, transcribes during speech every ~1s |
+| **Live** (lower pane) | `base.en` | VAD-gated, transcribes during speech every ~1s |
 | **Batch** (upper pane) | `medium.en` | Runs every 30s on buffered audio, produces accurate transcript |
 
-A single 16kHz audio stream feeds both models. Silero VAD (ONNX, bundled) detects speech boundaries, triggering live transcription with tiny.en during speech. Batch transcription with medium.en runs independently every 30 seconds. No subprocesses — everything runs in a single process with one worker thread.
+A single 16kHz audio stream feeds both models. Silero VAD (ONNX, bundled) detects speech boundaries, triggering live transcription with base.en during speech. Batch transcription with medium.en runs independently every 30 seconds. Both use `condition_on_previous_text=True` for better contextual accuracy. No subprocesses — everything runs in a single process with one worker thread.
 
 Models are configured in `scarecrow/config.py` or via `scripts/setup.py`.
 
@@ -108,7 +116,7 @@ Audio is saved as uncompressed WAV (~1.8 MB/min at 16kHz mono) rather than MP3 (
 
 ```bash
 uv sync                              # install deps + dev tools
-uv run pytest                        # run tests (88 tests)
+uv run pytest                        # run tests
 uv run ruff check scarecrow/ tests/  # lint
 uv run vulture scarecrow/            # dead code check
 ```

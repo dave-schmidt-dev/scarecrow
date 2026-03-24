@@ -1,14 +1,21 @@
 # Open Issues
 
 ## Live pane behavior
-- Text clears after 1-3 sentences — partial updates rewrite history, needs smoother scrolling
-- Stabilized text appends correctly but partials disrupt the visual flow
+- ~~Text clears after 1-3 sentences~~ Fixed: single RichLog with stable lines + in-place partial
+- ~~Partial text rendered outside bordered area~~ Fixed: removed two-widget split
+- ~~Repeated words from overlapping 5s windows~~ Fixed: partial replaces in-place, stabilized promotes to stable
 - Text tracking doesn't follow spoken words tightly (1s transcription interval)
+- Monitor: live pane may stop updating under heavy CPU load (base.en + medium.en overlap)
+
+## Transcript accuracy
+- Upgraded live model from tiny.en to base.en for better word recognition
+- Added condition_on_previous_text=True to both live and batch transcription
+- Monitor: "surge" → "search" type errors on clean podcast audio — may need domain-specific prompts
 
 ## CPU usage
 - 10% baseline is acceptable
 - 30% spikes every 30s from batch transcription (medium.en on 30s audio) — expected
-- Occasional 50% spikes when live tiny.en and batch medium.en overlap
+- Occasional 50% spikes when live base.en and batch medium.en overlap (upgraded from tiny.en)
 - Investigate: can batch run at lower priority or be deferred if live is active?
 
 ## VAD tuning

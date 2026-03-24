@@ -1,10 +1,41 @@
 """Entry point for `python -m scarecrow` and the `scarecrow` console script."""
 
 import logging
+import os
 import sys
 import time
+import warnings
 from datetime import datetime
 from pathlib import Path
+
+# Suppress HuggingFace Hub authentication warnings
+os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
+warnings.filterwarnings("ignore", message=".*unauthenticated requests.*")
+
+
+def _wait_for_enter_or_timeout(timeout: int = 30) -> None:
+    """Wait for Enter key or timeout, whichever comes first."""
+    import contextlib
+    import select
+    import termios
+    import tty
+
+    fd = sys.stdin.fileno()
+    try:
+        old_settings = termios.tcgetattr(fd)
+        # Restore cooked mode so Enter works normally
+        tty.setcbreak(fd)
+        ready, _, _ = select.select([sys.stdin], [], [], timeout)
+        if ready:
+            sys.stdin.read(1)
+    except (termios.error, OSError, ValueError):
+        # Fallback: just sleep if terminal is unavailable
+        import time
+
+        time.sleep(timeout)
+    finally:
+        with contextlib.suppress(termios.error, OSError, ValueError):
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
 def _model_cache_path(model_name: str) -> Path | None:
@@ -74,7 +105,12 @@ def main() -> None:
     finally:
         print("\n  Shutting down\u2026", flush=True)
         transcriber.shutdown()
+        if hasattr(app, "_shutdown_summary") and app._shutdown_summary:
+            print(app._shutdown_summary, flush=True)
         print("  Done.", flush=True)
+        print(flush=True)
+        print("  Press Enter to close (auto-close in 30s)\u2026", flush=True)
+        _wait_for_enter_or_timeout(30)
 
 
 if __name__ == "__main__":

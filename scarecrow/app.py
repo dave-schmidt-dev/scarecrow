@@ -97,8 +97,8 @@ class ScarecrowApp(App[None]):
         self._audio_recorder: AudioRecorder | None = None
         self._transcriber: Transcriber | None = transcriber
         self._suppress_live: bool = False
-        self._live_history: list[str] = []
         self._has_partial: bool = False
+        self._live_stable: list[str] = []
 
     def compose(self) -> ComposeResult:
         from scarecrow import config
@@ -220,33 +220,28 @@ class ScarecrowApp(App[None]):
         """System message — clears pane entirely."""
         live_log = self.query_one("#live-log", RichLog)
         live_log.clear()
+        self._live_stable.clear()
         live_log.write(text)
         self._has_partial = False
 
     def _update_live_partial(self, text: str) -> None:
-        """Show in-progress text (clears partial line, keeps history)."""
+        """Replace the in-progress line at the bottom (stable lines preserved)."""
         live_log = self.query_one("#live-log", RichLog)
-        # Remove the previous partial line (last line) and replace it
-        if self._has_partial:
-            live_log.clear()
-            for line in self._live_history:
-                live_log.write(line)
-        live_log.write(text)
+        live_log.clear()
+        for line in self._live_stable:
+            live_log.write(line)
+        live_log.write(Text(text, style="dim"))
         self._has_partial = True
 
     def _append_live(self, text: str) -> None:
-        """Append finalized text to live pane (permanent, scrollable)."""
+        """Promote text to a stable line (permanent, scrollable)."""
+        self._live_stable.append(text)
+        if len(self._live_stable) > 50:
+            self._live_stable.pop(0)
         live_log = self.query_one("#live-log", RichLog)
-        # Replace partial with finalized
-        if self._has_partial:
-            live_log.clear()
-            for line in self._live_history:
-                live_log.write(line)
-        live_log.write(text)
-        self._live_history.append(text)
-        # Keep last 50 lines
-        if len(self._live_history) > 50:
-            self._live_history.pop(0)
+        live_log.clear()
+        for line in self._live_stable:
+            live_log.write(line)
         self._has_partial = False
 
     # ------------------------------------------------------------------
@@ -290,6 +285,7 @@ class ScarecrowApp(App[None]):
                 language=config.LANGUAGE,
                 beam_size=config.BEAM_SIZE,
                 vad_filter=True,
+                condition_on_previous_text=True,
             )
             text = " ".join(seg.text.strip() for seg in segments)
             log.debug("Batch result: %r", text[:100] if text else "")
@@ -422,8 +418,38 @@ class ScarecrowApp(App[None]):
             self._sync_info_bar()
 
     def action_quit(self) -> None:
+        self._shutdown_summary = self._collect_shutdown_metrics()
         self._update_live("Shutting down\u2026")
-        self.set_timer(0.05, self._deferred_quit)
+        # Brief pause so the message is visible before TUI closes
+        self.set_timer(0.3, self._deferred_quit)
+
+    def _collect_shutdown_metrics(self) -> str:
+        """Collect session metrics for post-TUI terminal output."""
+        h = self._elapsed // 3600
+        m = (self._elapsed % 3600) // 60
+        s = self._elapsed % 60
+        duration = f"{h:02d}:{m:02d}:{s:02d}"
+
+        lines = [
+            f"  Duration:    {duration}",
+            f"  Words:       {self._word_count}",
+        ]
+
+        if self._session is not None:
+            session_dir = self._session.session_dir
+            lines.append(f"  Session:     {session_dir}")
+
+            audio_path = self._session.audio_path
+            if audio_path.exists():
+                size_mb = audio_path.stat().st_size / (1024 * 1024)
+                lines.append(f"  Audio:       {audio_path} ({size_mb:.1f} MB)")
+
+            transcript_path = self._session.transcript_path
+            if transcript_path.exists():
+                size_kb = transcript_path.stat().st_size / 1024
+                lines.append(f"  Transcript:  {transcript_path} ({size_kb:.1f} KB)")
+
+        return "\n".join(lines)
 
     def _deferred_quit(self) -> None:
         self._stop_recording()

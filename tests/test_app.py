@@ -208,7 +208,8 @@ async def test_update_live_preview() -> None:
         app.update_live_preview("partial text...")
         await pilot.pause()
         live_log = app.query_one("#live-log", RichLog)
-        assert len(live_log.lines) >= 1
+        lines_text = " ".join(str(line) for line in live_log.lines)
+        assert "partial text..." in lines_text
 
 
 async def test_append_caption_adds_to_transcript() -> None:
@@ -229,7 +230,8 @@ async def test_live_not_cleared_on_caption() -> None:
         app.append_caption("Finalized sentence.")
         await pilot.pause()
         live_log = app.query_one("#live-log", RichLog)
-        assert len(live_log.lines) >= 1
+        lines_text = " ".join(str(line) for line in live_log.lines)
+        assert "still streaming..." in lines_text
 
 
 async def test_pane_labels_show_model_names() -> None:

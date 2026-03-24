@@ -247,7 +247,11 @@ async def test_shutdown_writes_shutting_down_message(
     all calls to _update_live instead of reading the widget after-the-fact.
     """
     mock_recorder_cls.return_value = _mock_recorder()
-    mock_session_cls.return_value = MagicMock()
+    mock_session = MagicMock()
+    mock_session.session_dir = Path("/tmp/test-session")
+    mock_session.audio_path = Path("/tmp/test-session/audio.wav")
+    mock_session.transcript_path = Path("/tmp/test-session/transcript.txt")
+    mock_session_cls.return_value = mock_session
 
     async with _app(with_transcriber=True).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
@@ -499,3 +503,95 @@ async def test_deferred_quit_calls_stop_recording_then_exit() -> None:
 
         assert len(stop_called) == 1, "_deferred_quit must call _stop_recording"
         assert len(exit_called) == 1, "_deferred_quit must call exit"
+
+
+# ---------------------------------------------------------------------------
+# Live pane: behavioral contracts
+# ---------------------------------------------------------------------------
+
+
+async def test_live_partial_shows_in_richlog() -> None:
+    """Partial (in-progress) transcription must appear in #live-log."""
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        app._update_live_partial("streaming words...")
+        await pilot.pause()
+
+        live_log = app.query_one("#live-log", RichLog)
+        lines_text = " ".join(str(line) for line in live_log.lines)
+        assert "streaming words..." in lines_text
+
+
+async def test_stabilized_text_goes_to_richlog() -> None:
+    """Stabilized (final) text must be written to #live-log RichLog."""
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        app._append_live("final sentence one")
+        app._append_live("final sentence two")
+        await pilot.pause()
+
+        live_log = app.query_one("#live-log", RichLog)
+        lines_text = " ".join(str(line) for line in live_log.lines)
+        assert "final sentence one" in lines_text
+        assert "final sentence two" in lines_text
+
+
+async def test_history_preserved_across_partial_updates() -> None:
+    """Stabilized history must survive partial update clear+replay cycles."""
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        # Add stabilized history
+        app._append_live("history line one")
+        app._append_live("history line two")
+        await pilot.pause()
+
+        # Partial update clears+replays but history should still be present
+        app._update_live_partial("in progress...")
+        await pilot.pause()
+
+        live_log = app.query_one("#live-log", RichLog)
+        lines_text = " ".join(str(line) for line in live_log.lines)
+        assert "history line one" in lines_text
+        assert "history line two" in lines_text
+        assert "in progress..." in lines_text
+
+
+async def test_stabilized_replaces_partial() -> None:
+    """When stabilized text arrives, it replaces the partial (not appended after)."""
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        app._update_live_partial("in progress...")
+        await pilot.pause()
+
+        app._append_live("finalized text")
+        await pilot.pause()
+
+        live_log = app.query_one("#live-log", RichLog)
+        lines_text = " ".join(str(line) for line in live_log.lines)
+        assert "finalized text" in lines_text
+        # Partial should be gone — replaced by stabilized
+        assert "in progress..." not in lines_text
+
+
+async def test_shutdown_summary_contains_metrics() -> None:
+    """_shutdown_summary must contain duration and word count for terminal output."""
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        app._elapsed = 125  # 2:05
+        app._word_count = 42
+        await pilot.pause()
+
+        with patch.object(app, "_deferred_quit"):
+            app.action_quit()
+            await pilot.pause()
+
+        assert "00:02:05" in app._shutdown_summary
+        assert "42" in app._shutdown_summary

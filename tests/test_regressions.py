@@ -228,6 +228,102 @@ def test_peak_level_zero_when_paused(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Bug: drain_buffer overlap caused duplicate words in batch transcripts
+# The 2s overlap meant the same words appeared at end of one batch and
+# start of the next. drain_buffer must clear completely.
+# ---------------------------------------------------------------------------
+
+
+def test_drain_buffer_clears_completely(tmp_path: Path) -> None:
+    """drain_buffer must return all audio and leave buffer empty — no overlap."""
+    from scarecrow.recorder import AudioRecorder
+
+    with patch("scarecrow.recorder.sd"), patch("scarecrow.recorder.sf"):
+        recorder = AudioRecorder(tmp_path / "audio.wav", sample_rate=16000)
+        recorder.start()
+
+        # Simulate 3 seconds of audio (48 chunks of 1024 = 49152 samples)
+        for _ in range(48):
+            indata = np.ones((1024, 1), dtype="int16") * 100
+            recorder._callback(indata, 1024, None, None)
+
+        first = recorder.drain_buffer()
+        assert first is not None
+        assert len(first) == 48 * 1024
+
+        # Second drain must be empty — no overlap retained
+        second = recorder.drain_buffer()
+        assert second is None
+        recorder.stop()
+
+
+# ---------------------------------------------------------------------------
+# Bug: live pane used two widgets (RichLog + Static) causing empty space
+# and text rendering outside the bordered area. Single RichLog is correct.
+# ---------------------------------------------------------------------------
+
+
+def test_live_pane_is_single_richlog() -> None:
+    """Live pane must be a single #live-log RichLog (no separate partial widget)."""
+    from textual.widgets import RichLog as _RichLog
+
+    from scarecrow.app import ScarecrowApp
+
+    async def _check():
+        async with ScarecrowApp().run_test() as pilot:
+            app = pilot.app
+            live_log = app.query_one("#live-log", _RichLog)
+            assert live_log is not None
+            # Must NOT have a separate #live-partial widget
+            matches = app.query("#live-partial")
+            assert len(matches) == 0, "Should not have a #live-partial widget"
+
+    import asyncio
+
+    asyncio.get_event_loop().run_until_complete(_check())
+
+
+# ---------------------------------------------------------------------------
+# Bug: shutdown metrics not visible — TUI exits too fast.
+# Metrics must be saved to app._shutdown_summary for __main__.py to print.
+# ---------------------------------------------------------------------------
+
+
+def test_shutdown_summary_saved_on_quit() -> None:
+    """action_quit must save _shutdown_summary before exiting."""
+    from scarecrow.app import ScarecrowApp
+
+    async def _check():
+        async with ScarecrowApp().run_test() as pilot:
+            app = pilot.app
+            with patch.object(app, "_deferred_quit"):
+                app.action_quit()
+                await pilot.pause()
+            assert hasattr(app, "_shutdown_summary")
+            assert "Duration" in app._shutdown_summary
+            assert "Words" in app._shutdown_summary
+
+    import asyncio
+
+    asyncio.get_event_loop().run_until_complete(_check())
+
+
+# ---------------------------------------------------------------------------
+# Bug: HF Hub warning on startup when model not cached
+# ---------------------------------------------------------------------------
+
+
+def test_hf_warning_suppressed() -> None:
+    """The HF_HUB_DISABLE_IMPLICIT_TOKEN env var must be set at import time."""
+    import importlib
+    import os
+
+    # Import __main__ which sets the env var at module level
+    importlib.import_module("scarecrow.__main__")
+    assert os.environ.get("HF_HUB_DISABLE_IMPLICIT_TOKEN") == "1"
+
+
 def test_scarecrow_importable_from_outside_project_dir() -> None:
     """scarecrow must be importable without the project dir on sys.path."""
     import subprocess
