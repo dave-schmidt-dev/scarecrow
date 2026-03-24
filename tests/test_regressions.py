@@ -220,3 +220,23 @@ def test_peak_level_zero_when_paused(tmp_path: Path) -> None:
 
         assert recorder.peak_level == 0.0
         recorder.stop()
+
+
+# ---------------------------------------------------------------------------
+# Bug: editable install breaks when run from outside project directory
+# (Homebrew Python skips _scarecrow.pth, import fails)
+# ---------------------------------------------------------------------------
+
+
+def test_scarecrow_importable_from_outside_project_dir() -> None:
+    """scarecrow must be importable without the project dir on sys.path."""
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "-c", "from scarecrow.__main__ import main"],
+        capture_output=True,
+        text=True,
+        cwd="/tmp",
+    )
+    assert result.returncode == 0, f"Import failed from /tmp: {result.stderr}"
