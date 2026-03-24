@@ -97,6 +97,8 @@ class ScarecrowApp(App[None]):
         self._audio_recorder: AudioRecorder | None = None
         self._transcriber: Transcriber | None = transcriber
         self._suppress_live: bool = False
+        self._live_history: list[str] = []
+        self._has_partial: bool = False
 
     def compose(self) -> ComposeResult:
         from scarecrow import config
@@ -208,16 +210,44 @@ class ScarecrowApp(App[None]):
 
     def _on_realtime_update(self, text: str) -> None:
         if not self._suppress_live and text:
-            self._safe_call(self._update_live, text)
+            self._safe_call(self._update_live_partial, text)
 
     def _on_realtime_stabilized(self, text: str) -> None:
         if not self._suppress_live and text:
-            self._safe_call(self._update_live, text)
+            self._safe_call(self._append_live, text)
 
     def _update_live(self, text: str) -> None:
+        """System message — clears pane entirely."""
         live_log = self.query_one("#live-log", RichLog)
         live_log.clear()
         live_log.write(text)
+        self._has_partial = False
+
+    def _update_live_partial(self, text: str) -> None:
+        """Show in-progress text (clears partial line, keeps history)."""
+        live_log = self.query_one("#live-log", RichLog)
+        # Remove the previous partial line (last line) and replace it
+        if self._has_partial:
+            live_log.clear()
+            for line in self._live_history:
+                live_log.write(line)
+        live_log.write(text)
+        self._has_partial = True
+
+    def _append_live(self, text: str) -> None:
+        """Append finalized text to live pane (permanent, scrollable)."""
+        live_log = self.query_one("#live-log", RichLog)
+        # Replace partial with finalized
+        if self._has_partial:
+            live_log.clear()
+            for line in self._live_history:
+                live_log.write(line)
+        live_log.write(text)
+        self._live_history.append(text)
+        # Keep last 50 lines
+        if len(self._live_history) > 50:
+            self._live_history.pop(0)
+        self._has_partial = False
 
     # ------------------------------------------------------------------
     # Transcript pane — batch transcription with medium.en every 30s
