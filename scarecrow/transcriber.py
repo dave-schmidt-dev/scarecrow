@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import multiprocessing
 from collections.abc import Callable
 from pathlib import Path
@@ -17,6 +18,8 @@ if multiprocessing.get_start_method(allow_none=True) != "spawn":
 from RealtimeSTT import AudioToTextRecorder
 
 from scarecrow import config
+
+log = logging.getLogger(__name__)
 
 
 def _trust_silero_vad() -> None:
@@ -118,9 +121,17 @@ class Transcriber:
         return self.recorder is not None
 
     def _on_realtime_update(self, text: str) -> None:
+        snippet = text[:40] if text else ""
+        log.debug("realtime_update cb=%s text=%s", self._on_realtime_update_cb, snippet)
         if self._on_realtime_update_cb is not None:
             self._on_realtime_update_cb(text)
 
     def _on_realtime_stabilized(self, text: str) -> None:
+        snippet = text[:40] if text else ""
+        log.debug(
+            "realtime_stabilized cb=%s text=%s",
+            self._on_realtime_stabilized_cb,
+            snippet,
+        )
         if self._on_realtime_stabilized_cb is not None:
             self._on_realtime_stabilized_cb(text)

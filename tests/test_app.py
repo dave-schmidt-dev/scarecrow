@@ -166,14 +166,39 @@ async def test_update_live_preview() -> None:
         assert len(live_log.lines) >= 1
 
 
-async def test_append_caption_adds_to_log_and_clears_live() -> None:
+async def test_append_caption_adds_to_transcript() -> None:
     async with _app().run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        app.update_live_preview("in progress...")
-        await pilot.pause()
         app.append_caption("Settled sentence.")
         await pilot.pause()
         captions = app.query_one("#captions", RichLog)
         assert len(captions.lines) >= 1
+
+
+async def test_live_not_cleared_on_caption() -> None:
+    """Regression: live pane must NOT clear when transcript updates.
+
+    Previously, append_caption cleared the live log, causing a visible
+    gap in the live stream while the final model processed.
+    """
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        app.update_live_preview("still streaming...")
+        await pilot.pause()
+        app.append_caption("Finalized sentence.")
+        await pilot.pause()
         live_log = app.query_one("#live-log", RichLog)
-        assert len(live_log.lines) == 0
+        # Live pane should still have content — not cleared
+        assert len(live_log.lines) >= 1
+
+
+async def test_pane_labels_show_model_names() -> None:
+    """Regression: pane labels must include model names."""
+    from scarecrow import config
+
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        labels = [w.render() for w in app.query(".pane-label")]
+        label_text = " ".join(str(lbl) for lbl in labels)
+        assert config.FINAL_MODEL in label_text
+        assert config.REALTIME_MODEL in label_text

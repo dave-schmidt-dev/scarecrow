@@ -319,7 +319,5 @@ class ScarecrowApp(App[None]):
         self._stream_live_text(text)
 
     def append_caption(self, text: str) -> None:
-        """Append settled caption text to the log and clear the live preview."""
+        """Append settled caption text to the transcript log."""
         self.query_one("#captions", RichLog).write(text)
-        live_log = self.query_one("#live-log", RichLog)
-        live_log.clear()
