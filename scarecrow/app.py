@@ -7,10 +7,12 @@ import logging
 from enum import Enum, auto
 from typing import TYPE_CHECKING, ClassVar
 
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.color import Color
 from textual.reactive import reactive
-from textual.widgets import Footer, Header, RichLog, Static
+from textual.widgets import Footer, RichLog, Sparkline, Static
 
 from scarecrow.recorder import AudioRecorder
 from scarecrow.session import Session
@@ -29,22 +31,67 @@ class AppState(Enum):
     PAUSED = auto()
 
 
-_STATE_LABELS: dict[AppState, str] = {
-    AppState.IDLE: "Idle",
-    AppState.RECORDING: "Recording",
-    AppState.PAUSED: "Paused",
+# ------------------------------------------------------------------
+# Custom widgets
+# ------------------------------------------------------------------
+
+_STATE_STYLE: dict[AppState, tuple[str, str]] = {
+    AppState.IDLE: ("IDLE", "dim"),
+    AppState.RECORDING: ("REC", "bold white on dark_red"),
+    AppState.PAUSED: ("PAUSED", "bold black on yellow"),
 }
 
 
-class StatusBar(Static):
+class InfoBar(Static):
+    """Top bar: state, elapsed time, word count, next batch countdown."""
+
     state: reactive[AppState] = reactive(AppState.IDLE)
+    elapsed: reactive[int] = reactive(0)
+    word_count: reactive[int] = reactive(0)
+    batch_countdown: reactive[int] = reactive(BATCH_INTERVAL_SECONDS)
 
-    def render(self) -> str:
-        return f"[{_STATE_LABELS[self.state]}]"
+    def render(self) -> Text:
+        label, style = _STATE_STYLE[self.state]
+        t = Text()
+        t.append(f" {label} ", style=style)
+        t.append("  ", style="")
 
-    def watch_state(self, new_state: AppState) -> None:
-        self.remove_class("state-idle", "state-recording", "state-paused")
-        self.add_class(f"state-{new_state.name.lower()}")
+        h = self.elapsed // 3600
+        m = (self.elapsed % 3600) // 60
+        s = self.elapsed % 60
+        t.append(f"{h:02d}:{m:02d}:{s:02d}", style="bold")
+        t.append("  ", style="")
+
+        t.append(f"{self.word_count}", style="bold")
+        t.append(" words", style="dim")
+        t.append("  ", style="")
+
+        if self.state is AppState.RECORDING:
+            t.append("batch ", style="dim")
+            t.append(f"{self.batch_countdown}s", style="bold")
+
+        return t
+
+
+class AudioMeter(Static):
+    """Simple text-based audio level indicator."""
+
+    level: reactive[float] = reactive(0.0)
+
+    def render(self) -> Text:
+        t = Text()
+        t.append(" mic ", style="dim")
+        bars = int(self.level * 20)
+        filled = "\u2588" * bars
+        empty = "\u2591" * (20 - bars)
+        if self.level > 0.8:
+            t.append(filled, style="bold red")
+        elif self.level > 0.4:
+            t.append(filled, style="bold yellow")
+        else:
+            t.append(filled, style="bold green")
+        t.append(empty, style="dim")
+        return t
 
 
 class ScarecrowApp(App[None]):
@@ -60,6 +107,9 @@ class ScarecrowApp(App[None]):
 
     state: reactive[AppState] = reactive(AppState.IDLE)
     _elapsed: reactive[int] = reactive(0)
+    _word_count: reactive[int] = reactive(0)
+    _batch_countdown: reactive[int] = reactive(BATCH_INTERVAL_SECONDS)
+    _audio_level: reactive[float] = reactive(0.0)
 
     def __init__(self, transcriber: Transcriber | None = None) -> None:
         super().__init__()
@@ -67,14 +117,21 @@ class ScarecrowApp(App[None]):
         self._audio_recorder: AudioRecorder | None = None
         self._transcriber: Transcriber | None = transcriber
         self._suppress_live: bool = False
+        self._audio_history: list[float] = [0.0] * 40
 
     def compose(self) -> ComposeResult:
         from scarecrow import config
 
-        yield Header()
-        yield StatusBar(id="status-bar")
+        yield InfoBar(id="info-bar")
+        yield AudioMeter(id="audio-meter")
+        yield Sparkline(
+            self._audio_history,
+            id="audio-spark",
+            min_color=Color.parse("rgb(60,60,60)"),
+            max_color=Color.parse("rgb(80,180,80)"),
+        )
         yield Static(
-            f"Transcript  [dim]({config.FINAL_MODEL} · "
+            f"Transcript  [dim]({config.FINAL_MODEL} \u00b7 "
             f"every {BATCH_INTERVAL_SECONDS}s)[/dim]",
             classes="pane-label",
         )
@@ -93,8 +150,9 @@ class ScarecrowApp(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
-        self._timer = self.set_interval(1, self._tick, pause=True)
-        self._sync_status()
+        self._tick_timer = self.set_interval(1, self._tick, pause=True)
+        self._level_timer = self.set_interval(0.1, self._update_audio_level)
+        self._sync_info_bar()
         self.set_timer(0.1, self._auto_start)
 
     def _auto_start(self) -> None:
@@ -134,25 +192,41 @@ class ScarecrowApp(App[None]):
         )
 
     # ------------------------------------------------------------------
-    # Timer
+    # Timer / stats
     # ------------------------------------------------------------------
 
     def _tick(self) -> None:
         self._elapsed += 1
-        h = self._elapsed // 3600
-        m = (self._elapsed % 3600) // 60
-        s = self._elapsed % 60
-        self.sub_title = f"{h:02d}:{m:02d}:{s:02d}"
+        self._batch_countdown = max(0, self._batch_countdown - 1)
+        self._sync_info_bar()
+
+    def _update_audio_level(self) -> None:
+        """Sample current audio level from the recorder buffer."""
+        if self._audio_recorder is None or not self._audio_recorder.is_recording:
+            level = 0.0
+        else:
+            level = self._audio_recorder.peak_level
+        self._audio_level = level
+        self.query_one(AudioMeter).level = level
+        self._audio_history.append(level)
+        if len(self._audio_history) > 40:
+            self._audio_history.pop(0)
+        spark = self.query_one("#audio-spark", Sparkline)
+        spark.data = list(self._audio_history)
 
     # ------------------------------------------------------------------
-    # State
+    # Info bar sync
     # ------------------------------------------------------------------
 
-    def _sync_status(self) -> None:
-        self.query_one(StatusBar).state = self.state
+    def _sync_info_bar(self) -> None:
+        bar = self.query_one(InfoBar)
+        bar.state = self.state
+        bar.elapsed = self._elapsed
+        bar.word_count = self._word_count
+        bar.batch_countdown = self._batch_countdown
 
-    def watch_state(self, new_state: AppState) -> None:
-        self._sync_status()
+    def watch_state(self, _new_state: AppState) -> None:
+        self._sync_info_bar()
 
     # ------------------------------------------------------------------
     # Live pane — driven by RealtimeSTT callbacks (tiny.en, continuous)
@@ -195,13 +269,12 @@ class ScarecrowApp(App[None]):
             return
 
         log.debug(
-            "batch_transcribe: got %d samples (%.1fs at %dHz), dispatching worker",
+            "batch_transcribe: got %d samples (%.1fs at %dHz)",
             len(audio),
             len(audio) / self._audio_recorder.sample_rate,
             self._audio_recorder.sample_rate,
         )
 
-        # Run in a thread so we don't block the UI
         self.run_worker(
             lambda: self._run_batch(audio),
             thread=True,
@@ -216,7 +289,6 @@ class ScarecrowApp(App[None]):
         from scarecrow import config
 
         try:
-            # Whisper expects 16kHz; our recorder captures at 44100Hz
             if self._audio_recorder is not None:
                 src_rate = self._audio_recorder.sample_rate
             else:
@@ -262,6 +334,9 @@ class ScarecrowApp(App[None]):
         self.query_one("#captions", RichLog).write(text)
         if self._session is not None:
             self._session.append_sentence(text)
+        words = len(text.split())
+        self._word_count += words
+        self._sync_info_bar()
 
     # ------------------------------------------------------------------
     # Actions
@@ -293,36 +368,43 @@ class ScarecrowApp(App[None]):
             self._session = None
             return
 
-        # Start continuous recording via RealtimeSTT (for live callbacks)
         assert self._transcriber.recorder is not None
         self._transcriber.recorder.start()
 
-        # Schedule batch transcription every 30 seconds
         self._batch_timer = self.set_interval(
-            BATCH_INTERVAL_SECONDS, self._batch_transcribe
+            BATCH_INTERVAL_SECONDS, self._on_batch_tick
         )
 
         self._elapsed = 0
+        self._batch_countdown = BATCH_INTERVAL_SECONDS
+        self._word_count = 0
         self._suppress_live = False
         self.state = AppState.RECORDING
-        self._timer.resume()
-        self._update_live("Listening…")
+        self._tick_timer.resume()
+        self._update_live("Listening\u2026")
+
+    def _on_batch_tick(self) -> None:
+        """Called every BATCH_INTERVAL_SECONDS — reset countdown, run batch."""
+        self._batch_countdown = BATCH_INTERVAL_SECONDS
+        self._sync_info_bar()
+        self._batch_transcribe()
 
     def action_pause(self) -> None:
         if self.state is AppState.RECORDING:
             self.state = AppState.PAUSED
-            self._timer.pause()
+            self._tick_timer.pause()
             self._suppress_live = True
             if self._audio_recorder is not None:
                 self._audio_recorder.pause()
         elif self.state is AppState.PAUSED:
             self.state = AppState.RECORDING
-            self._timer.resume()
+            self._tick_timer.resume()
             self._suppress_live = False
             if self._audio_recorder is not None:
                 self._audio_recorder.resume()
 
     def action_quit(self) -> None:
+        self._update_live("Shutting down\u2026")
         self._stop_recording()
         self.exit()
 
@@ -330,24 +412,28 @@ class ScarecrowApp(App[None]):
         if self.state not in (AppState.RECORDING, AppState.PAUSED):
             return
 
-        self._timer.pause()
+        self._tick_timer.pause()
         if hasattr(self, "_batch_timer"):
             self._batch_timer.pause()
 
-        # Final batch transcription of remaining audio
+        self._update_live("Transcribing remaining audio\u2026")
         self._batch_transcribe()
 
         self.state = AppState.IDLE
 
         if self._audio_recorder is not None:
+            self._update_live("Releasing microphone\u2026")
             with contextlib.suppress(Exception):
                 self._audio_recorder.stop()
             self._audio_recorder = None
 
         if self._session is not None:
+            self._update_live(f"Saving to {self._session.transcript_path}")
             with contextlib.suppress(Exception):
                 self._session.finalize()
             self._session = None
+
+        self._update_live("Unloading models\u2026")
 
     # ------------------------------------------------------------------
     # Public API

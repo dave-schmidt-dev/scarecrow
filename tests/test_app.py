@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from textual.widgets import RichLog
 
-from scarecrow.app import AppState, ScarecrowApp
+from scarecrow.app import AppState, AudioMeter, InfoBar, ScarecrowApp
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -34,6 +34,7 @@ def _mock_recorder():
     mock = MagicMock()
     mock.is_recording = True
     mock.is_paused = False
+    mock.peak_level = 0.0
     mock.start.return_value = None
     mock.stop.return_value = MagicMock()
     return mock
@@ -59,6 +60,54 @@ async def test_initial_state_without_transcriber_is_idle() -> None:
     async with _app().run_test() as pilot:
         await pilot.pause()
         assert pilot.app.state is AppState.IDLE  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# Info bar
+# ---------------------------------------------------------------------------
+
+
+async def test_info_bar_present() -> None:
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        bar = app.query_one(InfoBar)
+        assert bar is not None
+        assert bar.state is AppState.IDLE
+
+
+async def test_audio_meter_present() -> None:
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        meter = app.query_one(AudioMeter)
+        assert meter is not None
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_info_bar_shows_recording(mock_session_cls, mock_recorder_cls) -> None:
+    mock_recorder_cls.return_value = _mock_recorder()
+    mock_session_cls.return_value = MagicMock()
+
+    async with _app(with_transcriber=True).run_test() as pilot:
+        await pilot.pause(delay=0.5)
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        bar = app.query_one(InfoBar)
+        assert bar.state is AppState.RECORDING
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_word_count_increments(mock_session_cls, mock_recorder_cls) -> None:
+    """Word count should increase when transcript text is appended."""
+    mock_recorder_cls.return_value = _mock_recorder()
+    mock_session_cls.return_value = MagicMock()
+
+    async with _app(with_transcriber=True).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause(delay=0.5)
+        app._append_transcript("hello world test")
+        await pilot.pause()
+        assert app._word_count == 3
 
 
 # ---------------------------------------------------------------------------
@@ -176,11 +225,7 @@ async def test_append_caption_adds_to_transcript() -> None:
 
 
 async def test_live_not_cleared_on_caption() -> None:
-    """Regression: live pane must NOT clear when transcript updates.
-
-    Previously, append_caption cleared the live log, causing a visible
-    gap in the live stream while the final model processed.
-    """
+    """Regression: live pane must NOT clear when transcript updates."""
     async with _app().run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
         app.update_live_preview("still streaming...")
@@ -188,7 +233,6 @@ async def test_live_not_cleared_on_caption() -> None:
         app.append_caption("Finalized sentence.")
         await pilot.pause()
         live_log = app.query_one("#live-log", RichLog)
-        # Live pane should still have content — not cleared
         assert len(live_log.lines) >= 1
 
 

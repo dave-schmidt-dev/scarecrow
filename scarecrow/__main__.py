@@ -4,6 +4,7 @@ import logging
 import os
 import signal
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -55,17 +56,18 @@ def main() -> None:
     print(f"  This session: {recordings_dir}/{timestamp}/", flush=True)
     print(flush=True)
 
+    print("  Importing libraries…", flush=True)
     from scarecrow.transcriber import Transcriber
 
-    print("  Loading speech models…", flush=True)
-
-    # Suppress ctranslate2 C++ float16→float32 warning during model load only
+    # Suppress ctranslate2 C++ float16→float32 warning during model load
     stderr_fd = sys.stderr.fileno()
     saved_stderr = os.dup(stderr_fd)
     devnull = os.open(os.devnull, os.O_WRONLY)
     os.dup2(devnull, stderr_fd)
     os.close(devnull)
 
+    t0 = time.monotonic()
+    print(f"  Loading live model ({live})…", flush=True)
     transcriber = Transcriber()
     try:
         transcriber.prepare()
@@ -75,11 +77,26 @@ def main() -> None:
         print(f"Failed to start transcriber: {e}", file=sys.stderr)
         sys.exit(1)
 
+    t1 = time.monotonic()
+    print(f"  Live model ready ({t1 - t0:.1f}s)", flush=True)
+
+    # Pre-load the batch model so the first 30s tick isn't delayed
+    print(f"  Loading batch model ({batch})…", flush=True)
+    from faster_whisper import WhisperModel
+
+    batch_model = WhisperModel(
+        config.FINAL_MODEL,
+        device="cpu",
+        compute_type="int8",
+    )
+
     os.dup2(saved_stderr, stderr_fd)
     os.close(saved_stderr)
 
-    print("  Models loaded. Starting TUI…")
-    print()
+    t2 = time.monotonic()
+    print(f"  Batch model ready ({t2 - t1:.1f}s)", flush=True)
+    print(f"  Starting TUI… (total {t2 - t0:.1f}s)", flush=True)
+    print(flush=True)
 
     # Suppress resource_tracker warnings on exit (leaked semaphores from
     # RealtimeSTT's multiprocessing are cleaned up by our SIGKILL anyway).
@@ -90,12 +107,15 @@ def main() -> None:
     warnings.filterwarnings("ignore", "resource_tracker:.*semaphore", UserWarning)
 
     app = ScarecrowApp(transcriber=transcriber)
+    app._batch_model = batch_model
     try:
         app.run()
     except KeyboardInterrupt:
         pass
     finally:
+        print("\n  Shutting down…", flush=True)
         transcriber.shutdown()
+        print("  Done.", flush=True)
         # Force exit — RealtimeSTT daemon threads can hang on join
         os.kill(os.getpid(), signal.SIGKILL)
 

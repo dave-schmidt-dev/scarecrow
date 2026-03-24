@@ -36,6 +36,9 @@ class AudioRecorder:
         self._audio_chunks: list[np.ndarray] = []
         self._buffer_lock = threading.Lock()
 
+        # Peak level for audio meter (updated in callback)
+        self._peak_level: float = 0.0
+
     def _callback(
         self,
         indata: np.ndarray,
@@ -50,8 +53,12 @@ class AudioRecorder:
             if self._paused:
                 silence = np.zeros_like(indata)
                 self._sound_file.write(silence)
+                self._peak_level = 0.0
             else:
                 self._sound_file.write(indata)
+                # Track peak level for audio meter
+                peak = float(np.abs(indata).max()) / 32768.0
+                self._peak_level = peak
                 # Also buffer for batch transcription
                 with self._buffer_lock:
                     self._audio_chunks.append(indata.copy())
@@ -137,3 +144,8 @@ class AudioRecorder:
     def is_paused(self) -> bool:
         with self._lock:
             return self._paused
+
+    @property
+    def peak_level(self) -> float:
+        """Current peak audio level, 0.0 to 1.0."""
+        return self._peak_level

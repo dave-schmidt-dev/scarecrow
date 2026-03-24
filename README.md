@@ -20,15 +20,25 @@ python scripts/setup.py   # interactive model selection + alias setup
 
 The setup script explains the two-model architecture and walks you through choosing models.
 
-### Shell alias
+### iTerm2 profile (recommended)
 
-Add to `~/.zshrc` (or `~/.bashrc`):
+Scarecrow includes a dynamic iTerm2 profile (`Scarecrow`) with a larger font (Monaco 16pt) for readability. It's installed automatically via `~/Library/Application Support/iTerm2/DynamicProfiles/scarecrow.json`.
+
+Add this alias to `~/.zshrc`:
+
+```bash
+alias sc='open -a iTerm && osascript -e "tell application \"iTerm2\" to create window with profile \"Scarecrow\""'
+```
+
+This opens a dedicated iTerm2 window with the Scarecrow profile, which auto-runs the app and closes the window on exit.
+
+### Shell alias (alternative)
+
+If you don't use iTerm2, add to `~/.zshrc` (or `~/.bashrc`):
 
 ```bash
 alias sc="uv run --project /path/to/scarecrow scarecrow"
 ```
-
-Then `sc` launches Scarecrow from any directory.
 
 ## Usage
 
@@ -40,10 +50,20 @@ sc          # start recording (auto-starts on launch)
 - `p` — pause / resume
 - `q` — quit
 
+### TUI layout
+
+The TUI shows:
+- **Info bar** — recording state (`REC`/`PAUSED`), elapsed time, word count, batch countdown
+- **Audio meter** — real-time microphone level with block characters
+- **Audio sparkline** — rolling history of audio levels
+- **Transcript pane** — batch transcription output (upper, scrollable)
+- **Live pane** — real-time captions from the fast model (lower, fixed height)
+- **Footer** — keybindings
+
 ### Startup output
 
 On launch, Scarecrow prints:
-- Which models are loading (live + batch) and their roles
+- Which models are loading (live + batch) with timing
 - Model cache locations (or whether they need downloading)
 - Where recordings and transcripts are saved
 

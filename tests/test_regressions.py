@@ -188,3 +188,42 @@ def test_drain_buffer_empties_after_drain(tmp_path: Path) -> None:
         second = recorder.drain_buffer()
         assert second is None
         recorder.stop()
+
+
+# ---------------------------------------------------------------------------
+# Audio level meter: peak_level tracks mic input
+# ---------------------------------------------------------------------------
+
+
+def test_peak_level_updates_on_audio(tmp_path: Path) -> None:
+    """peak_level should reflect the loudest sample in the last callback."""
+    from scarecrow.recorder import AudioRecorder
+
+    with patch("scarecrow.recorder.sd"), patch("scarecrow.recorder.sf"):
+        recorder = AudioRecorder(tmp_path / "audio.wav")
+        recorder.start()
+
+        assert recorder.peak_level == 0.0
+
+        # Simulate loud audio (half of int16 max)
+        indata = np.ones((1024, 1), dtype="int16") * 16384
+        recorder._callback(indata, 1024, None, None)
+
+        assert recorder.peak_level == pytest.approx(0.5, abs=0.01)
+        recorder.stop()
+
+
+def test_peak_level_zero_when_paused(tmp_path: Path) -> None:
+    """peak_level should be 0 when paused."""
+    from scarecrow.recorder import AudioRecorder
+
+    with patch("scarecrow.recorder.sd"), patch("scarecrow.recorder.sf"):
+        recorder = AudioRecorder(tmp_path / "audio.wav")
+        recorder.start()
+        recorder.pause()
+
+        indata = np.ones((1024, 1), dtype="int16") * 16384
+        recorder._callback(indata, 1024, None, None)
+
+        assert recorder.peak_level == 0.0
+        recorder.stop()
