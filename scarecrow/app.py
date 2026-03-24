@@ -344,7 +344,9 @@ class ScarecrowApp(App[None]):
             m = (elapsed % 3600) // 60
             s = elapsed % 60
             ts = f"{h:02d}:{m:02d}:{s:02d}"
-            captions.write(f"[dim]\u2500\u2500 {ts} \u00b7 {path} \u2500\u2500[/dim]")
+            divider = f"\u2500\u2500 {ts} \u00b7 {path} \u2500\u2500"
+            captions.write(f"[dim]{divider}[/dim]")
+            self._session.append_sentence(f"\n{divider}")
         captions.write(text)
         if self._session is not None:
             self._session.append_sentence(text)
