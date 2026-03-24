@@ -181,14 +181,25 @@ class ScarecrowApp(App[None]):
 
     def _batch_transcribe(self) -> None:
         """Drain audio buffer and transcribe with medium.en in a worker."""
+        log.debug("batch_transcribe called, state=%s", self.state)
         if self._audio_recorder is None or self._transcriber is None:
+            log.debug("batch_transcribe: no recorder or transcriber")
             return
         if self.state not in (AppState.RECORDING, AppState.PAUSED):
+            log.debug("batch_transcribe: wrong state %s", self.state)
             return
 
         audio = self._audio_recorder.drain_buffer()
         if audio is None or len(audio) == 0:
+            log.debug("batch_transcribe: no audio in buffer")
             return
+
+        log.debug(
+            "batch_transcribe: got %d samples (%.1fs at %dHz), dispatching worker",
+            len(audio),
+            len(audio) / self._audio_recorder.sample_rate,
+            self._audio_recorder.sample_rate,
+        )
 
         # Run in a thread so we don't block the UI
         self.run_worker(
@@ -199,9 +210,25 @@ class ScarecrowApp(App[None]):
 
     def _run_batch(self, audio) -> None:
         """Run medium.en on audio chunk (called in worker thread)."""
+        import numpy as np
+        from scipy.signal import resample_poly
+
         from scarecrow import config
 
         try:
+            # Whisper expects 16kHz; our recorder captures at 44100Hz
+            if self._audio_recorder is not None:
+                src_rate = self._audio_recorder.sample_rate
+            else:
+                src_rate = config.SAMPLE_RATE
+            if src_rate != 16000:
+                log.debug(
+                    "Resampling %d samples from %dHz to 16kHz",
+                    len(audio),
+                    src_rate,
+                )
+                audio = resample_poly(audio, 16000, src_rate).astype(np.float32)
+
             model = self._get_batch_model()
             segments, _ = model.transcribe(
                 audio,
@@ -210,6 +237,7 @@ class ScarecrowApp(App[None]):
                 vad_filter=True,
             )
             text = " ".join(seg.text.strip() for seg in segments)
+            log.debug("Batch result: %r", text[:100] if text else "")
             if text.strip():
                 self._safe_call(self._append_transcript, text.strip())
         except Exception:

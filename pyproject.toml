@@ -9,6 +9,7 @@ dependencies = [
     "sounddevice",
     "soundfile",
     "numpy",
+    "scipy",
     "requests>=2.32.5",
 ]
 

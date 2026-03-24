@@ -1,0 +1,190 @@
+"""Regression tests for bugs found during testing sessions."""
+
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import numpy as np
+import pytest
+
+# ---------------------------------------------------------------------------
+# Bug: model cache path detection wrong (dots replaced with dashes)
+# ---------------------------------------------------------------------------
+
+
+def test_model_cache_path_preserves_dots(tmp_path: Path) -> None:
+    """_model_cache_path must not mangle dots in model names like 'tiny.en'."""
+    from scarecrow.__main__ import _model_cache_path
+
+    # Create a fake cache directory matching HuggingFace's naming
+    cache_dir = tmp_path / ".cache" / "huggingface" / "hub"
+    model_dir = cache_dir / "models--Systran--faster-whisper-tiny.en"
+    model_dir.mkdir(parents=True)
+
+    with patch("scarecrow.__main__.Path.home", return_value=tmp_path):
+        result = _model_cache_path("tiny.en")
+        assert result is not None
+        assert "tiny.en" in str(result)
+
+
+def test_model_cache_path_returns_none_when_not_cached(tmp_path: Path) -> None:
+    """_model_cache_path returns None when the model isn't downloaded."""
+    from scarecrow.__main__ import _model_cache_path
+
+    with patch("scarecrow.__main__.Path.home", return_value=tmp_path):
+        result = _model_cache_path("tiny.en")
+        assert result is None
+
+
+def test_model_cache_path_works_for_large_v3(tmp_path: Path) -> None:
+    """large-v3 model name has no dots — should still work."""
+    from scarecrow.__main__ import _model_cache_path
+
+    cache_dir = tmp_path / ".cache" / "huggingface" / "hub"
+    model_dir = cache_dir / "models--Systran--faster-whisper-large-v3"
+    model_dir.mkdir(parents=True)
+
+    with patch("scarecrow.__main__.Path.home", return_value=tmp_path):
+        result = _model_cache_path("large-v3")
+        assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# Bug: batch transcription gets 44100Hz audio but Whisper expects 16000Hz
+# ---------------------------------------------------------------------------
+
+
+def test_drain_buffer_returns_float32(tmp_path: Path) -> None:
+    """drain_buffer must return float32 audio normalized to [-1, 1]."""
+    from scarecrow.recorder import AudioRecorder
+
+    with patch("scarecrow.recorder.sd"), patch("scarecrow.recorder.sf"):
+        recorder = AudioRecorder(tmp_path / "audio.wav", sample_rate=44100)
+        recorder.start()
+
+        # Simulate audio callback with int16 data
+        indata = (np.random.randn(1024, 1) * 10000).astype("int16")
+        recorder._callback(indata, 1024, None, None)
+
+        audio = recorder.drain_buffer()
+        assert audio is not None
+        assert audio.dtype == np.float32
+        assert audio.max() <= 1.0
+        assert audio.min() >= -1.0
+        recorder.stop()
+
+
+def test_drain_buffer_sample_rate_is_44100(tmp_path: Path) -> None:
+    """drain_buffer returns audio at recorder's sample rate (44100), not 16000.
+
+    The batch transcription code must resample before passing to Whisper.
+    """
+    from scarecrow.recorder import AudioRecorder
+
+    with patch("scarecrow.recorder.sd"), patch("scarecrow.recorder.sf"):
+        recorder = AudioRecorder(tmp_path / "audio.wav", sample_rate=44100)
+        recorder.start()
+
+        # Simulate 1 second of audio at 44100Hz
+        for _ in range(43):  # ~43 chunks of 1024 = ~44032 samples
+            indata = np.zeros((1024, 1), dtype="int16")
+            recorder._callback(indata, 1024, None, None)
+
+        audio = recorder.drain_buffer()
+        assert audio is not None
+        # Should have ~44032 samples (44100Hz), NOT ~16000
+        assert len(audio) > 40000
+        assert recorder.sample_rate == 44100
+        recorder.stop()
+
+
+def test_batch_resamples_to_16khz() -> None:
+    """_run_batch must resample 44100Hz audio to 16000Hz for Whisper."""
+    from scarecrow.app import ScarecrowApp
+
+    app = ScarecrowApp()
+
+    # Create a mock recorder reporting 44100Hz
+    mock_recorder = MagicMock()
+    mock_recorder.sample_rate = 44100
+    app._audio_recorder = mock_recorder
+
+    # Create 1 second of 44100Hz audio
+    audio_44k = np.zeros(44100, dtype=np.float32)
+
+    # Mock the batch model
+    mock_segment = MagicMock()
+    mock_segment.text = "hello world"
+    mock_model = MagicMock()
+    mock_model.transcribe.return_value = ([mock_segment], None)
+    app._batch_model = mock_model
+
+    # Run batch — should resample before calling transcribe
+    with patch.object(app, "_safe_call"):
+        app._run_batch(audio_44k)
+
+    # Verify transcribe was called
+    mock_model.transcribe.assert_called_once()
+    # The audio passed to transcribe should be ~16000 samples, not 44100
+    transcribed_audio = mock_model.transcribe.call_args[0][0]
+    assert len(transcribed_audio) == pytest.approx(16000, abs=100)
+
+
+# ---------------------------------------------------------------------------
+# Bug: audio buffer not populated (callback doesn't buffer when paused)
+# ---------------------------------------------------------------------------
+
+
+def test_callback_does_not_buffer_when_paused(tmp_path: Path) -> None:
+    """Paused callback should NOT accumulate audio in the batch buffer."""
+    from scarecrow.recorder import AudioRecorder
+
+    with patch("scarecrow.recorder.sd"), patch("scarecrow.recorder.sf"):
+        recorder = AudioRecorder(tmp_path / "audio.wav")
+        recorder.start()
+        recorder.pause()
+
+        indata = np.zeros((1024, 1), dtype="int16")
+        recorder._callback(indata, 1024, None, None)
+
+        audio = recorder.drain_buffer()
+        assert audio is None
+
+
+def test_callback_buffers_when_recording(tmp_path: Path) -> None:
+    """Recording callback must accumulate audio in the batch buffer."""
+    from scarecrow.recorder import AudioRecorder
+
+    with patch("scarecrow.recorder.sd"), patch("scarecrow.recorder.sf"):
+        recorder = AudioRecorder(tmp_path / "audio.wav")
+        recorder.start()
+
+        indata = np.ones((1024, 1), dtype="int16") * 500
+        recorder._callback(indata, 1024, None, None)
+
+        audio = recorder.drain_buffer()
+        assert audio is not None
+        assert len(audio) == 1024
+
+
+# ---------------------------------------------------------------------------
+# Bug: drain_buffer empties on second call (double-drain returns nothing)
+# ---------------------------------------------------------------------------
+
+
+def test_drain_buffer_empties_after_drain(tmp_path: Path) -> None:
+    """drain_buffer should return None on second call with no new audio."""
+    from scarecrow.recorder import AudioRecorder
+
+    with patch("scarecrow.recorder.sd"), patch("scarecrow.recorder.sf"):
+        recorder = AudioRecorder(tmp_path / "audio.wav")
+        recorder.start()
+
+        indata = np.zeros((1024, 1), dtype="int16")
+        recorder._callback(indata, 1024, None, None)
+
+        first = recorder.drain_buffer()
+        assert first is not None
+
+        second = recorder.drain_buffer()
+        assert second is None
+        recorder.stop()
