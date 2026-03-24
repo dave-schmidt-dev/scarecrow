@@ -44,3 +44,11 @@ known-first-party = ["scarecrow"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.5.1",
+    "pytest>=9.0.2",
+    "ruff>=0.15.7",
+    "vulture>=2.15",
+]
