@@ -8,10 +8,8 @@ from pathlib import Path
 
 import torch.hub
 
-# RealtimeSTT uses torch.multiprocessing.Process internally. On macOS under
-# Textual, the default "fork" start method inherits file descriptors that
-# Textual has modified, causing "bad value(s) in fds_to_keep". Force "spawn"
-# to avoid inheriting FDs.
+# RealtimeSTT uses torch.multiprocessing internally. Force "spawn" start
+# method to avoid inheriting file descriptors on macOS.
 if multiprocessing.get_start_method(allow_none=True) != "spawn":
     multiprocessing.set_start_method("spawn", force=True)
 
@@ -36,7 +34,14 @@ _trust_silero_vad()
 
 
 class Transcriber:
-    """Wraps RealtimeSTT's AudioToTextRecorder for dual-model streaming."""
+    """Wraps RealtimeSTT's AudioToTextRecorder for dual-model streaming.
+
+    Because AudioToTextRecorder creates multiprocessing.Value objects in
+    __init__, it must be constructed BEFORE Textual takes over the terminal
+    (Textual modifies file descriptors, breaking mp semaphore creation).
+
+    Use prepare() before app.run(), then wire callbacks with set_callbacks().
+    """
 
     def __init__(
         self,
@@ -49,8 +54,22 @@ class Transcriber:
         self._on_final_text_cb = on_final_text
         self.recorder: AudioToTextRecorder | None = None
 
-    def start(self) -> None:
-        """Create and start the AudioToTextRecorder (triggers mic access)."""
+    def set_callbacks(
+        self,
+        on_realtime_update: Callable[[str], None] | None = None,
+        on_realtime_stabilized: Callable[[str], None] | None = None,
+        on_final_text: Callable[[str], None] | None = None,
+    ) -> None:
+        """Wire up callbacks after construction (e.g. once the App exists)."""
+        self._on_realtime_update_cb = on_realtime_update
+        self._on_realtime_stabilized_cb = on_realtime_stabilized
+        self._on_final_text_cb = on_final_text
+
+    def prepare(self) -> None:
+        """Create the AudioToTextRecorder (loads models, creates mp objects).
+
+        Must be called BEFORE Textual's app.run() to avoid fds_to_keep errors.
+        """
         self.recorder = AudioToTextRecorder(
             model=config.FINAL_MODEL,
             language=config.LANGUAGE,
@@ -66,12 +85,7 @@ class Transcriber:
         )
 
     def text(self) -> str:
-        """Block until the next finalized utterance is ready and return it.
-
-        This is the call the worker thread makes in a loop. AudioToTextRecorder
-        accepts an optional callback; passing None means it returns the text
-        directly as a string.
-        """
+        """Block until the next finalized utterance is ready and return it."""
         result: str = self.recorder.text()  # type: ignore[union-attr]
         if self._on_final_text_cb is not None:
             self._on_final_text_cb(result)
@@ -88,12 +102,15 @@ class Transcriber:
             self.recorder.shutdown()
             self.recorder = None
 
+    @property
+    def is_ready(self) -> bool:
+        """True if prepare() has been called successfully."""
+        return self.recorder is not None
+
     def _on_realtime_update(self, text: str) -> None:
-        """Internal callback — forwards live partial text to the user callback."""
         if self._on_realtime_update_cb is not None:
             self._on_realtime_update_cb(text)
 
     def _on_realtime_stabilized(self, text: str) -> None:
-        """Internal callback — forwards stabilized partial text to the user callback."""
         if self._on_realtime_stabilized_cb is not None:
             self._on_realtime_stabilized_cb(text)

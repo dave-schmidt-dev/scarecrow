@@ -11,7 +11,19 @@ from scarecrow.app import AppState, ScarecrowApp
 # ---------------------------------------------------------------------------
 
 
-def _app() -> ScarecrowApp:
+def _mock_transcriber():
+    """Return a mock Transcriber that doesn't load models."""
+    mock = MagicMock()
+    mock.is_ready = True
+    mock.text.side_effect = StopIteration
+    mock.set_callbacks.return_value = None
+    mock.shutdown.return_value = None
+    return mock
+
+
+def _app(with_transcriber: bool = False) -> ScarecrowApp:
+    if with_transcriber:
+        return ScarecrowApp(transcriber=_mock_transcriber())
     return ScarecrowApp()
 
 
@@ -25,24 +37,12 @@ def _mock_recorder():
     return mock
 
 
-def _mock_transcriber():
-    """Return a mock Transcriber that doesn't load models."""
-    mock = MagicMock()
-    mock.start.return_value = None
-    # text() should block forever in real use; in tests we never call it
-    mock.text.side_effect = StopIteration
-    mock.stop.return_value = None
-    mock.shutdown.return_value = None
-    return mock
-
-
 # ---------------------------------------------------------------------------
 # Launch
 # ---------------------------------------------------------------------------
 
 
 async def test_app_launches() -> None:
-    """App starts without errors."""
     async with _app().run_test() as pilot:
         await pilot.pause()
         assert pilot.app is not None
@@ -64,50 +64,42 @@ async def test_initial_state_is_idle() -> None:
 # ---------------------------------------------------------------------------
 
 
-@patch("scarecrow.app.Transcriber")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
-async def test_press_r_starts_recording(
-    mock_session_cls, mock_recorder_cls, mock_transcriber_cls
-) -> None:
+async def test_press_r_starts_recording(mock_session_cls, mock_recorder_cls) -> None:
     mock_recorder_cls.return_value = _mock_recorder()
-    mock_transcriber_cls.return_value = _mock_transcriber()
     mock_session_cls.return_value = MagicMock()
 
-    async with _app().run_test() as pilot:
+    async with _app(with_transcriber=True).run_test() as pilot:
         await pilot.press("r")
         await pilot.pause()
         assert pilot.app.state is AppState.RECORDING  # type: ignore[attr-defined]
 
 
-@patch("scarecrow.app.Transcriber")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_press_p_during_recording_pauses(
-    mock_session_cls, mock_recorder_cls, mock_transcriber_cls
+    mock_session_cls, mock_recorder_cls
 ) -> None:
     mock_recorder_cls.return_value = _mock_recorder()
-    mock_transcriber_cls.return_value = _mock_transcriber()
     mock_session_cls.return_value = MagicMock()
 
-    async with _app().run_test() as pilot:
+    async with _app(with_transcriber=True).run_test() as pilot:
         await pilot.press("r")
         await pilot.press("p")
         await pilot.pause()
         assert pilot.app.state is AppState.PAUSED  # type: ignore[attr-defined]
 
 
-@patch("scarecrow.app.Transcriber")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_press_p_during_paused_resumes(
-    mock_session_cls, mock_recorder_cls, mock_transcriber_cls
+    mock_session_cls, mock_recorder_cls
 ) -> None:
     mock_recorder_cls.return_value = _mock_recorder()
-    mock_transcriber_cls.return_value = _mock_transcriber()
     mock_session_cls.return_value = MagicMock()
 
-    async with _app().run_test() as pilot:
+    async with _app(with_transcriber=True).run_test() as pilot:
         await pilot.press("r")
         await pilot.press("p")
         await pilot.press("p")
@@ -115,17 +107,15 @@ async def test_press_p_during_paused_resumes(
         assert pilot.app.state is AppState.RECORDING  # type: ignore[attr-defined]
 
 
-@patch("scarecrow.app.Transcriber")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_press_r_while_recording_is_noop(
-    mock_session_cls, mock_recorder_cls, mock_transcriber_cls
+    mock_session_cls, mock_recorder_cls
 ) -> None:
     mock_recorder_cls.return_value = _mock_recorder()
-    mock_transcriber_cls.return_value = _mock_transcriber()
     mock_session_cls.return_value = MagicMock()
 
-    async with _app().run_test() as pilot:
+    async with _app(with_transcriber=True).run_test() as pilot:
         await pilot.press("r")
         await pilot.pause()
         assert pilot.app.state is AppState.RECORDING  # type: ignore[attr-defined]
@@ -139,17 +129,13 @@ async def test_press_r_while_recording_is_noop(
 # ---------------------------------------------------------------------------
 
 
-@patch("scarecrow.app.Transcriber")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
-async def test_timer_starts_on_record(
-    mock_session_cls, mock_recorder_cls, mock_transcriber_cls
-) -> None:
+async def test_timer_starts_on_record(mock_session_cls, mock_recorder_cls) -> None:
     mock_recorder_cls.return_value = _mock_recorder()
-    mock_transcriber_cls.return_value = _mock_transcriber()
     mock_session_cls.return_value = MagicMock()
 
-    async with _app().run_test() as pilot:
+    async with _app(with_transcriber=True).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
         assert app._elapsed == 0
         await pilot.press("r")
@@ -157,17 +143,13 @@ async def test_timer_starts_on_record(
         assert app._elapsed >= 1
 
 
-@patch("scarecrow.app.Transcriber")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
-async def test_timer_pauses_when_paused(
-    mock_session_cls, mock_recorder_cls, mock_transcriber_cls
-) -> None:
+async def test_timer_pauses_when_paused(mock_session_cls, mock_recorder_cls) -> None:
     mock_recorder_cls.return_value = _mock_recorder()
-    mock_transcriber_cls.return_value = _mock_transcriber()
     mock_session_cls.return_value = MagicMock()
 
-    async with _app().run_test() as pilot:
+    async with _app(with_transcriber=True).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
         await pilot.press("r")
         await pilot.pause(delay=1)

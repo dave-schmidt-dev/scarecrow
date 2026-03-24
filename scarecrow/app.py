@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from enum import Enum, auto
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -14,7 +14,9 @@ from textual.worker import Worker, WorkerState
 
 from scarecrow.recorder import AudioRecorder
 from scarecrow.session import Session
-from scarecrow.transcriber import Transcriber
+
+if TYPE_CHECKING:
+    from scarecrow.transcriber import Transcriber
 
 log = logging.getLogger(__name__)
 
@@ -63,11 +65,11 @@ class ScarecrowApp(App[None]):
     state: reactive[AppState] = reactive(AppState.IDLE)
     _elapsed: reactive[int] = reactive(0)
 
-    def __init__(self) -> None:
+    def __init__(self, transcriber: Transcriber | None = None) -> None:
         super().__init__()
         self._session: Session | None = None
         self._audio_recorder: AudioRecorder | None = None
-        self._transcriber: Transcriber | None = None
+        self._transcriber: Transcriber | None = transcriber
         self._transcription_worker: Worker[None] | None = None
         self._suppress_live: bool = False
 
@@ -84,7 +86,7 @@ class ScarecrowApp(App[None]):
         self._preflight_check()
 
     def _preflight_check(self) -> None:
-        """Verify at least one audio input device exists (no stream opened)."""
+        """Verify audio input exists and transcriber is ready."""
         import sounddevice as sd
 
         try:
@@ -101,10 +103,14 @@ class ScarecrowApp(App[None]):
                 for d in devices
             )
         except TypeError:
-            # devices is a single DeviceInfo dict (returned when only one device)
             has_input = devices.get("max_input_channels", 0) > 0  # type: ignore[union-attr]
         if not has_input:
             self._show_error("No audio input devices found — recording disabled.")
+            self._disable_record_binding()
+            return
+
+        if self._transcriber is None or not self._transcriber.is_ready:
+            self._show_error("Transcriber not initialized — recording disabled.")
             self._disable_record_binding()
 
     def _show_error(self, message: str) -> None:
@@ -183,13 +189,18 @@ class ScarecrowApp(App[None]):
         """Start recording — only valid from idle state."""
         if self.state is not AppState.IDLE:
             return
+        if self._transcriber is None or not self._transcriber.is_ready:
+            self._show_error("Transcriber not ready.")
+            return
 
-        # Create session and components
+        # Create session and audio recorder
         self._session = Session()
         self._audio_recorder = AudioRecorder(
             output_path=self._session.audio_path,
         )
-        self._transcriber = Transcriber(
+
+        # Wire transcriber callbacks to this app instance
+        self._transcriber.set_callbacks(
             on_realtime_update=self._on_realtime_update,
             on_realtime_stabilized=self._on_realtime_stabilized,
         )
@@ -201,22 +212,6 @@ class ScarecrowApp(App[None]):
             log.exception("Failed to start audio recorder")
             self._show_error(f"Could not start audio recorder: {exc}")
             self._audio_recorder = None
-            self._transcriber = None
-            self._session = None
-            return
-
-        # Start transcription
-        try:
-            self._transcriber.start()
-        except Exception as exc:
-            log.exception("Failed to start transcriber")
-            self._show_error(f"Could not start transcriber: {exc}")
-            try:
-                self._audio_recorder.stop()
-            except Exception:
-                log.exception("Failed to stop audio recorder during cleanup")
-            self._audio_recorder = None
-            self._transcriber = None
             self._session = None
             return
 
@@ -256,20 +251,16 @@ class ScarecrowApp(App[None]):
         self.exit()
 
     def _stop_recording(self) -> None:
-        """Stop all recording components and finalize the session."""
+        """Stop recording components and finalize session.
+
+        Note: the transcriber is NOT shut down here — it's owned by
+        __main__.py and persists across recording sessions.
+        """
         if self.state not in (AppState.RECORDING, AppState.PAUSED):
             return
 
         self._timer.pause()
         self.state = AppState.IDLE
-
-        # Stop transcription first (unblocks text() loop)
-        if self._transcriber is not None:
-            try:
-                self._transcriber.shutdown()
-            except Exception:
-                log.exception("Error shutting down transcriber")
-            self._transcriber = None
 
         # Cancel worker if still running
         if self._transcription_worker is not None:
