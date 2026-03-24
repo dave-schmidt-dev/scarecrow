@@ -227,10 +227,11 @@ class ScarecrowApp(App[None]):
     def _update_live_partial(self, text: str) -> None:
         """Replace the in-progress line at the bottom (stable lines preserved)."""
         live_log = self.query_one("#live-log", RichLog)
-        live_log.clear()
-        for line in self._live_stable:
-            live_log.write(line)
-        live_log.write(Text(text, style="dim"))
+        with self.batch_update():
+            live_log.clear()
+            for line in self._live_stable:
+                live_log.write(line)
+            live_log.write(Text(text, style="dim"))
         self._has_partial = True
 
     def _append_live(self, text: str) -> None:
@@ -239,9 +240,10 @@ class ScarecrowApp(App[None]):
         if len(self._live_stable) > 50:
             self._live_stable.pop(0)
         live_log = self.query_one("#live-log", RichLog)
-        live_log.clear()
-        for line in self._live_stable:
-            live_log.write(line)
+        with self.batch_update():
+            live_log.clear()
+            for line in self._live_stable:
+                live_log.write(line)
         self._has_partial = False
 
     # ------------------------------------------------------------------
