@@ -24,11 +24,6 @@ def main() -> None:
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
 
-    # Suppress ctranslate2 C++ warnings (float16→float32 on Apple Silicon).
-    import ctranslate2
-
-    ctranslate2.set_log_level(logging.ERROR)
-
     from scarecrow import config
 
     print(flush=True)
@@ -57,9 +52,14 @@ def main() -> None:
     print(flush=True)
 
     print("  Importing libraries…", flush=True)
-    from scarecrow.transcriber import Transcriber
 
     # Suppress ctranslate2 C++ float16→float32 warning during model load
+    import ctranslate2
+
+    ctranslate2.set_log_level(logging.ERROR)
+
+    from scarecrow.transcriber import Transcriber
+
     stderr_fd = sys.stderr.fileno()
     saved_stderr = os.dup(stderr_fd)
     devnull = os.open(os.devnull, os.O_WRONLY)

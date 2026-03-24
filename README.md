@@ -74,6 +74,8 @@ On launch, Scarecrow prints:
 | **Live** (lower pane) | `tiny.en` | Runs continuously, shows real-time captions |
 | **Batch** (upper pane) | `medium.en` | Runs every 30s on buffered audio, produces accurate transcript |
 
+A single 16kHz audio stream feeds both models — the WAV recorder, batch buffer, and RealtimeSTT's live transcription all share one sounddevice input.
+
 Models are configured in `scarecrow/config.py` or via `scripts/setup.py`.
 
 ## Session files
@@ -83,7 +85,7 @@ Each recording session creates a timestamped directory:
 ```
 recordings/
   2026-03-24_07-48-36/
-    audio.wav          # full recording (44.1kHz PCM16)
+    audio.wav          # full recording (16kHz PCM16)
     transcript.txt     # batch transcription output
 ```
 

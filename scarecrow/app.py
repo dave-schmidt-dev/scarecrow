@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import math
 from enum import Enum, auto
 from typing import TYPE_CHECKING, ClassVar
 
@@ -79,8 +80,6 @@ class AudioMeter(Static):
     level: reactive[float] = reactive(0.0)
 
     def render(self) -> Text:
-        import math
-
         t = Text()
         t.append(" mic ", style="dim")
         # Convert linear 0-1 to dB-ish scale for useful visual range.
@@ -169,7 +168,7 @@ class ScarecrowApp(App[None]):
 
     def on_mount(self) -> None:
         self._tick_timer = self.set_interval(1, self._tick, pause=True)
-        self._level_timer = self.set_interval(0.5, self._update_audio_level)
+        self._level_timer = self.set_interval(0.5, self._update_audio_level, pause=True)
         self._sync_info_bar()
         self.set_timer(0.1, self._auto_start)
 
@@ -221,9 +220,8 @@ class ScarecrowApp(App[None]):
     def _update_audio_level(self) -> None:
         """Sample current audio level from the recorder buffer."""
         if self._audio_recorder is None or not self._audio_recorder.is_recording:
-            level = 0.0
-        else:
-            level = self._audio_recorder.peak_level
+            return
+        level = self._audio_recorder.peak_level
         self._audio_level = level
         meter = self.query_one(AudioMeter)
         if meter.level != level:
@@ -302,24 +300,9 @@ class ScarecrowApp(App[None]):
 
     def _run_batch(self, audio) -> None:
         """Run medium.en on audio chunk (called in worker thread)."""
-        import numpy as np
-        from scipy.signal import resample_poly
-
         from scarecrow import config
 
         try:
-            if self._audio_recorder is not None:
-                src_rate = self._audio_recorder.sample_rate
-            else:
-                src_rate = config.SAMPLE_RATE
-            if src_rate != 16000:
-                log.debug(
-                    "Resampling %d samples from %dHz to 16kHz",
-                    len(audio),
-                    src_rate,
-                )
-                audio = resample_poly(audio, 16000, src_rate).astype(np.float32)
-
             model = self._get_batch_model()
             segments, _ = model.transcribe(
                 audio,
@@ -371,6 +354,8 @@ class ScarecrowApp(App[None]):
     # ------------------------------------------------------------------
 
     def _start_recording(self) -> None:
+        from scarecrow import config
+
         if self.state is not AppState.IDLE:
             return
         if self._transcriber is None or not self._transcriber.is_ready:
@@ -380,6 +365,8 @@ class ScarecrowApp(App[None]):
         self._session = Session()
         self._audio_recorder = AudioRecorder(
             output_path=self._session.audio_path,
+            sample_rate=config.SAMPLE_RATE,
+            on_audio=self._transcriber.feed_audio,
         )
 
         self._transcriber.set_callbacks(
@@ -398,6 +385,7 @@ class ScarecrowApp(App[None]):
 
         assert self._transcriber.recorder is not None
         self._transcriber.recorder.start()
+        self._level_timer.resume()
 
         self._batch_timer = self.set_interval(
             BATCH_INTERVAL_SECONDS, self._on_batch_tick

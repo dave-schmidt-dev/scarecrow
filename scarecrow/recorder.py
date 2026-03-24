@@ -1,6 +1,9 @@
 """Audio capture — sounddevice InputStream writing to WAV via soundfile."""
 
+from __future__ import annotations
+
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -11,19 +14,22 @@ import soundfile as sf
 class AudioRecorder:
     """Records audio from microphone to WAV file.
 
-    Also maintains an in-memory buffer of audio for batch transcription.
+    Also maintains an in-memory buffer of audio for batch transcription
+    and optionally feeds audio to a callback (e.g. RealtimeSTT.feed_audio).
     Call drain_buffer() to get accumulated audio since the last drain.
     """
 
     def __init__(
         self,
         output_path: Path,
-        sample_rate: int = 44100,
+        sample_rate: int = 16000,
         channels: int = 1,
+        on_audio: Callable[[np.ndarray], None] | None = None,
     ) -> None:
         self._output_path = output_path
         self._sample_rate = sample_rate
         self._channels = channels
+        self._on_audio = on_audio
 
         self._stream: sd.InputStream | None = None
         self._sound_file: sf.SoundFile | None = None
@@ -59,9 +65,12 @@ class AudioRecorder:
                 # Track peak level for audio meter
                 peak = float(np.abs(indata).max()) / 32768.0
                 self._peak_level = peak
-                # Also buffer for batch transcription
+                # Buffer for batch transcription
                 with self._buffer_lock:
                     self._audio_chunks.append(indata.copy())
+                # Feed to RealtimeSTT (or other consumer)
+                if self._on_audio is not None:
+                    self._on_audio(indata)
 
     def start(self) -> None:
         """Opens sounddevice InputStream with callback, opens SoundFile for writing."""
@@ -95,8 +104,8 @@ class AudioRecorder:
     def drain_buffer(self) -> np.ndarray | None:
         """Return accumulated audio since last drain, or None if empty.
 
-        Audio is returned as float32 normalized to [-1, 1] at the
-        recorder's sample rate — ready for Whisper.
+        Audio is returned as float32 normalized to [-1, 1] at 16kHz
+        — ready for Whisper with no resampling needed.
         """
         with self._buffer_lock:
             if not self._audio_chunks:

@@ -3,7 +3,7 @@
 from pathlib import Path
 
 # Audio settings
-SAMPLE_RATE = 44100
+SAMPLE_RATE = 16000  # 16kHz — matches Whisper, no resampling needed
 CHANNELS = 1
 SUBTYPE = "PCM_16"
 

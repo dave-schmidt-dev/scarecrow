@@ -81,35 +81,30 @@ def test_drain_buffer_sample_rate_is_44100(tmp_path: Path) -> None:
     from scarecrow.recorder import AudioRecorder
 
     with patch("scarecrow.recorder.sd"), patch("scarecrow.recorder.sf"):
-        recorder = AudioRecorder(tmp_path / "audio.wav", sample_rate=44100)
+        recorder = AudioRecorder(tmp_path / "audio.wav", sample_rate=16000)
         recorder.start()
 
-        # Simulate 1 second of audio at 44100Hz
-        for _ in range(43):  # ~43 chunks of 1024 = ~44032 samples
+        # Simulate 1 second of audio at 16000Hz
+        for _ in range(16):  # ~16 chunks of 1024 = ~16384 samples
             indata = np.zeros((1024, 1), dtype="int16")
             recorder._callback(indata, 1024, None, None)
 
         audio = recorder.drain_buffer()
         assert audio is not None
-        # Should have ~44032 samples (44100Hz), NOT ~16000
-        assert len(audio) > 40000
-        assert recorder.sample_rate == 44100
+        # Should have ~16384 samples at 16kHz
+        assert len(audio) > 15000
+        assert recorder.sample_rate == 16000
         recorder.stop()
 
 
-def test_batch_resamples_to_16khz() -> None:
-    """_run_batch must resample 44100Hz audio to 16000Hz for Whisper."""
+def test_batch_passes_audio_directly_at_16khz() -> None:
+    """_run_batch passes 16kHz audio directly to Whisper (no resampling)."""
     from scarecrow.app import ScarecrowApp
 
     app = ScarecrowApp()
 
-    # Create a mock recorder reporting 44100Hz
-    mock_recorder = MagicMock()
-    mock_recorder.sample_rate = 44100
-    app._audio_recorder = mock_recorder
-
-    # Create 1 second of 44100Hz audio
-    audio_44k = np.zeros(44100, dtype=np.float32)
+    # Create 1 second of 16kHz audio
+    audio_16k = np.zeros(16000, dtype=np.float32)
 
     # Mock the batch model
     mock_segment = MagicMock()
@@ -118,15 +113,13 @@ def test_batch_resamples_to_16khz() -> None:
     mock_model.transcribe.return_value = ([mock_segment], None)
     app._batch_model = mock_model
 
-    # Run batch — should resample before calling transcribe
+    # Run batch — audio should pass through unchanged
     with patch.object(app, "_safe_call"):
-        app._run_batch(audio_44k)
+        app._run_batch(audio_16k)
 
-    # Verify transcribe was called
     mock_model.transcribe.assert_called_once()
-    # The audio passed to transcribe should be ~16000 samples, not 44100
     transcribed_audio = mock_model.transcribe.call_args[0][0]
-    assert len(transcribed_audio) == pytest.approx(16000, abs=100)
+    assert len(transcribed_audio) == 16000
 
 
 # ---------------------------------------------------------------------------
