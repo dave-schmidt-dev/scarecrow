@@ -154,11 +154,13 @@ class ScarecrowApp(App[None]):
     def _transcription_loop(self) -> None:
         """Blocking loop that runs in a worker thread."""
         assert self._transcriber is not None
+        self.call_from_thread(self.update_live_preview, "Listening for speech…")
         while self.state in (AppState.RECORDING, AppState.PAUSED):
             try:
                 text = self._transcriber.text()
-            except Exception:
+            except Exception as exc:
                 log.exception("Transcription error")
+                self.call_from_thread(self._show_error, f"Transcription failed: {exc}")
                 break
             if text and text.strip():
                 self.call_from_thread(self._handle_final_text, text)
