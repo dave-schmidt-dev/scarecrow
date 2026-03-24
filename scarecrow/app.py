@@ -20,6 +20,8 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+BATCH_INTERVAL_SECONDS = 30
+
 
 class AppState(Enum):
     IDLE = auto()
@@ -65,12 +67,6 @@ class ScarecrowApp(App[None]):
         self._audio_recorder: AudioRecorder | None = None
         self._transcriber: Transcriber | None = transcriber
         self._suppress_live: bool = False
-        # Accumulate stabilized text for the transcript pane.
-        # RealtimeSTT fires on_realtime_transcription_stabilized with the
-        # full utterance so far. When text() would have returned (sentence
-        # boundary), the stabilized text resets. We detect this reset to
-        # know when to commit a sentence to the transcript.
-        self._prev_stabilized: str = ""
 
     def compose(self) -> ComposeResult:
         from scarecrow import config
@@ -78,7 +74,8 @@ class ScarecrowApp(App[None]):
         yield Header()
         yield StatusBar(id="status-bar")
         yield Static(
-            f"Transcript  [dim]({config.REALTIME_MODEL} stabilized)[/dim]",
+            f"Transcript  [dim]({config.FINAL_MODEL} · "
+            f"every {BATCH_INTERVAL_SECONDS}s)[/dim]",
             classes="pane-label",
         )
         yield RichLog(id="captions", highlight=True, markup=True, wrap=True)
@@ -158,8 +155,7 @@ class ScarecrowApp(App[None]):
         self._sync_status()
 
     # ------------------------------------------------------------------
-    # RealtimeSTT callbacks — these drive BOTH panes.
-    # No blocking text() loop. The realtime worker runs continuously.
+    # Live pane — driven by RealtimeSTT callbacks (tiny.en, continuous)
     # ------------------------------------------------------------------
 
     def _safe_call(self, callback, *args) -> None:
@@ -167,37 +163,74 @@ class ScarecrowApp(App[None]):
             self.call_from_thread(callback, *args)
 
     def _on_realtime_update(self, text: str) -> None:
-        """Fires every ~0.2s with the raw live transcription."""
         if not self._suppress_live and text:
             self._safe_call(self._update_live, text)
 
     def _on_realtime_stabilized(self, text: str) -> None:
-        """Fires with stabilized text. When it resets/shortens, a
-        sentence boundary was crossed — commit previous to transcript."""
-        if self._suppress_live:
-            return
-        if text:
+        if not self._suppress_live and text:
             self._safe_call(self._update_live, text)
-            self._safe_call(self._check_sentence_boundary, text)
 
     def _update_live(self, text: str) -> None:
         live_log = self.query_one("#live-log", RichLog)
         live_log.clear()
         live_log.write(text)
 
-    def _check_sentence_boundary(self, new_stabilized: str) -> None:
-        """Detect when stabilized text resets — means previous sentence done."""
-        prev = self._prev_stabilized
-        # If new text is significantly shorter than previous, a sentence
-        # boundary was crossed. Commit the previous text to transcript.
-        if prev and len(new_stabilized) < len(prev) * 0.5:
-            self._commit_to_transcript(prev)
-        self._prev_stabilized = new_stabilized
+    # ------------------------------------------------------------------
+    # Transcript pane — batch transcription with medium.en every 30s
+    # ------------------------------------------------------------------
 
-    def _commit_to_transcript(self, text: str) -> None:
-        text = text.strip()
-        if not text:
+    def _batch_transcribe(self) -> None:
+        """Drain audio buffer and transcribe with medium.en in a worker."""
+        if self._audio_recorder is None or self._transcriber is None:
             return
+        if self.state not in (AppState.RECORDING, AppState.PAUSED):
+            return
+
+        audio = self._audio_recorder.drain_buffer()
+        if audio is None or len(audio) == 0:
+            return
+
+        # Run in a thread so we don't block the UI
+        self.run_worker(
+            lambda: self._run_batch(audio),
+            thread=True,
+            name="batch-transcribe",
+        )
+
+    def _run_batch(self, audio) -> None:
+        """Run medium.en on audio chunk (called in worker thread)."""
+        from scarecrow import config
+
+        try:
+            model = self._get_batch_model()
+            segments, _ = model.transcribe(
+                audio,
+                language=config.LANGUAGE,
+                beam_size=config.BEAM_SIZE,
+                vad_filter=True,
+            )
+            text = " ".join(seg.text.strip() for seg in segments)
+            if text.strip():
+                self._safe_call(self._append_transcript, text.strip())
+        except Exception:
+            log.exception("Batch transcription failed")
+
+    def _get_batch_model(self):
+        """Lazily load the batch transcription model."""
+        if not hasattr(self, "_batch_model"):
+            from faster_whisper import WhisperModel
+
+            from scarecrow import config
+
+            self._batch_model = WhisperModel(
+                config.FINAL_MODEL,
+                device="cpu",
+                compute_type="int8",
+            )
+        return self._batch_model
+
+    def _append_transcript(self, text: str) -> None:
+        """Append batch-transcribed text to the transcript pane and file."""
         self.query_one("#captions", RichLog).write(text)
         if self._session is not None:
             self._session.append_sentence(text)
@@ -232,16 +265,17 @@ class ScarecrowApp(App[None]):
             self._session = None
             return
 
-        # Start continuous recording on the AudioToTextRecorder directly.
-        # We do NOT call text() — that would block and pause live callbacks.
-        # Instead, we manually start() the recorder and let realtime callbacks
-        # drive both panes continuously.
+        # Start continuous recording via RealtimeSTT (for live callbacks)
         assert self._transcriber.recorder is not None
         self._transcriber.recorder.start()
 
+        # Schedule batch transcription every 30 seconds
+        self._batch_timer = self.set_interval(
+            BATCH_INTERVAL_SECONDS, self._batch_transcribe
+        )
+
         self._elapsed = 0
         self._suppress_live = False
-        self._prev_stabilized = ""
         self.state = AppState.RECORDING
         self._timer.resume()
         self._update_live("Listening…")
@@ -269,11 +303,11 @@ class ScarecrowApp(App[None]):
             return
 
         self._timer.pause()
+        if hasattr(self, "_batch_timer"):
+            self._batch_timer.pause()
 
-        # Commit any remaining stabilized text
-        if self._prev_stabilized:
-            self._commit_to_transcript(self._prev_stabilized)
-            self._prev_stabilized = ""
+        # Final batch transcription of remaining audio
+        self._batch_transcribe()
 
         self.state = AppState.IDLE
 

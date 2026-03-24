@@ -9,7 +9,11 @@ import soundfile as sf
 
 
 class AudioRecorder:
-    """Records audio from microphone to WAV file."""
+    """Records audio from microphone to WAV file.
+
+    Also maintains an in-memory buffer of audio for batch transcription.
+    Call drain_buffer() to get accumulated audio since the last drain.
+    """
 
     def __init__(
         self,
@@ -28,6 +32,10 @@ class AudioRecorder:
         self._paused = False
         self._lock = threading.Lock()
 
+        # In-memory buffer for batch transcription
+        self._audio_chunks: list[np.ndarray] = []
+        self._buffer_lock = threading.Lock()
+
     def _callback(
         self,
         indata: np.ndarray,
@@ -44,6 +52,9 @@ class AudioRecorder:
                 self._sound_file.write(silence)
             else:
                 self._sound_file.write(indata)
+                # Also buffer for batch transcription
+                with self._buffer_lock:
+                    self._audio_chunks.append(indata.copy())
 
     def start(self) -> None:
         """Opens sounddevice InputStream with callback, opens SoundFile for writing."""
@@ -69,20 +80,36 @@ class AudioRecorder:
             self._recording = True
             self._paused = False
 
+        with self._buffer_lock:
+            self._audio_chunks.clear()
+
         self._stream.start()
 
+    def drain_buffer(self) -> np.ndarray | None:
+        """Return accumulated audio since last drain, or None if empty.
+
+        Audio is returned as float32 normalized to [-1, 1] at the
+        recorder's sample rate — ready for Whisper.
+        """
+        with self._buffer_lock:
+            if not self._audio_chunks:
+                return None
+            chunks = self._audio_chunks.copy()
+            self._audio_chunks.clear()
+
+        combined = np.concatenate(chunks, axis=0).squeeze()
+        # Convert int16 → float32 normalized for Whisper
+        return combined.astype(np.float32) / 32768.0
+
     def pause(self) -> None:
-        """Sets pause flag — callback writes silence instead of mic data."""
         with self._lock:
             self._paused = True
 
     def resume(self) -> None:
-        """Clears pause flag — callback resumes writing mic data."""
         with self._lock:
             self._paused = False
 
     def stop(self) -> Path:
-        """Closes stream and file, returns path to WAV."""
         with self._lock:
             self._recording = False
 
@@ -98,13 +125,15 @@ class AudioRecorder:
         return self._output_path
 
     @property
+    def sample_rate(self) -> int:
+        return self._sample_rate
+
+    @property
     def is_recording(self) -> bool:
-        """True while the recorder is active (not yet stopped)."""
         with self._lock:
             return self._recording
 
     @property
     def is_paused(self) -> bool:
-        """True while the recorder is paused."""
         with self._lock:
             return self._paused
