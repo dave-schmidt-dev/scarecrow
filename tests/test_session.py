@@ -1,0 +1,117 @@
+"""Unit tests for Session."""
+
+import re
+import time
+from pathlib import Path
+
+import pytest
+
+from scarecrow.session import Session
+
+
+def test_creates_session_directory(tmp_path: Path) -> None:
+    """Session creates a subdirectory inside base_dir."""
+    session = Session(base_dir=tmp_path)
+    assert session.session_dir.exists()
+    assert session.session_dir.is_dir()
+    assert session.session_dir.parent == tmp_path
+    session.finalize()
+
+
+def test_directory_name_format(tmp_path: Path) -> None:
+    """Session directory name follows YYYY-MM-DD_HH-MM-SS format."""
+    session = Session(base_dir=tmp_path)
+    name = session.session_dir.name
+    pattern = r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$"
+    assert re.match(pattern, name), (
+        f"Directory name {name!r} does not match expected format"
+    )
+    session.finalize()
+
+
+def test_audio_path(tmp_path: Path) -> None:
+    """audio_path returns audio.wav inside the session directory."""
+    session = Session(base_dir=tmp_path)
+    assert session.audio_path == session.session_dir / "audio.wav"
+    assert session.audio_path.name == "audio.wav"
+    session.finalize()
+
+
+def test_transcript_path(tmp_path: Path) -> None:
+    """transcript_path returns transcript.txt inside the session directory."""
+    session = Session(base_dir=tmp_path)
+    assert session.transcript_path == session.session_dir / "transcript.txt"
+    assert session.transcript_path.name == "transcript.txt"
+    session.finalize()
+
+
+def test_append_sentence_creates_file(tmp_path: Path) -> None:
+    """append_sentence creates transcript.txt if it doesn't exist."""
+    session = Session(base_dir=tmp_path)
+    assert not session.transcript_path.exists()
+    session.append_sentence("Hello world")
+    assert session.transcript_path.exists()
+    session.finalize()
+
+
+def test_append_sentence_content(tmp_path: Path) -> None:
+    """append_sentence writes the text followed by a newline."""
+    session = Session(base_dir=tmp_path)
+    session.append_sentence("Hello world")
+    content = session.transcript_path.read_text(encoding="utf-8")
+    assert content == "Hello world\n"
+    session.finalize()
+
+
+def test_multiple_appends_one_per_line(tmp_path: Path) -> None:
+    """Multiple appends produce one sentence per line."""
+    session = Session(base_dir=tmp_path)
+    sentences = ["First sentence.", "Second sentence.", "Third sentence."]
+    for s in sentences:
+        session.append_sentence(s)
+    lines = session.transcript_path.read_text(encoding="utf-8").splitlines()
+    assert lines == sentences
+    session.finalize()
+
+
+def test_append_flushes_immediately(tmp_path: Path) -> None:
+    """append_sentence flushes so content is readable without closing."""
+    session = Session(base_dir=tmp_path)
+    session.append_sentence("Flushed line")
+    # Read file while it's still open (file handle not yet closed)
+    content = session.transcript_path.read_text(encoding="utf-8")
+    assert "Flushed line" in content
+    session.finalize()
+
+
+def test_finalize_closes_cleanly(tmp_path: Path) -> None:
+    """finalize closes the file handle without error."""
+    session = Session(base_dir=tmp_path)
+    session.append_sentence("Some text")
+    session.finalize()
+    # Calling finalize again should not raise
+    session.finalize()
+
+
+def test_finalize_without_appending(tmp_path: Path) -> None:
+    """finalize works cleanly even if no sentences were appended."""
+    session = Session(base_dir=tmp_path)
+    session.finalize()  # Should not raise
+
+
+def test_default_base_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Default base_dir is ./recordings relative to cwd."""
+    monkeypatch.chdir(tmp_path)
+    session = Session()
+    assert session.session_dir.resolve().parent == tmp_path / "recordings"
+    session.finalize()
+
+
+def test_unique_directories_for_different_sessions(tmp_path: Path) -> None:
+    """Two sessions created at different times get different directories."""
+    session1 = Session(base_dir=tmp_path)
+    time.sleep(1.1)  # Ensure the timestamp differs by at least one second
+    session2 = Session(base_dir=tmp_path)
+    assert session1.session_dir != session2.session_dir
+    session1.finalize()
+    session2.finalize()
