@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from enum import Enum, auto
 from typing import ClassVar
 
@@ -9,6 +10,13 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.reactive import reactive
 from textual.widgets import Footer, Header, RichLog, Static
+from textual.worker import Worker, WorkerState
+
+from scarecrow.recorder import AudioRecorder
+from scarecrow.session import Session
+from scarecrow.transcriber import Transcriber
+
+log = logging.getLogger(__name__)
 
 
 class AppState(Enum):
@@ -55,6 +63,14 @@ class ScarecrowApp(App[None]):
     state: reactive[AppState] = reactive(AppState.IDLE)
     _elapsed: reactive[int] = reactive(0)
 
+    def __init__(self) -> None:
+        super().__init__()
+        self._session: Session | None = None
+        self._audio_recorder: AudioRecorder | None = None
+        self._transcriber: Transcriber | None = None
+        self._transcription_worker: Worker[None] | None = None
+        self._suppress_live: bool = False
+
     def compose(self) -> ComposeResult:
         yield Header()
         yield StatusBar(id="status-bar")
@@ -91,35 +107,130 @@ class ScarecrowApp(App[None]):
         self._sync_status()
 
     # ------------------------------------------------------------------
+    # Transcription worker (runs in Thread A)
+    # ------------------------------------------------------------------
+
+    def _transcription_loop(self) -> None:
+        """Blocking loop that runs in a worker thread."""
+        assert self._transcriber is not None
+        while self.state in (AppState.RECORDING, AppState.PAUSED):
+            try:
+                text = self._transcriber.text()
+            except Exception:
+                log.exception("Transcription error")
+                break
+            if text and text.strip():
+                self.call_from_thread(self._handle_final_text, text)
+
+    def _handle_final_text(self, text: str) -> None:
+        """Called on the main thread when a sentence is finalized."""
+        self.append_caption(text)
+        if self._session is not None:
+            self._session.append_sentence(text)
+
+    # ------------------------------------------------------------------
+    # RealtimeSTT callbacks (fire on RealtimeSTT's internal thread)
+    # ------------------------------------------------------------------
+
+    def _on_realtime_update(self, text: str) -> None:
+        if not self._suppress_live:
+            self.call_from_thread(self.update_live_preview, text)
+
+    def _on_realtime_stabilized(self, text: str) -> None:
+        if not self._suppress_live:
+            self.call_from_thread(self.update_live_preview, text)
+
+    # ------------------------------------------------------------------
     # Actions (bound to keys via BINDINGS)
     # ------------------------------------------------------------------
 
     def action_record(self) -> None:
         """Start recording — only valid from idle state."""
-        if self.state is AppState.IDLE:
-            self._elapsed = 0
-            self.state = AppState.RECORDING
-            self._timer.resume()
-            self._update_footer_time()
+        if self.state is not AppState.IDLE:
+            return
+
+        # Create session and components
+        self._session = Session()
+        self._audio_recorder = AudioRecorder(
+            output_path=self._session.audio_path,
+        )
+        self._transcriber = Transcriber(
+            on_realtime_update=self._on_realtime_update,
+            on_realtime_stabilized=self._on_realtime_stabilized,
+        )
+
+        # Start audio recording
+        self._audio_recorder.start()
+
+        # Start transcription
+        self._transcriber.start()
+
+        # Launch transcription worker thread
+        self._transcription_worker = self.run_worker(
+            self._transcription_loop,
+            thread=True,
+            name="transcription",
+        )
+
+        # Update state and timer
+        self._elapsed = 0
+        self._suppress_live = False
+        self.state = AppState.RECORDING
+        self._timer.resume()
+        self._update_footer_time()
 
     def action_pause(self) -> None:
         """Toggle pause/resume — only valid when recording or paused."""
         if self.state is AppState.RECORDING:
             self.state = AppState.PAUSED
             self._timer.pause()
+            self._suppress_live = True
+            if self._audio_recorder is not None:
+                self._audio_recorder.pause()
+            self.update_live_preview("")
         elif self.state is AppState.PAUSED:
             self.state = AppState.RECORDING
             self._timer.resume()
+            self._suppress_live = False
+            if self._audio_recorder is not None:
+                self._audio_recorder.resume()
 
     def action_quit(self) -> None:
         """Stop recording (if active) then quit."""
-        if self.state in (AppState.RECORDING, AppState.PAUSED):
-            self._timer.pause()
-            self.state = AppState.IDLE
+        self._stop_recording()
         self.exit()
 
+    def _stop_recording(self) -> None:
+        """Stop all recording components and finalize the session."""
+        if self.state not in (AppState.RECORDING, AppState.PAUSED):
+            return
+
+        self._timer.pause()
+        self.state = AppState.IDLE
+
+        # Stop transcription first (unblocks text() loop)
+        if self._transcriber is not None:
+            self._transcriber.shutdown()
+            self._transcriber = None
+
+        # Cancel worker if still running
+        if self._transcription_worker is not None:
+            if self._transcription_worker.state is WorkerState.RUNNING:
+                self._transcription_worker.cancel()
+            self._transcription_worker = None
+
+        # Stop audio recording
+        if self._audio_recorder is not None:
+            self._audio_recorder.stop()
+            self._audio_recorder = None
+
+        # Finalize session (close transcript file)
+        if self._session is not None:
+            self._session.finalize()
+            self._session = None
+
     # ------------------------------------------------------------------
-    # Public API — Phase 6 integration points
+    # Public API
     # ------------------------------------------------------------------
 
     def update_live_preview(self, text: str) -> None:
