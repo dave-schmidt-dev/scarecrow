@@ -10,4 +10,4 @@ repos:
     rev: v2.15
     hooks:
       - id: vulture
-        args: [src/scarecrow/, --min-confidence=80]
+        args: [scarecrow/, --min-confidence=80]
