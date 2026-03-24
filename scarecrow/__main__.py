@@ -1,16 +1,22 @@
 """Entry point for `python -m scarecrow` and the `scarecrow` console script."""
 
 import contextlib
+import logging
 import sys
 
 
 def main() -> None:
+    # Suppress noisy ctranslate2 float16→float32 warnings from C++ stderr.
+    import ctranslate2
+
+    ctranslate2.set_log_level(logging.ERROR)
+
     from scarecrow.transcriber import Transcriber
 
     # Create and prepare the transcriber BEFORE Textual starts.
     # AudioToTextRecorder uses multiprocessing.Value which creates
     # semaphores — this breaks if Textual has already modified FDs.
-    print("Loading speech models… (first run downloads ~1.5 GB)")
+    print("Loading speech models…")
     transcriber = Transcriber()
     try:
         transcriber.prepare()

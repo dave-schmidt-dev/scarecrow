@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from enum import Enum, auto
 from typing import TYPE_CHECKING, ClassVar
@@ -154,16 +155,18 @@ class ScarecrowApp(App[None]):
     def _transcription_loop(self) -> None:
         """Blocking loop that runs in a worker thread."""
         assert self._transcriber is not None
-        self.call_from_thread(self.update_live_preview, "Listening for speech…")
+        self._safe_call_from_thread(self.update_live_preview, "Listening for speech…")
         while self.state in (AppState.RECORDING, AppState.PAUSED):
             try:
                 text = self._transcriber.text()
             except Exception as exc:
                 log.exception("Transcription error")
-                self.call_from_thread(self._show_error, f"Transcription failed: {exc}")
+                self._safe_call_from_thread(
+                    self._show_error, f"Transcription failed: {exc}"
+                )
                 break
             if text and text.strip():
-                self.call_from_thread(self._handle_final_text, text)
+                self._safe_call_from_thread(self._handle_final_text, text)
 
     def _handle_final_text(self, text: str) -> None:
         """Called on the main thread when a sentence is finalized."""
@@ -175,13 +178,18 @@ class ScarecrowApp(App[None]):
     # RealtimeSTT callbacks (fire on RealtimeSTT's internal thread)
     # ------------------------------------------------------------------
 
+    def _safe_call_from_thread(self, callback, *args) -> None:
+        """call_from_thread that silently ignores 'App is not running'."""
+        with contextlib.suppress(RuntimeError):
+            self.call_from_thread(callback, *args)
+
     def _on_realtime_update(self, text: str) -> None:
         if not self._suppress_live:
-            self.call_from_thread(self.update_live_preview, text)
+            self._safe_call_from_thread(self.update_live_preview, text)
 
     def _on_realtime_stabilized(self, text: str) -> None:
         if not self._suppress_live:
-            self.call_from_thread(self.update_live_preview, text)
+            self._safe_call_from_thread(self.update_live_preview, text)
 
     # ------------------------------------------------------------------
     # Actions (bound to keys via BINDINGS)

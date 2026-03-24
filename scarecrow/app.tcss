@@ -33,10 +33,12 @@ StatusBar.state-paused {
 }
 
 #live-preview {
-    height: 3;
+    height: auto;
+    max-height: 5;
     margin: 0 1;
     padding: 0 1;
     color: $text-muted;
     text-style: italic;
     border: dashed $primary-darken-3;
+    overflow-x: hidden;
 }
