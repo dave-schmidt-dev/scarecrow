@@ -86,6 +86,17 @@ Scarecrow keeps a running bug ledger in this file. Append to it every time a bug
 - Regression test: `tests/test_integration.py::test_transcriber_pipeline_with_real_audio_fixture`
 - Notes: verified 2026-03-24.
 
+## [BUG-20260324-missing-hook-enforcement]
+- Status: squashed
+- Found: 2026-03-24
+- Area: workflow, docs, validation
+- Symptom: it was easy to forget doc updates, regression references, or validation before commit/push.
+- Root cause: repo policy lived in chat instructions and habit rather than enforceable git hooks.
+- Workaround: manually remember to update docs, run checks, and push.
+- Fix: added repo-managed pre-commit and pre-push hooks via `.pre-commit-config.yaml` and `scripts/check_repo_policy.py`.
+- Regression test: `scripts/check_repo_policy.py --staged-only` enforced by pre-commit, full `uv run pytest` enforced by pre-push
+- Notes: verified 2026-03-24.
+
 ## [BUG-20260324-hidden-pth-after-uv-sync]
 - Status: squashed
 - Found: 2026-03-24

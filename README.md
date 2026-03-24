@@ -151,6 +151,22 @@ Pre-commit hooks run ruff (lint + format) and vulture automatically.
 
 When fixing bugs, update `BUGS.md` and add or extend the matching regression test in the same change.
 
+### Git hooks
+
+Install the repo hooks after syncing the environment:
+
+```bash
+uv run pre-commit install --hook-type pre-commit --hook-type pre-push
+```
+
+The hooks enforce these repo rules:
+
+- fail the commit if `README.md`, `HISTORY.md`, or `BUGS.md` is missing
+- fail the commit if staged code changes do not include an update to `HISTORY.md`
+- fail the commit if `BUGS.md` contains a squashed bug without a regression test reference
+- run `ruff`, `pytest`, and `vulture` on pre-commit
+- run the full `pytest` suite again on pre-push
+
 ## Architecture
 
 ```
