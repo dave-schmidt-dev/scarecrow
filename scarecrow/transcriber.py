@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import multiprocessing
 from collections.abc import Callable
 from pathlib import Path
@@ -99,7 +100,16 @@ class Transcriber:
     def shutdown(self) -> None:
         """Full cleanup — stop recording and release all resources."""
         if self.recorder is not None:
-            self.recorder.shutdown()
+            with contextlib.suppress(Exception):
+                self.recorder.shutdown()
+            # Kill any lingering multiprocessing children
+            import multiprocessing
+
+            for child in multiprocessing.active_children():
+                child.terminate()
+                child.join(timeout=2)
+                if child.is_alive():
+                    child.kill()
             self.recorder = None
 
     @property

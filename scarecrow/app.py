@@ -249,6 +249,7 @@ class ScarecrowApp(App[None]):
         self.state = AppState.RECORDING
         self._timer.resume()
         self._update_footer_time()
+        self._stream_live_text("Listening…")
 
     def action_pause(self) -> None:
         """Toggle pause/resume — only valid when recording or paused."""
