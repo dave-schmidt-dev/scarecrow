@@ -283,7 +283,7 @@ class Transcriber:
                 language=config.LANGUAGE,
                 beam_size=config.BEAM_SIZE_REALTIME,
                 vad_filter=False,
-                condition_on_previous_text=True,
+                condition_on_previous_text=False,
             )
             text = " ".join(seg.text.strip() for seg in segments).strip()
         except Exception:

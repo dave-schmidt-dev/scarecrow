@@ -285,7 +285,7 @@ class ScarecrowApp(App[None]):
                 language=config.LANGUAGE,
                 beam_size=config.BEAM_SIZE,
                 vad_filter=True,
-                condition_on_previous_text=True,
+                condition_on_previous_text=False,
             )
             text = " ".join(seg.text.strip() for seg in segments)
             log.debug("Batch result: %r", text[:100] if text else "")

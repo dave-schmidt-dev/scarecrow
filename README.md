@@ -95,7 +95,7 @@ On launch, Scarecrow prints:
 | **Live** (lower pane) | `base.en` | VAD-gated, transcribes during speech every ~1s |
 | **Batch** (upper pane) | `medium.en` | Runs every 30s on buffered audio, produces accurate transcript |
 
-A single 16kHz audio stream feeds both models. Silero VAD (ONNX, bundled) detects speech boundaries, triggering live transcription with base.en during speech. Batch transcription with medium.en runs independently every 30 seconds. Both use `condition_on_previous_text=True` for better contextual accuracy. No subprocesses — everything runs in a single process with one worker thread.
+A single 16kHz audio stream feeds both models. Silero VAD (ONNX, bundled) detects speech boundaries, triggering live transcription with base.en during speech. Batch transcription with medium.en runs independently every 30 seconds. No subprocesses — everything runs in a single process with one worker thread.
 
 Models are configured in `scarecrow/config.py` or via `scripts/setup.py`.
 
@@ -145,5 +145,6 @@ tests/
   test_recorder.py     # audio recorder unit tests
   test_session.py      # session/file management tests
   test_regressions.py  # regression tests for fixed bugs
+  test_startup.py      # startup smoke tests (imports, .pth, HF offline, model load)
   test_transcriber.py  # VAD + transcription tests
 ```

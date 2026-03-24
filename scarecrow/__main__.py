@@ -8,8 +8,10 @@ import warnings
 from datetime import datetime
 from pathlib import Path
 
-# Suppress HuggingFace Hub authentication warnings
+# Suppress HuggingFace Hub authentication warnings and network requests.
+# Models are cached locally; HF Hub online checks can stall for 30-60s.
 os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
 warnings.filterwarnings("ignore", message=".*unauthenticated requests.*")
 
 
@@ -46,8 +48,10 @@ def _model_cache_path(model_name: str) -> Path | None:
 
 
 def main() -> None:
+    log_path = Path.home() / ".cache" / "scarecrow" / "debug.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
-        filename="scarecrow_debug.log",
+        filename=str(log_path),
         level=logging.DEBUG,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
@@ -92,6 +96,17 @@ def main() -> None:
     t1 = time.monotonic()
     print(f"  Ready ({t1 - t0:.1f}s)", flush=True)
     print(f"  Batch model ({batch}) loads on first use", flush=True)
+    # Pre-initialize tqdm's multiprocessing lock before Textual takes over
+    # file descriptors. faster_whisper uses tqdm internally, and tqdm tries
+    # to create an mp.RLock on first use — which fails inside Textual's
+    # event loop due to fd manipulation. Warming it here prevents the crash.
+    try:
+        from tqdm import tqdm
+
+        tqdm.get_lock()
+    except Exception:
+        pass
+
     print("  Starting TUI\u2026", flush=True)
     print(flush=True)
 

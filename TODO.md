@@ -9,7 +9,7 @@
 
 ## Transcript accuracy
 - Upgraded live model from tiny.en to base.en for better word recognition
-- Added condition_on_previous_text=True to both live and batch transcription
+- condition_on_previous_text=False on both paths (True caused inference slowdowns)
 - Monitor: "surge" → "search" type errors on clean podcast audio — may need domain-specific prompts
 
 ## CPU usage
@@ -30,9 +30,10 @@
 - Batch timer behavior during pause — should print "Recording paused" markers
 
 ## Startup performance
-- "Loading models" phase takes ~2s (faster-whisper model init)
-- "Importing libraries" delay is mainly faster-whisper + onnxruntime imports
-- Investigate lazy loading or background model init
+- ~~HF Hub network stall: 30-60s delay on model load~~ Fixed: HF_HUB_OFFLINE=1
+- ~~tqdm crash inside Textual: killed all transcription silently~~ Fixed: pre-init tqdm lock before TUI
+- Model loading now ~0.4s with cached base.en
+- Debug log moved to ~/.cache/scarecrow/debug.log (was CWD-relative, lost when iTerm launches from ~)
 
 ## Setup script
 - `scripts/setup.py` references old model cache path logic (dots vs dashes)
