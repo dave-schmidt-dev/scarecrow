@@ -74,7 +74,7 @@ On launch, Scarecrow prints:
 | **Live** (lower pane) | `tiny.en` | Runs continuously, shows real-time captions |
 | **Batch** (upper pane) | `medium.en` | Runs every 30s on buffered audio, produces accurate transcript |
 
-A single 16kHz audio stream feeds both models — the WAV recorder, batch buffer, and RealtimeSTT's live transcription all share one sounddevice input.
+A single 16kHz audio stream feeds both models. Silero VAD (ONNX) detects speech boundaries, triggering live transcription with tiny.en during speech and accurate batch transcription with medium.en every 30 seconds. No subprocesses — everything runs in a single process with one worker thread.
 
 Models are configured in `scarecrow/config.py` or via `scripts/setup.py`.
 
@@ -111,7 +111,8 @@ scarecrow/
   config.py        # model names, audio settings, defaults
   recorder.py      # sounddevice audio capture + WAV writing
   session.py       # timestamped session dirs + transcript files
-  transcriber.py   # RealtimeSTT wrapper, dual-model streaming
+  transcriber.py   # Silero VAD + faster-whisper live transcription
+  models/          # Bundled ONNX models (silero_vad.onnx)
   app.tcss         # TUI stylesheet
 scripts/
   setup.py         # interactive first-time setup

@@ -1,156 +1,290 @@
-"""RealtimeSTT wrapper — dual-model streaming transcription."""
+"""Live transcription — Silero VAD + faster-whisper, no subprocesses."""
 
 from __future__ import annotations
 
 import contextlib
 import logging
-import multiprocessing
+import queue
+import threading
+from collections import deque
 from collections.abc import Callable
+from enum import Enum, auto
 from pathlib import Path
 
-# RealtimeSTT uses torch.multiprocessing internally. Force "spawn" start
-# method to avoid inheriting file descriptors on macOS.
-if multiprocessing.get_start_method(allow_none=True) != "spawn":
-    multiprocessing.set_start_method("spawn", force=True)
-
-from RealtimeSTT import AudioToTextRecorder
+import numpy as np
+import onnxruntime
 
 from scarecrow import config
 
 log = logging.getLogger(__name__)
 
 
-def _trust_silero_vad() -> None:
-    """Add silero-vad to torch hub trusted repos to avoid interactive prompt."""
-    import torch.hub
+# ------------------------------------------------------------------
+# Silero VAD — pure numpy + ONNX, no torch
+# ------------------------------------------------------------------
 
-    hub_dir = Path(torch.hub.get_dir())
-    hub_dir.mkdir(parents=True, exist_ok=True)
-    trusted_list = hub_dir / "trusted_list"
-    entry = "snakers4/silero-vad"
-    if trusted_list.exists() and entry in trusted_list.read_text():
-        return
-    with trusted_list.open("a") as f:
-        f.write(entry + "\n")
+
+class _SileroVAD:
+    """Silero VAD wrapper using ONNX runtime. No torch dependency."""
+
+    def __init__(self) -> None:
+        onnx_path = str(Path(__file__).parent / "models" / "silero_vad.onnx")
+        opts = onnxruntime.SessionOptions()
+        opts.inter_op_num_threads = 1
+        opts.intra_op_num_threads = 1
+        opts.log_severity_level = 3  # suppress ONNX warnings
+        self._session = onnxruntime.InferenceSession(onnx_path, sess_options=opts)
+        self._state = np.zeros((2, 1, 128), dtype=np.float32)
+        self._context = np.zeros((1, 64), dtype=np.float32)
+        self._sr = np.array(16000, dtype=np.int64)
+
+    def __call__(self, chunk: np.ndarray) -> float:
+        """Run VAD on exactly 512 float32 samples. Returns probability."""
+        if chunk.shape[-1] != config.VAD_CHUNK_SAMPLES:
+            msg = f"Expected {config.VAD_CHUNK_SAMPLES} samples, got {chunk.shape[-1]}"
+            raise ValueError(msg)
+
+        x = np.concatenate([self._context, chunk.reshape(1, -1)], axis=1)
+        out, new_state = self._session.run(
+            None,
+            {"input": x, "state": self._state, "sr": self._sr},
+        )
+        self._state = new_state
+        self._context = x[:, -64:]
+        return float(out[0, 0])
+
+    def reset_states(self) -> None:
+        """Reset hidden state between utterances."""
+        self._state = np.zeros((2, 1, 128), dtype=np.float32)
+        self._context = np.zeros((1, 64), dtype=np.float32)
+
+
+# ------------------------------------------------------------------
+# VAD state machine
+# ------------------------------------------------------------------
+
+
+class _VadState(Enum):
+    SILENCE = auto()
+    SPEECH = auto()
+
+
+# ------------------------------------------------------------------
+# Transcriber
+# ------------------------------------------------------------------
 
 
 class Transcriber:
-    """Wraps RealtimeSTT's AudioToTextRecorder for dual-model streaming.
+    """Live transcription with Silero VAD + faster-whisper.
 
-    Uses use_microphone=False so RealtimeSTT does not open its own audio
-    stream. Audio is fed via feed_audio() from the app's AudioRecorder.
+    Single-process, single-thread worker. No torch, no subprocesses.
 
-    Because AudioToTextRecorder creates multiprocessing.Value objects in
-    __init__, it must be constructed BEFORE Textual takes over the terminal
-    (Textual modifies file descriptors, breaking mp semaphore creation).
-
-    Use prepare() before app.run(), then wire callbacks with set_callbacks().
+    Call prepare() before the Textual app starts, then start() to begin
+    processing audio. Feed audio via feed_audio() from the audio callback.
     """
 
     def __init__(
         self,
         on_realtime_update: Callable[[str], None] | None = None,
         on_realtime_stabilized: Callable[[str], None] | None = None,
-        on_final_text: Callable[[str], None] | None = None,
     ) -> None:
         self._on_realtime_update_cb = on_realtime_update
         self._on_realtime_stabilized_cb = on_realtime_stabilized
-        self._on_final_text_cb = on_final_text
-        self.recorder: AudioToTextRecorder | None = None
+        self._vad: _SileroVAD | None = None
+        self._model = None
+        self._queue: queue.Queue[np.ndarray | None] = queue.Queue(maxsize=200)
+        self._worker: threading.Thread | None = None
+        self._ready = False
 
     def set_callbacks(
         self,
         on_realtime_update: Callable[[str], None] | None = None,
         on_realtime_stabilized: Callable[[str], None] | None = None,
-        on_final_text: Callable[[str], None] | None = None,
+        **_kwargs,
     ) -> None:
-        """Wire up callbacks after construction (e.g. once the App exists)."""
+        """Wire up callbacks (e.g. once the App exists)."""
         self._on_realtime_update_cb = on_realtime_update
         self._on_realtime_stabilized_cb = on_realtime_stabilized
-        self._on_final_text_cb = on_final_text
 
     def prepare(self) -> None:
-        """Create the AudioToTextRecorder (loads models, creates mp objects).
+        """Load VAD model and Whisper model. Call before app.run()."""
+        from faster_whisper import WhisperModel
 
-        Must be called BEFORE Textual's app.run() to avoid fds_to_keep errors.
-        """
-        _trust_silero_vad()
-
-        self.recorder = AudioToTextRecorder(
-            # Use tiny.en as main model — we never call text(), so the
-            # transcription subprocess stays idle. This avoids loading
-            # medium.en twice (our batch model loads it separately).
-            model=config.REALTIME_MODEL,
-            language=config.LANGUAGE,
-            # Single audio stream: we feed audio via feed_audio()
-            use_microphone=False,
-            enable_realtime_transcription=True,
-            realtime_model_type=config.REALTIME_MODEL,
-            realtime_processing_pause=config.REALTIME_PROCESSING_PAUSE,
-            use_main_model_for_realtime=True,
-            on_realtime_transcription_update=self._on_realtime_update,
-            on_realtime_transcription_stabilized=self._on_realtime_stabilized,
-            spinner=False,
-            beam_size=config.BEAM_SIZE,
-            beam_size_realtime=config.BEAM_SIZE_REALTIME,
-            no_log_file=True,
+        self._vad = _SileroVAD()
+        self._model = WhisperModel(
+            config.REALTIME_MODEL,
+            device="cpu",
+            compute_type="int8",
         )
+        self._ready = True
 
-    def feed_audio(self, chunk) -> None:
-        """Feed audio data to RealtimeSTT for live transcription."""
-        if self.recorder is not None:
-            self.recorder.feed_audio(
-                chunk,
-                original_sample_rate=config.SAMPLE_RATE,
-            )
-
-    def text(self) -> str:
-        """Block until the next finalized utterance is ready and return it."""
-        result: str = self.recorder.text()  # type: ignore[union-attr]
-        if self._on_final_text_cb is not None:
-            self._on_final_text_cb(result)
-        return result
+    def start(self) -> None:
+        """Start the VAD + transcription worker thread."""
+        if not self._ready:
+            return
+        if self._worker is not None and self._worker.is_alive():
+            return
+        # Drain any stale data from previous session
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+        self._worker = threading.Thread(
+            target=self._run_worker, daemon=True, name="transcriber"
+        )
+        self._worker.start()
 
     def stop(self) -> None:
-        """Stop recording."""
-        if self.recorder is not None:
-            self.recorder.stop()
+        """Signal the worker to stop."""
+        with contextlib.suppress(queue.Full):
+            self._queue.put_nowait(None)
 
     def shutdown(self) -> None:
-        """Full cleanup — stop recorder then kill lingering children."""
-        if self.recorder is not None:
-            # Stop recording first so worker threads wind down
-            with contextlib.suppress(Exception):
-                self.recorder.stop()
-            # Kill child processes directly (avoids 10s join timeouts)
-            for child in multiprocessing.active_children():
-                child.terminate()
-                child.join(timeout=1)
-                if child.is_alive():
-                    child.kill()
-            self.recorder = None
+        """Stop worker and clean up."""
+        self.stop()
+        if self._worker is not None:
+            self._worker.join(timeout=3)
+            self._worker = None
+
+    def feed_audio(self, chunk: np.ndarray) -> None:
+        """Feed audio from the audio callback. Must not block."""
+        if not self._ready:
+            return
+        with contextlib.suppress(queue.Full):
+            self._queue.put_nowait(chunk.copy())
 
     @property
     def is_ready(self) -> bool:
-        """True if prepare() has been called successfully."""
-        return self.recorder is not None
+        return self._ready
 
-    def _on_realtime_update(self, text: str) -> None:
-        snippet = text[:40] if text else ""
-        log.debug(
-            "realtime_update cb=%s text=%s",
-            self._on_realtime_update_cb,
-            snippet,
-        )
-        if self._on_realtime_update_cb is not None:
-            self._on_realtime_update_cb(text)
+    # ------------------------------------------------------------------
+    # Worker thread
+    # ------------------------------------------------------------------
 
-    def _on_realtime_stabilized(self, text: str) -> None:
-        snippet = text[:40] if text else ""
-        log.debug(
-            "realtime_stabilized cb=%s text=%s",
-            self._on_realtime_stabilized_cb,
-            snippet,
-        )
-        if self._on_realtime_stabilized_cb is not None:
+    def _run_worker(self) -> None:
+        """Main loop: dequeue audio → VAD → transcribe."""
+        assert self._vad is not None
+        assert self._model is not None
+
+        vad = self._vad
+        state = _VadState.SILENCE
+        residual = np.array([], dtype=np.float32)
+
+        # Pre-recording buffer: 1.0s of audio before speech detected
+        pre_buf_max = int(config.VAD_PRE_BUFFER_SECONDS * config.SAMPLE_RATE)
+        pre_buffer: deque[np.ndarray] = deque()
+        pre_buffer_samples = 0
+
+        # Speech accumulation
+        speech_audio: list[np.ndarray] = []
+        speech_samples = 0
+        silence_samples = 0
+        last_transcribe_samples = 0
+        transcribe_interval = int(config.REALTIME_PROCESSING_PAUSE * config.SAMPLE_RATE)
+        min_speech = int(config.VAD_MIN_SPEECH_SECONDS * config.SAMPLE_RATE)
+        silence_threshold = int(config.VAD_SILENCE_SECONDS * config.SAMPLE_RATE)
+        chunk_size = config.VAD_CHUNK_SAMPLES
+
+        while True:
+            try:
+                raw = self._queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+
+            if raw is None:
+                # Poison pill — flush any remaining speech
+                if state == _VadState.SPEECH and speech_samples >= min_speech:
+                    self._transcribe_and_notify(speech_audio, stabilized=True)
+                break
+
+            # Convert int16 → float32 normalized
+            if raw.dtype == np.int16:
+                audio = raw.astype(np.float32).squeeze() / 32768.0
+            else:
+                audio = raw.squeeze().astype(np.float32)
+
+            # Append to residual and process in 512-sample chunks
+            residual = np.concatenate([residual, audio])
+
+            while len(residual) >= chunk_size:
+                chunk = residual[:chunk_size]
+                residual = residual[chunk_size:]
+
+                prob = vad(chunk)
+
+                # Update pre-buffer (always, regardless of state)
+                pre_buffer.append(chunk)
+                pre_buffer_samples += chunk_size
+                while pre_buffer_samples > pre_buf_max:
+                    removed = pre_buffer.popleft()
+                    pre_buffer_samples -= len(removed)
+
+                if state == _VadState.SILENCE:
+                    if prob >= config.VAD_THRESHOLD:
+                        # Speech detected — start accumulating
+                        state = _VadState.SPEECH
+                        speech_audio = list(pre_buffer)
+                        speech_samples = pre_buffer_samples
+                        silence_samples = 0
+                        last_transcribe_samples = 0
+                        log.debug("VAD: speech start")
+
+                elif state == _VadState.SPEECH:
+                    speech_audio.append(chunk)
+                    speech_samples += chunk_size
+
+                    if prob < config.VAD_NEG_THRESHOLD:
+                        silence_samples += chunk_size
+                    else:
+                        silence_samples = 0
+
+                    # Periodic transcription during speech
+                    since_last = speech_samples - last_transcribe_samples
+                    if (
+                        since_last >= transcribe_interval
+                        and speech_samples >= min_speech
+                    ):
+                        self._transcribe_and_notify(speech_audio, stabilized=False)
+                        last_transcribe_samples = speech_samples
+
+                    # Utterance end: enough silence
+                    if silence_samples >= silence_threshold:
+                        if speech_samples >= min_speech:
+                            self._transcribe_and_notify(speech_audio, stabilized=True)
+                        state = _VadState.SILENCE
+                        speech_audio = []
+                        speech_samples = 0
+                        silence_samples = 0
+                        vad.reset_states()
+                        log.debug("VAD: speech end")
+
+    def _transcribe_and_notify(
+        self,
+        chunks: list[np.ndarray],
+        *,
+        stabilized: bool,
+    ) -> None:
+        """Transcribe accumulated audio and fire callback."""
+        if not chunks or self._model is None:
+            return
+        audio = np.concatenate(chunks)
+        try:
+            segments, _ = self._model.transcribe(
+                audio,
+                language=config.LANGUAGE,
+                beam_size=config.BEAM_SIZE_REALTIME,
+                vad_filter=False,
+            )
+            text = " ".join(seg.text.strip() for seg in segments).strip()
+        except Exception:
+            log.exception("Realtime transcription failed")
+            return
+
+        if not text:
+            return
+
+        if stabilized and self._on_realtime_stabilized_cb is not None:
             self._on_realtime_stabilized_cb(text)
+        elif not stabilized and self._on_realtime_update_cb is not None:
+            self._on_realtime_update_cb(text)

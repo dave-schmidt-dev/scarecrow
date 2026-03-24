@@ -165,9 +165,12 @@ class ScarecrowApp(App[None]):
         return True
 
     def _show_error(self, message: str) -> None:
-        self.query_one("#captions", RichLog).write(
-            f"[bold red]Error:[/bold red] {message}"
-        )
+        try:
+            self.query_one("#captions", RichLog).write(
+                f"[bold red]Error:[/bold red] {message}"
+            )
+        except Exception:
+            log.error("UI error: %s", message)
 
     # ------------------------------------------------------------------
     # Timer / stats
@@ -183,7 +186,10 @@ class ScarecrowApp(App[None]):
     # ------------------------------------------------------------------
 
     def _sync_info_bar(self) -> None:
-        bar = self.query_one(InfoBar)
+        try:
+            bar = self.query_one(InfoBar)
+        except Exception:
+            return
         bar.state = self.state
         bar.elapsed = self._elapsed
         bar.word_count = self._word_count
@@ -341,8 +347,7 @@ class ScarecrowApp(App[None]):
             self._session = None
             return
 
-        assert self._transcriber.recorder is not None
-        self._transcriber.recorder.start()
+        self._transcriber.start()
 
         self._batch_timer = self.set_interval(
             BATCH_INTERVAL_SECONDS, self._on_batch_tick

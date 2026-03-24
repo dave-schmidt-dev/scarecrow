@@ -1,7 +1,6 @@
 """Entry point for `python -m scarecrow` and the `scarecrow` console script."""
 
 import logging
-import os
 import sys
 import time
 from datetime import datetime
@@ -16,7 +15,6 @@ def _model_cache_path(model_name: str) -> Path | None:
 
 
 def main() -> None:
-    # Log to file for debugging (Textual owns the terminal)
     logging.basicConfig(
         filename="scarecrow_debug.log",
         level=logging.DEBUG,
@@ -27,71 +25,46 @@ def main() -> None:
 
     print(flush=True)
     print("  Scarecrow", flush=True)
-    print("  " + "─" * 40, flush=True)
+    print("  " + "\u2500" * 40, flush=True)
     live = config.REALTIME_MODEL
     batch = config.FINAL_MODEL
     print(f"  Live model:   {live} (always-on, real-time)", flush=True)
     print(f"  Batch model:  {batch} (accurate, every 30s)", flush=True)
 
-    # Show cache status for each model
     models = [("Live", live), ("Batch", batch)]
     for label, model in models:
         cache = _model_cache_path(model)
         if cache:
             print(f"  {label} cache:  {cache}", flush=True)
         else:
-            msg = "not cached — will download on first run"
+            msg = "not cached \u2014 will download on first run"
             print(f"  {label} cache:  {msg}", flush=True)
 
-    # Show where recordings will be saved
     recordings_dir = config.DEFAULT_RECORDINGS_DIR.resolve()
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     print(f"  Recordings:   {recordings_dir}/", flush=True)
     print(f"  This session: {recordings_dir}/{timestamp}/", flush=True)
     print(flush=True)
 
-    print("  Importing libraries…", flush=True)
-
-    # Suppress ctranslate2 C++ float16→float32 warning during model load
-    import ctranslate2
-
-    ctranslate2.set_log_level(logging.ERROR)
+    print("  Loading models\u2026", flush=True)
+    t0 = time.monotonic()
 
     from scarecrow.transcriber import Transcriber
 
-    stderr_fd = sys.stderr.fileno()
-    saved_stderr = os.dup(stderr_fd)
-    devnull = os.open(os.devnull, os.O_WRONLY)
-    os.dup2(devnull, stderr_fd)
-    os.close(devnull)
-
-    t0 = time.monotonic()
-    print(f"  Loading live model ({live})…", flush=True)
     transcriber = Transcriber()
     try:
         transcriber.prepare()
     except Exception as e:
-        os.dup2(saved_stderr, stderr_fd)
-        os.close(saved_stderr)
         print(f"Failed to start transcriber: {e}", file=sys.stderr)
         sys.exit(1)
 
-    os.dup2(saved_stderr, stderr_fd)
-    os.close(saved_stderr)
-
     t1 = time.monotonic()
-    print(f"  Models ready ({t1 - t0:.1f}s)", flush=True)
+    print(f"  Ready ({t1 - t0:.1f}s)", flush=True)
     print(f"  Batch model ({batch}) loads on first use", flush=True)
-    print("  Starting TUI…", flush=True)
+    print("  Starting TUI\u2026", flush=True)
     print(flush=True)
 
-    # Suppress resource_tracker warnings on exit (leaked semaphores from
-    # RealtimeSTT's multiprocessing are cleaned up by our SIGKILL anyway).
-    import warnings
-
     from scarecrow.app import ScarecrowApp
-
-    warnings.filterwarnings("ignore", "resource_tracker:.*semaphore", UserWarning)
 
     app = ScarecrowApp(transcriber=transcriber)
     try:
@@ -99,19 +72,9 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        print("\n  Shutting down…", flush=True)
+        print("\n  Shutting down\u2026", flush=True)
         transcriber.shutdown()
-        # Kill any remaining multiprocessing children (belt and suspenders
-        # — prevents orphaned processes if SIGKILL races with cleanup)
-        import multiprocessing
-
-        for child in multiprocessing.active_children():
-            child.kill()
         print("  Done.", flush=True)
-        # Force exit — RealtimeSTT daemon threads can hang on join.
-        # Use _exit(0) instead of SIGKILL to avoid non-zero exit code
-        # that iTerm interprets as an error.
-        os._exit(0)
 
 
 if __name__ == "__main__":

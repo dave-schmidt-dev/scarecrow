@@ -5,7 +5,8 @@ description = "Always-recording TUI with live captions and transcription"
 requires-python = ">=3.12"
 dependencies = [
     "textual>=1.0",
-    "RealtimeSTT",
+    "faster-whisper",
+    "onnxruntime",
     "sounddevice",
     "soundfile",
     "numpy",
