@@ -58,7 +58,6 @@ class ScarecrowApp(App[None]):
     CSS_PATH = "app.tcss"
 
     BINDINGS: ClassVar[list[Binding]] = [
-        Binding("r", "record", "Record", show=True),
         Binding("p", "pause", "Pause/Resume", show=True),
         Binding("q", "quit", "Quit", show=True),
     ]
@@ -77,26 +76,36 @@ class ScarecrowApp(App[None]):
     def compose(self) -> ComposeResult:
         yield Header()
         yield StatusBar(id="status-bar")
+        yield Static("Transcript", classes="pane-label")
         yield RichLog(id="captions", highlight=True, markup=True, wrap=True)
-        yield Static("", id="live-preview")
+        yield Static("Live", classes="pane-label")
+        yield RichLog(
+            id="live-log", highlight=False, markup=False, wrap=True, auto_scroll=True
+        )
         yield Footer()
 
     def on_mount(self) -> None:
         self._timer = self.set_interval(1, self._tick, pause=True)
         self._sync_status()
-        self._preflight_check()
+        # Auto-start recording immediately
+        self.set_timer(0.1, self._auto_start)
 
-    def _preflight_check(self) -> None:
-        """Verify audio input exists and transcriber is ready."""
+    def _auto_start(self) -> None:
+        """Start recording automatically on launch."""
+        if not self._preflight_check():
+            return
+        self._start_recording()
+
+    def _preflight_check(self) -> bool:
+        """Verify audio input exists and transcriber is ready. Returns True if OK."""
         import sounddevice as sd
 
         try:
             devices = sd.query_devices()
         except Exception:
             log.exception("Failed to query audio devices")
-            self._show_error("Could not query audio devices — recording disabled.")
-            self._disable_record_binding()
-            return
+            self._show_error("Could not query audio devices.")
+            return False
 
         try:
             has_input = any(
@@ -106,23 +115,20 @@ class ScarecrowApp(App[None]):
         except TypeError:
             has_input = devices.get("max_input_channels", 0) > 0  # type: ignore[union-attr]
         if not has_input:
-            self._show_error("No audio input devices found — recording disabled.")
-            self._disable_record_binding()
-            return
+            self._show_error("No audio input devices found.")
+            return False
 
         if self._transcriber is None or not self._transcriber.is_ready:
-            self._show_error("Transcriber not initialized — recording disabled.")
-            self._disable_record_binding()
+            self._show_error("Transcriber not initialized.")
+            return False
+
+        return True
 
     def _show_error(self, message: str) -> None:
         """Write an error message to the captions RichLog."""
         self.query_one("#captions", RichLog).write(
             f"[bold red]Error:[/bold red] {message}"
         )
-
-    def _disable_record_binding(self) -> None:
-        """Remove the 'r' key binding so the user cannot start recording."""
-        self.BINDINGS = [b for b in self.BINDINGS if b.key != "r"]
 
     # ------------------------------------------------------------------
     # Timer
@@ -155,7 +161,6 @@ class ScarecrowApp(App[None]):
     def _transcription_loop(self) -> None:
         """Blocking loop that runs in a worker thread."""
         assert self._transcriber is not None
-        self._safe_call_from_thread(self.update_live_preview, "Listening for speech…")
         while self.state in (AppState.RECORDING, AppState.PAUSED):
             try:
                 text = self._transcriber.text()
@@ -185,26 +190,28 @@ class ScarecrowApp(App[None]):
 
     def _on_realtime_update(self, text: str) -> None:
         if not self._suppress_live:
-            self._safe_call_from_thread(self.update_live_preview, text)
+            self._safe_call_from_thread(self._stream_live_text, text)
 
     def _on_realtime_stabilized(self, text: str) -> None:
         if not self._suppress_live:
-            self._safe_call_from_thread(self.update_live_preview, text)
+            self._safe_call_from_thread(self._stream_live_text, text)
+
+    def _stream_live_text(self, text: str) -> None:
+        """Replace the live log content with the current live text."""
+        live_log = self.query_one("#live-log", RichLog)
+        live_log.clear()
+        live_log.write(text)
 
     # ------------------------------------------------------------------
     # Actions (bound to keys via BINDINGS)
     # ------------------------------------------------------------------
 
-    def action_record(self) -> None:
-        """Start recording — only valid from idle state."""
+    def _start_recording(self) -> None:
+        """Start recording — called on launch or manually."""
         if self.state is not AppState.IDLE:
-            self._show_error(f"Cannot record: state is {self.state.name}")
             return
-        if self._transcriber is None:
-            self._show_error("Transcriber is None — not injected.")
-            return
-        if not self._transcriber.is_ready:
-            self._show_error("Transcriber not ready (recorder shut down).")
+        if self._transcriber is None or not self._transcriber.is_ready:
+            self._show_error("Transcriber not ready.")
             return
 
         # Create session and audio recorder
@@ -251,7 +258,7 @@ class ScarecrowApp(App[None]):
             self._suppress_live = True
             if self._audio_recorder is not None:
                 self._audio_recorder.pause()
-            self.update_live_preview("")
+            self._stream_live_text("")
         elif self.state is AppState.PAUSED:
             self.state = AppState.RECORDING
             self._timer.resume()
@@ -265,11 +272,7 @@ class ScarecrowApp(App[None]):
         self.exit()
 
     def _stop_recording(self) -> None:
-        """Stop recording components and finalize session.
-
-        Note: the transcriber is NOT shut down here — it's owned by
-        __main__.py and persists across recording sessions.
-        """
+        """Stop recording components and finalize session."""
         if self.state not in (AppState.RECORDING, AppState.PAUSED):
             return
 
@@ -278,27 +281,21 @@ class ScarecrowApp(App[None]):
 
         # Cancel worker if still running
         if self._transcription_worker is not None:
-            try:
+            with contextlib.suppress(Exception):
                 if self._transcription_worker.state is WorkerState.RUNNING:
                     self._transcription_worker.cancel()
-            except Exception:
-                log.exception("Error cancelling transcription worker")
             self._transcription_worker = None
 
         # Stop audio recording
         if self._audio_recorder is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self._audio_recorder.stop()
-            except Exception:
-                log.exception("Error stopping audio recorder")
             self._audio_recorder = None
 
         # Finalize session (close transcript file)
         if self._session is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self._session.finalize()
-            except Exception:
-                log.exception("Error finalizing session")
             self._session = None
 
     # ------------------------------------------------------------------
@@ -307,9 +304,10 @@ class ScarecrowApp(App[None]):
 
     def update_live_preview(self, text: str) -> None:
         """Update the live (partial) caption preview."""
-        self.query_one("#live-preview", Static).update(text)
+        self._stream_live_text(text)
 
     def append_caption(self, text: str) -> None:
         """Append settled caption text to the log and clear the live preview."""
         self.query_one("#captions", RichLog).write(text)
-        self.query_one("#live-preview", Static).update("")
+        live_log = self.query_one("#live-log", RichLog)
+        live_log.clear()
