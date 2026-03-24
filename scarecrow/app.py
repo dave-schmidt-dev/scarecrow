@@ -292,13 +292,15 @@ class ScarecrowApp(App[None]):
             self._audio_recorder.sample_rate,
         )
 
+        # Capture elapsed time now (at dispatch), not when result arrives
+        batch_elapsed = self._elapsed
         self.run_worker(
-            lambda: self._run_batch(audio),
+            lambda: self._run_batch(audio, batch_elapsed),
             thread=True,
             name="batch-transcribe",
         )
 
-    def _run_batch(self, audio) -> None:
+    def _run_batch(self, audio, batch_elapsed: int) -> None:
         """Run medium.en on audio chunk (called in worker thread)."""
         from scarecrow import config
 
@@ -313,7 +315,7 @@ class ScarecrowApp(App[None]):
             text = " ".join(seg.text.strip() for seg in segments)
             log.debug("Batch result: %r", text[:100] if text else "")
             if text.strip():
-                self._safe_call(self._append_transcript, text.strip())
+                self._safe_call(self._append_transcript, text.strip(), batch_elapsed)
         except Exception:
             log.exception("Batch transcription failed")
 
@@ -331,15 +333,16 @@ class ScarecrowApp(App[None]):
             )
         return self._batch_model
 
-    def _append_transcript(self, text: str) -> None:
+    def _append_transcript(self, text: str, batch_elapsed: int | None = None) -> None:
         """Append batch-transcribed text to the transcript pane and file."""
         captions = self.query_one("#captions", RichLog)
         # Divider between batches showing transcript path
         if self._session is not None:
             path = self._session.transcript_path
-            h = self._elapsed // 3600
-            m = (self._elapsed % 3600) // 60
-            s = self._elapsed % 60
+            elapsed = batch_elapsed if batch_elapsed is not None else self._elapsed
+            h = elapsed // 3600
+            m = (elapsed % 3600) // 60
+            s = elapsed % 60
             ts = f"{h:02d}:{m:02d}:{s:02d}"
             captions.write(f"[dim]\u2500\u2500 {ts} \u00b7 {path} \u2500\u2500[/dim]")
         captions.write(text)

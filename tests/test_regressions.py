@@ -115,7 +115,7 @@ def test_batch_passes_audio_directly_at_16khz() -> None:
 
     # Run batch — audio should pass through unchanged
     with patch.object(app, "_safe_call"):
-        app._run_batch(audio_16k)
+        app._run_batch(audio_16k, batch_elapsed=30)
 
     mock_model.transcribe.assert_called_once()
     transcribed_audio = mock_model.transcribe.call_args[0][0]

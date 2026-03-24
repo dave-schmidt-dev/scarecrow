@@ -117,17 +117,17 @@ class Transcriber:
             self.recorder.stop()
 
     def shutdown(self) -> None:
-        """Full cleanup — kill child processes directly for fast exit."""
+        """Full cleanup — stop recorder then kill lingering children."""
         if self.recorder is not None:
-            # Skip recorder.shutdown() which has 10s join timeouts.
-            # Just kill children directly.
+            # Stop recording first so worker threads wind down
+            with contextlib.suppress(Exception):
+                self.recorder.stop()
+            # Kill child processes directly (avoids 10s join timeouts)
             for child in multiprocessing.active_children():
                 child.terminate()
                 child.join(timeout=1)
                 if child.is_alive():
                     child.kill()
-            with contextlib.suppress(Exception):
-                self.recorder.shutdown()
             self.recorder = None
 
     @property
