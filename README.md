@@ -86,8 +86,10 @@ Each recording session creates a timestamped directory:
 recordings/
   2026-03-24_07-48-36/
     audio.wav          # full recording (16kHz PCM16)
-    transcript.txt     # batch transcription output
+    transcript.txt     # batch transcription output, with timestamped dividers
 ```
+
+Audio is saved as uncompressed WAV (~1.8 MB/min at 16kHz mono) rather than MP3 (~120 KB/min). WAV writes raw PCM samples directly in the audio callback with zero CPU overhead — no encoder running in the hot path. Given that transcription models already demand significant CPU, this keeps the recording layer as lightweight as possible.
 
 ## Development
 

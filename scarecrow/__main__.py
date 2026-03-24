@@ -102,6 +102,12 @@ def main() -> None:
     finally:
         print("\n  Shutting down…", flush=True)
         transcriber.shutdown()
+        # Kill any remaining multiprocessing children (belt and suspenders
+        # — prevents orphaned processes if SIGKILL races with cleanup)
+        import multiprocessing
+
+        for child in multiprocessing.active_children():
+            child.kill()
         print("  Done.", flush=True)
         # Force exit — RealtimeSTT daemon threads can hang on join
         os.kill(os.getpid(), signal.SIGKILL)
