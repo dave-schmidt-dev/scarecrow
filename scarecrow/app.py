@@ -74,19 +74,29 @@ class InfoBar(Static):
 
 
 class AudioMeter(Static):
-    """Simple text-based audio level indicator."""
+    """Simple text-based audio level indicator using dB scale."""
 
     level: reactive[float] = reactive(0.0)
 
     def render(self) -> Text:
+        import math
+
         t = Text()
         t.append(" mic ", style="dim")
-        bars = int(self.level * 20)
+        # Convert linear 0-1 to dB-ish scale for useful visual range.
+        # -60 dB (silence) → 0%, -6 dB (loud) → 100%
+        if self.level > 0.0:
+            db = 20 * math.log10(max(self.level, 1e-6))
+            # Map -60..0 dB to 0..1
+            normalized = max(0.0, min(1.0, (db + 60) / 60))
+        else:
+            normalized = 0.0
+        bars = int(normalized * 20)
         filled = "\u2588" * bars
         empty = "\u2591" * (20 - bars)
-        if self.level > 0.8:
+        if normalized > 0.85:
             t.append(filled, style="bold red")
-        elif self.level > 0.4:
+        elif normalized > 0.6:
             t.append(filled, style="bold yellow")
         else:
             t.append(filled, style="bold green")
@@ -99,6 +109,7 @@ class ScarecrowApp(App[None]):
 
     TITLE = "Scarecrow"
     CSS_PATH = "app.tcss"
+    ENABLE_COMMAND_PALETTE = False
 
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("p", "pause", "Pause/Resume", show=True),
@@ -135,7 +146,13 @@ class ScarecrowApp(App[None]):
             f"every {BATCH_INTERVAL_SECONDS}s)[/dim]",
             classes="pane-label",
         )
-        yield RichLog(id="captions", highlight=True, markup=True, wrap=True)
+        yield RichLog(
+            id="captions",
+            highlight=True,
+            markup=True,
+            wrap=True,
+            min_width=0,
+        )
         yield Static(
             f"Live  [dim]({config.REALTIME_MODEL})[/dim]",
             classes="pane-label",
@@ -145,6 +162,7 @@ class ScarecrowApp(App[None]):
             highlight=False,
             markup=False,
             wrap=True,
+            min_width=0,
             auto_scroll=True,
         )
         yield Footer()
@@ -331,7 +349,16 @@ class ScarecrowApp(App[None]):
 
     def _append_transcript(self, text: str) -> None:
         """Append batch-transcribed text to the transcript pane and file."""
-        self.query_one("#captions", RichLog).write(text)
+        captions = self.query_one("#captions", RichLog)
+        # Divider between batches showing transcript path
+        if self._session is not None:
+            path = self._session.transcript_path
+            h = self._elapsed // 3600
+            m = (self._elapsed % 3600) // 60
+            s = self._elapsed % 60
+            ts = f"{h:02d}:{m:02d}:{s:02d}"
+            captions.write(f"[dim]\u2500\u2500 {ts} \u00b7 {path} \u2500\u2500[/dim]")
+        captions.write(text)
         if self._session is not None:
             self._session.append_sentence(text)
         words = len(text.split())
@@ -405,6 +432,10 @@ class ScarecrowApp(App[None]):
 
     def action_quit(self) -> None:
         self._update_live("Shutting down\u2026")
+        # Defer stop so the live pane renders "Shutting down" first
+        self.set_timer(0.05, self._deferred_quit)
+
+    def _deferred_quit(self) -> None:
         self._stop_recording()
         self.exit()
 
