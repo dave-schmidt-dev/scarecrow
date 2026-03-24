@@ -1,0 +1,19 @@
+{
+  "Profiles": [
+    {
+      "Name": "Scarecrow",
+      "Guid": "scarecrow-tui-profile-001",
+      "Normal Font": "Monaco 16",
+      "Horizontal Spacing": 1.0,
+      "Vertical Spacing": 1.1,
+      "Columns": 100,
+      "Rows": 30,
+      "Title Components": 2,
+      "Custom Window Title": "Scarecrow",
+      "Custom Command": "Yes",
+      "Command": "/bin/zsh -lc '$HOME/.local/bin/uv run --project $HOME/path/to/scarecrow scarecrow; rc=$?; if [ $rc -ne 0 ]; then echo; echo \"Scarecrow exited with error. Press Enter to close.\"; read; else sleep 3; fi'",
+      "Session Close Undo Timeout": 0,
+      "Prompt Before Closing 2": 0
+    }
+  ]
+}
