@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+import multiprocessing
 from collections.abc import Callable
 from pathlib import Path
 
 import torch.hub
+
+# RealtimeSTT uses torch.multiprocessing.Process internally. On macOS under
+# Textual, the default "fork" start method inherits file descriptors that
+# Textual has modified, causing "bad value(s) in fds_to_keep". Force "spawn"
+# to avoid inheriting FDs.
+if multiprocessing.get_start_method(allow_none=True) != "spawn":
+    multiprocessing.set_start_method("spawn", force=True)
+
 from RealtimeSTT import AudioToTextRecorder
 
 from scarecrow import config
