@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from textual.widgets import RichLog
 
-from scarecrow.app import AppState, AudioMeter, InfoBar, ScarecrowApp
+from scarecrow.app import AppState, InfoBar, ScarecrowApp
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -73,13 +73,6 @@ async def test_info_bar_present() -> None:
         bar = app.query_one(InfoBar)
         assert bar is not None
         assert bar.state is AppState.IDLE
-
-
-async def test_audio_meter_present() -> None:
-    async with _app().run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        meter = app.query_one(AudioMeter)
-        assert meter is not None
 
 
 @patch("scarecrow.app.AudioRecorder")
@@ -176,7 +169,10 @@ async def test_timer_starts_on_auto_record(mock_session_cls, mock_recorder_cls) 
 
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
-async def test_timer_pauses_when_paused(mock_session_cls, mock_recorder_cls) -> None:
+async def test_timer_keeps_running_when_paused(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """Elapsed timer tracks total session time, including paused periods."""
     mock_recorder_cls.return_value = _mock_recorder()
     mock_session_cls.return_value = MagicMock()
 
@@ -186,7 +182,7 @@ async def test_timer_pauses_when_paused(mock_session_cls, mock_recorder_cls) -> 
         await pilot.press("p")
         elapsed_at_pause = app._elapsed
         await pilot.pause(delay=2)
-        assert app._elapsed == elapsed_at_pause
+        assert app._elapsed > elapsed_at_pause
 
 
 # ---------------------------------------------------------------------------

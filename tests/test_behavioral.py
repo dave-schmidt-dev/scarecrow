@@ -5,17 +5,14 @@ These tests verify observable contracts, not implementation details.
 
 from __future__ import annotations
 
-import math
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 from textual.widgets import RichLog
 
 from scarecrow.app import (
     BATCH_INTERVAL_SECONDS,
     AppState,
-    AudioMeter,
     InfoBar,
     ScarecrowApp,
 )
@@ -53,60 +50,7 @@ def _app(with_transcriber: bool = False) -> ScarecrowApp:
 
 
 # ---------------------------------------------------------------------------
-# 1. AudioMeter renders with dB scale
-# ---------------------------------------------------------------------------
-
-
-def test_audio_meter_zero_level_renders_zero_bars() -> None:
-    """level=0.0 must produce zero filled bars in the rendered text."""
-    meter = AudioMeter()
-    meter._reactive_level = 0.0  # set reactive directly without running app
-    # Render directly — the meter has no app context needed for render()
-    rendered = meter.render()
-    text_plain = rendered.plain
-    # All 20 slots should be light-shade (░), none filled (█)
-    assert "\u2588" not in text_plain, "Zero level must produce no filled bars"
-    assert "\u2591" in text_plain, "Zero level must produce empty-bar characters"
-
-
-@pytest.mark.parametrize("linear_level", [0.01, 0.02, 0.05])
-def test_audio_meter_speech_levels_produce_visible_bars(linear_level: float) -> None:
-    """Typical speech levels (0.01-0.05 linear) must produce at least 1 filled bar.
-
-    The dB scale maps -60dB..0dB to 0..100%, so 0.01 linear ~= -40dB ~= 33%.
-    That should yield several visible bars -- not zero.
-    """
-    meter = AudioMeter()
-    meter._reactive_level = linear_level
-
-    rendered = meter.render()
-    text_plain = rendered.plain
-
-    assert "\u2588" in text_plain, (
-        f"Speech-level input {linear_level} must produce at least one filled bar"
-    )
-
-
-def test_audio_meter_db_scale_math_is_correct() -> None:
-    """Verify the dB → bar count math matches the expected formula."""
-    # level=0.01 → db = 20*log10(0.01) = -40dB
-    # normalized = (-40 + 60) / 60 = 20/60 ≈ 0.333
-    # bars = int(0.333 * 20) = 6
-    level = 0.01
-    db = 20 * math.log10(level)
-    normalized = max(0.0, min(1.0, (db + 60) / 60))
-    expected_bars = int(normalized * 20)
-    assert expected_bars >= 1, "Math should yield at least 1 bar for 0.01 linear"
-
-    meter = AudioMeter()
-    meter._reactive_level = level
-    rendered = meter.render()
-    filled_count = rendered.plain.count("\u2588")
-    assert filled_count == expected_bars
-
-
-# ---------------------------------------------------------------------------
-# 2. RichLog widgets are created with wrap=True and min_width=0
+# 1. RichLog widgets are created with wrap=True and min_width=0
 # ---------------------------------------------------------------------------
 
 

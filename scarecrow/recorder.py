@@ -120,10 +120,16 @@ class AudioRecorder:
     def pause(self) -> None:
         with self._lock:
             self._paused = True
+        # Stop the stream to release the microphone
+        if self._stream is not None:
+            self._stream.stop()
 
     def resume(self) -> None:
         with self._lock:
             self._paused = False
+        # Restart the stream to re-acquire the microphone
+        if self._stream is not None:
+            self._stream.start()
 
     def stop(self) -> Path:
         with self._lock:

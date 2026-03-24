@@ -14,19 +14,6 @@ Screen {
     background: $panel;
 }
 
-/* ── Audio meter + sparkline ── */
-
-#audio-meter {
-    height: 1;
-    padding: 0 1;
-    background: $panel;
-}
-
-#audio-spark {
-    height: 2;
-    margin: 0 1;
-}
-
 /* ── Pane labels ── */
 
 .pane-label {

@@ -2,7 +2,6 @@
 
 import logging
 import os
-import signal
 import sys
 import time
 from datetime import datetime
@@ -109,8 +108,10 @@ def main() -> None:
         for child in multiprocessing.active_children():
             child.kill()
         print("  Done.", flush=True)
-        # Force exit — RealtimeSTT daemon threads can hang on join
-        os.kill(os.getpid(), signal.SIGKILL)
+        # Force exit — RealtimeSTT daemon threads can hang on join.
+        # Use _exit(0) instead of SIGKILL to avoid non-zero exit code
+        # that iTerm interprets as an error.
+        os._exit(0)
 
 
 if __name__ == "__main__":
