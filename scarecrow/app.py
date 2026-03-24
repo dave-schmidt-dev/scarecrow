@@ -1,8 +1,7 @@
-"""Textual TUI application — main entry point for the scarecrow UI."""
+"""Textual TUI application for Scarecrow."""
 
 from __future__ import annotations
 
-import contextlib
 import logging
 from enum import Enum, auto
 from typing import TYPE_CHECKING, ClassVar
@@ -10,11 +9,15 @@ from typing import TYPE_CHECKING, ClassVar
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.containers import VerticalScroll
+from textual.css.query import NoMatches
 from textual.reactive import reactive
 from textual.widgets import Footer, RichLog, Static
 
+from scarecrow import config
 from scarecrow.recorder import AudioRecorder
 from scarecrow.session import Session
+from scarecrow.transcriber import TranscriberBindings
 
 if TYPE_CHECKING:
     from scarecrow.transcriber import Transcriber
@@ -30,10 +33,6 @@ class AppState(Enum):
     PAUSED = auto()
 
 
-# ------------------------------------------------------------------
-# Custom widgets
-# ------------------------------------------------------------------
-
 _STATE_STYLE: dict[AppState, tuple[str, str, str]] = {
     AppState.IDLE: ("IDLE", "dim", ""),
     AppState.RECORDING: ("REC", "bold white on dark_red", "\U0001f3a4"),
@@ -42,40 +41,49 @@ _STATE_STYLE: dict[AppState, tuple[str, str, str]] = {
 
 
 class InfoBar(Static):
-    """Top bar: state + mic indicator, elapsed time, word count, batch countdown."""
+    """Top bar with state, elapsed time, word count, countdown, and status."""
 
     state: reactive[AppState] = reactive(AppState.IDLE)
     elapsed: reactive[int] = reactive(0)
     word_count: reactive[int] = reactive(0)
     batch_countdown: reactive[int] = reactive(BATCH_INTERVAL_SECONDS)
+    status_message: reactive[str] = reactive("")
+    status_is_error: reactive[bool] = reactive(False)
 
     def render(self) -> Text:
         label, style, icon = _STATE_STYLE[self.state]
-        t = Text()
-        t.append(f" {label} ", style=style)
+        text = Text()
+        text.append(f" {label} ", style=style)
         if icon:
-            t.append(f" {icon}", style="")
-        t.append("  ", style="")
+            text.append(f" {icon}")
+        text.append("  ")
 
         h = self.elapsed // 3600
         m = (self.elapsed % 3600) // 60
         s = self.elapsed % 60
-        t.append(f"{h:02d}:{m:02d}:{s:02d}", style="bold")
-        t.append("  ", style="")
+        text.append(f"{h:02d}:{m:02d}:{s:02d}", style="bold")
+        text.append("  ")
 
-        t.append(f"{self.word_count}", style="bold")
-        t.append(" words", style="dim")
-        t.append("  ", style="")
+        text.append(f"{self.word_count}", style="bold")
+        text.append(" words", style="dim")
+        text.append("  ")
 
         if self.state in (AppState.RECORDING, AppState.PAUSED):
-            t.append("batch ", style="dim")
-            t.append(f"{self.batch_countdown}s", style="bold")
+            text.append("batch ", style="dim")
+            text.append(f"{self.batch_countdown}s", style="bold")
 
-        return t
+        if self.status_message:
+            text.append("  ")
+            text.append(
+                self.status_message,
+                style="bold red" if self.status_is_error else "dim",
+            )
+
+        return text
 
 
 class ScarecrowApp(App[None]):
-    """Scarecrow — always-recording TUI with live captions."""
+    """Always-recording TUI with realtime and batch transcription."""
 
     TITLE = "Scarecrow"
     CSS_PATH = "app.tcss"
@@ -96,17 +104,19 @@ class ScarecrowApp(App[None]):
         self._session: Session | None = None
         self._audio_recorder: AudioRecorder | None = None
         self._transcriber: Transcriber | None = transcriber
-        self._suppress_live: bool = False
-        self._has_partial: bool = False
         self._live_stable: list[str] = []
+        self._live_partial: str = ""
+        self._status_message: str = ""
+        self._status_is_error = False
+        self._shutdown_summary = ""
 
     def compose(self) -> ComposeResult:
-        from scarecrow import config
-
         yield InfoBar(id="info-bar")
         yield Static(
-            f"Transcript  [dim]({config.FINAL_MODEL} \u00b7 "
-            f"every {BATCH_INTERVAL_SECONDS}s)[/dim]",
+            (
+                f"Transcript  [dim]({config.FINAL_MODEL} · "
+                f"every {BATCH_INTERVAL_SECONDS}s)[/dim]"
+            ),
             classes="pane-label",
         )
         yield RichLog(
@@ -120,14 +130,8 @@ class ScarecrowApp(App[None]):
             f"Live  [dim]({config.REALTIME_MODEL})[/dim]",
             classes="pane-label",
         )
-        yield RichLog(
-            id="live-log",
-            highlight=False,
-            markup=False,
-            wrap=True,
-            min_width=0,
-            auto_scroll=True,
-        )
+        with VerticalScroll(id="live-pane"):
+            yield Static(id="live-content")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -136,26 +140,24 @@ class ScarecrowApp(App[None]):
         self.set_timer(0.1, self._auto_start)
 
     def _auto_start(self) -> None:
-        if not self._preflight_check():
-            return
-        self._start_recording()
+        if self._preflight_check():
+            self._start_recording()
 
     def _preflight_check(self) -> bool:
         import sounddevice as sd
 
         try:
             devices = sd.query_devices()
-        except Exception:
-            self._show_error("Could not query audio devices.")
+        except Exception as exc:
+            log.exception("Audio device query failed")
+            self._show_error(f"Could not query audio devices: {exc}")
             return False
 
         try:
-            has_input = any(
-                d.get("max_input_channels", 0) > 0  # type: ignore[union-attr]
-                for d in devices
-            )
+            has_input = any(d.get("max_input_channels", 0) > 0 for d in devices)
         except TypeError:
-            has_input = devices.get("max_input_channels", 0) > 0  # type: ignore[union-attr]
+            has_input = devices.get("max_input_channels", 0) > 0
+
         if not has_input:
             self._show_error("No audio input devices found.")
             return False
@@ -166,152 +168,143 @@ class ScarecrowApp(App[None]):
 
         return True
 
-    def _show_error(self, message: str) -> None:
-        try:
-            self.query_one("#captions", RichLog).write(
-                f"[bold red]Error:[/bold red] {message}"
-            )
-        except Exception:
-            log.error("UI error: %s", message)
-
-    # ------------------------------------------------------------------
-    # Timer / stats
-    # ------------------------------------------------------------------
-
     def _tick(self) -> None:
         self._elapsed += 1
         self._batch_countdown = max(0, self._batch_countdown - 1)
         self._sync_info_bar()
 
-    # ------------------------------------------------------------------
-    # Info bar sync
-    # ------------------------------------------------------------------
-
     def _sync_info_bar(self) -> None:
+        if not self.is_mounted:
+            return
         try:
             bar = self.query_one(InfoBar)
-        except Exception:
+        except NoMatches:
             return
         bar.state = self.state
         bar.elapsed = self._elapsed
         bar.word_count = self._word_count
         bar.batch_countdown = self._batch_countdown
+        bar.status_message = self._status_message
+        bar.status_is_error = self._status_is_error
 
     def watch_state(self, _new_state: AppState) -> None:
         self._sync_info_bar()
 
-    # ------------------------------------------------------------------
-    # Live pane — driven by RealtimeSTT callbacks (tiny.en, continuous)
-    # ------------------------------------------------------------------
+    def _set_status(self, message: str, *, error: bool = False) -> None:
+        self._status_message = message
+        self._status_is_error = error
+        self._sync_info_bar()
 
-    def _safe_call(self, callback, *args) -> None:
-        with contextlib.suppress(RuntimeError):
+    def _show_error(self, message: str) -> None:
+        self._set_status(message, error=True)
+        if not self.is_mounted:
+            log.error("UI error before mount: %s", message)
+            return
+        try:
+            self.query_one("#captions", RichLog).write(
+                f"[bold red]Error:[/bold red] {message}"
+            )
+        except NoMatches:
+            log.error("Error pane unavailable: %s", message)
+
+    def _post_to_ui(self, callback, *args) -> None:
+        try:
             self.call_from_thread(callback, *args)
+        except RuntimeError:
+            log.exception("Failed to deliver callback to Textual UI thread")
+
+    def _bind_transcriber(self) -> None:
+        if self._transcriber is None:
+            return
+        self._transcriber.bind(
+            TranscriberBindings(
+                on_realtime_update=self._on_realtime_update,
+                on_realtime_stabilized=self._on_realtime_stabilized,
+                on_batch_result=self._on_batch_result,
+                on_error=self._on_transcriber_error,
+            )
+        )
 
     def _on_realtime_update(self, text: str) -> None:
-        if not self._suppress_live and text:
-            self._safe_call(self._update_live_partial, text)
+        if text:
+            self._post_to_ui(self._set_live_partial, text)
 
     def _on_realtime_stabilized(self, text: str) -> None:
-        if not self._suppress_live and text:
-            self._safe_call(self._append_live, text)
+        if text:
+            self._post_to_ui(self._append_live, text)
 
-    def _update_live(self, text: str) -> None:
-        """System message — clears pane entirely."""
-        live_log = self.query_one("#live-log", RichLog)
-        live_log.clear()
-        self._live_stable.clear()
-        live_log.write(text)
-        self._has_partial = False
+    def _on_batch_result(self, text: str, batch_elapsed: int) -> None:
+        self._post_to_ui(self._append_transcript, text, batch_elapsed)
 
-    def _update_live_partial(self, text: str) -> None:
-        """Replace the in-progress line at the bottom (stable lines preserved)."""
-        live_log = self.query_one("#live-log", RichLog)
-        with self.batch_update():
-            live_log.clear()
-            for line in self._live_stable:
-                live_log.write(line)
-            live_log.write(Text(text, style="dim"))
-        self._has_partial = True
+    def _on_transcriber_error(self, source: str, message: str) -> None:
+        self._post_to_ui(self._show_error, f"{source}: {message}")
+
+    def _render_live(self) -> None:
+        if not self.is_mounted:
+            return
+        try:
+            content = self.query_one("#live-content", Static)
+            pane = self.query_one("#live-pane", VerticalScroll)
+        except NoMatches:
+            return
+
+        text = Text()
+        visible_lines = self._live_stable[-config.LIVE_HISTORY_LIMIT :]
+        for index, line in enumerate(visible_lines):
+            if index:
+                text.append("\n")
+            text.append(line)
+        if self._live_partial:
+            if visible_lines:
+                text.append("\n")
+            text.append(self._live_partial, style="dim")
+        content.update(text if text.plain else "Listening…")
+        self.call_after_refresh(pane.scroll_end, animate=False)
+
+    def _set_live_partial(self, text: str) -> None:
+        self._live_partial = text
+        if self.state is AppState.RECORDING:
+            self._set_status("Listening…")
+        self._render_live()
 
     def _append_live(self, text: str) -> None:
-        """Promote text to a stable line (permanent, scrollable)."""
         self._live_stable.append(text)
-        if len(self._live_stable) > 50:
-            self._live_stable.pop(0)
-        live_log = self.query_one("#live-log", RichLog)
-        with self.batch_update():
-            live_log.clear()
-            for line in self._live_stable:
-                live_log.write(line)
-        self._has_partial = False
+        if len(self._live_stable) > config.LIVE_HISTORY_LIMIT:
+            self._live_stable = self._live_stable[-config.LIVE_HISTORY_LIMIT :]
+        self._live_partial = ""
+        if self.state is AppState.RECORDING:
+            self._set_status("Listening…")
+        self._render_live()
 
-    # ------------------------------------------------------------------
-    # Transcript pane — batch transcription with medium.en every 30s
-    # ------------------------------------------------------------------
+    def _update_live_message(self, text: str) -> None:
+        self._live_stable = [text]
+        self._live_partial = ""
+        self._render_live()
+
+    def _update_live(self, text: str) -> None:
+        """Backward-compatible full live pane update helper."""
+        self._update_live_message(text)
+
+    def _update_live_partial(self, text: str) -> None:
+        """Backward-compatible partial update helper."""
+        self._set_live_partial(text)
 
     def _batch_transcribe(self) -> None:
-        """Drain audio buffer and transcribe with medium.en in a worker."""
-        log.debug("batch_transcribe called, state=%s", self.state)
         if self._audio_recorder is None or self._transcriber is None:
-            log.debug("batch_transcribe: no recorder or transcriber")
             return
 
         audio = self._audio_recorder.drain_buffer()
         if audio is None or len(audio) == 0:
-            log.debug("batch_transcribe: no audio in buffer")
             return
-
-        log.debug(
-            "batch_transcribe: got %d samples (%.1fs at %dHz)",
-            len(audio),
-            len(audio) / self._audio_recorder.sample_rate,
-            self._audio_recorder.sample_rate,
-        )
 
         batch_elapsed = self._elapsed
         self.run_worker(
-            lambda: self._run_batch(audio, batch_elapsed),
+            lambda: self._transcriber.transcribe_batch(audio, batch_elapsed),
             thread=True,
             name="batch-transcribe",
         )
 
-    def _run_batch(self, audio, batch_elapsed: int) -> None:
-        """Run medium.en on audio chunk (called in worker thread)."""
-        from scarecrow import config
-
-        try:
-            model = self._get_batch_model()
-            segments, _ = model.transcribe(
-                audio,
-                language=config.LANGUAGE,
-                beam_size=config.BEAM_SIZE,
-                vad_filter=True,
-                condition_on_previous_text=False,
-            )
-            text = " ".join(seg.text.strip() for seg in segments)
-            log.debug("Batch result: %r", text[:100] if text else "")
-            if text.strip():
-                self._safe_call(self._append_transcript, text.strip(), batch_elapsed)
-        except Exception:
-            log.exception("Batch transcription failed")
-
-    def _get_batch_model(self):
-        """Lazily load the batch transcription model."""
-        if not hasattr(self, "_batch_model"):
-            from faster_whisper import WhisperModel
-
-            from scarecrow import config
-
-            self._batch_model = WhisperModel(
-                config.FINAL_MODEL,
-                device="cpu",
-                compute_type="int8",
-            )
-        return self._batch_model
-
     def _append_transcript(self, text: str, batch_elapsed: int | None = None) -> None:
-        """Append batch-transcribed text to the transcript pane and file."""
         captions = self.query_one("#captions", RichLog)
         if self._session is not None:
             path = self._session.transcript_path
@@ -320,77 +313,66 @@ class ScarecrowApp(App[None]):
             m = (elapsed % 3600) // 60
             s = elapsed % 60
             ts = f"{h:02d}:{m:02d}:{s:02d}"
-            divider = f"\u2500\u2500 {ts} \u00b7 {path} \u2500\u2500"
+            divider = f"── {ts} · {path} ──"
             captions.write(f"[dim]{divider}[/dim]")
             self._session.append_sentence(f"\n{divider}")
         captions.write(text)
         if self._session is not None:
             self._session.append_sentence(text)
-        words = len(text.split())
-        self._word_count += words
+        self._word_count += len(text.split())
+        self._set_status("Listening…" if self.state is AppState.RECORDING else "")
         self._sync_info_bar()
 
     def _write_pause_marker(self) -> None:
-        """Write a 'Recording paused' marker to transcript pane and file."""
         h = self._elapsed // 3600
         m = (self._elapsed % 3600) // 60
         s = self._elapsed % 60
         ts = f"{h:02d}:{m:02d}:{s:02d}"
-        marker = f"\u2500\u2500 {ts} \u00b7 Recording paused \u2500\u2500"
+        marker = f"── {ts} · Recording paused ──"
         self.query_one("#captions", RichLog).write(f"[dim]{marker}[/dim]")
         if self._session is not None:
             self._session.append_sentence(f"\n{marker}")
 
-    # ------------------------------------------------------------------
-    # Actions
-    # ------------------------------------------------------------------
-
     def _start_recording(self) -> None:
-        from scarecrow import config
-
         if self.state is not AppState.IDLE:
             return
         if self._transcriber is None or not self._transcriber.is_ready:
             self._show_error("Transcriber not ready.")
             return
 
-        self._session = Session()
+        self._bind_transcriber()
+        self._session = Session(base_dir=config.DEFAULT_RECORDINGS_DIR)
         self._audio_recorder = AudioRecorder(
             output_path=self._session.audio_path,
             sample_rate=config.SAMPLE_RATE,
-            on_audio=self._transcriber.feed_audio,
-        )
-
-        self._transcriber.set_callbacks(
-            on_realtime_update=self._on_realtime_update,
-            on_realtime_stabilized=self._on_realtime_stabilized,
+            on_audio=self._transcriber.accept_audio,
         )
 
         try:
             self._audio_recorder.start()
+            self._transcriber.begin_session()
         except Exception as exc:
-            log.exception("Failed to start audio recorder")
-            self._show_error(f"Could not start audio recorder: {exc}")
+            log.exception("Failed to start recording session")
+            self._show_error(f"Could not start recording session: {exc}")
             self._audio_recorder = None
             self._session = None
             return
 
-        self._transcriber.start()
-
         self._batch_timer = self.set_interval(
-            BATCH_INTERVAL_SECONDS, self._on_batch_tick
+            BATCH_INTERVAL_SECONDS,
+            self._on_batch_tick,
         )
-
         self._elapsed = 0
         self._batch_countdown = BATCH_INTERVAL_SECONDS
         self._word_count = 0
-        self._suppress_live = False
+        self._live_stable = []
+        self._live_partial = ""
         self.state = AppState.RECORDING
         self._tick_timer.resume()
-        self._update_live("Listening\u2026")
+        self._set_status("Listening…")
+        self._update_live("Listening…")
 
     def _on_batch_tick(self) -> None:
-        """Called every BATCH_INTERVAL_SECONDS."""
         self._batch_countdown = BATCH_INTERVAL_SECONDS
         self._sync_info_bar()
         if self.state is AppState.RECORDING:
@@ -400,33 +382,31 @@ class ScarecrowApp(App[None]):
 
     def action_pause(self) -> None:
         if self.state is AppState.RECORDING:
-            # Transcribe any buffered audio before pausing
             self._batch_transcribe()
             self.state = AppState.PAUSED
-            self._suppress_live = True
-            self._update_live("Paused")
             if self._audio_recorder is not None:
                 self._audio_recorder.pause()
+            self._set_status("Paused")
+            self._update_live("Paused")
             self._write_pause_marker()
-            # Timer keeps running — elapsed tracks total session time
-        elif self.state is AppState.PAUSED:
+            return
+
+        if self.state is AppState.PAUSED:
             self.state = AppState.RECORDING
-            self._suppress_live = False
             if self._audio_recorder is not None:
                 self._audio_recorder.resume()
-            self._update_live("Listening\u2026")
-            # Reset batch countdown on resume for clean intervals
             self._batch_countdown = BATCH_INTERVAL_SECONDS
+            self._set_status("Listening…")
+            self._update_live("Listening…")
             self._sync_info_bar()
 
     def action_quit(self) -> None:
         self._shutdown_summary = self._collect_shutdown_metrics()
-        self._update_live("Shutting down\u2026")
-        # Brief pause so the message is visible before TUI closes
+        self._set_status("Shutting down…")
+        self._update_live("Shutting down…")
         self.set_timer(0.3, self._deferred_quit)
 
     def _collect_shutdown_metrics(self) -> str:
-        """Collect session metrics for post-TUI terminal output."""
         h = self._elapsed // 3600
         m = (self._elapsed % 3600) // 60
         s = self._elapsed % 60
@@ -467,22 +447,29 @@ class ScarecrowApp(App[None]):
 
         self.state = AppState.IDLE
 
+        if self._transcriber is not None:
+            self._transcriber.end_session()
+
         if self._audio_recorder is not None:
-            with contextlib.suppress(Exception):
+            try:
                 self._audio_recorder.stop()
-            self._audio_recorder = None
+            except Exception as exc:
+                log.exception("Failed to stop audio recorder")
+                self._show_error(f"Could not stop audio recorder: {exc}")
+            finally:
+                self._audio_recorder = None
 
         if self._session is not None:
-            with contextlib.suppress(Exception):
+            try:
                 self._session.finalize()
-            self._session = None
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+            except Exception as exc:
+                log.exception("Failed to finalize session")
+                self._show_error(f"Could not finalize session: {exc}")
+            finally:
+                self._session = None
 
     def update_live_preview(self, text: str) -> None:
-        self._update_live(text)
+        self._set_live_partial(text)
 
     def append_caption(self, text: str) -> None:
         self.query_one("#captions", RichLog).write(text)

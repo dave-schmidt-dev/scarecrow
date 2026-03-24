@@ -10,6 +10,8 @@ import numpy as np
 import sounddevice as sd
 import soundfile as sf
 
+from scarecrow import config
+
 
 class AudioRecorder:
     """Records audio from microphone to WAV file.
@@ -23,7 +25,7 @@ class AudioRecorder:
         self,
         output_path: Path,
         sample_rate: int = 16000,
-        channels: int = 1,
+        channels: int = config.CHANNELS,
         on_audio: Callable[[np.ndarray], None] | None = None,
     ) -> None:
         self._output_path = output_path
@@ -82,7 +84,7 @@ class AudioRecorder:
             mode="w",
             samplerate=self._sample_rate,
             channels=self._channels,
-            subtype="PCM_16",
+            subtype=config.SUBTYPE,
         )
 
         self._stream = sd.InputStream(

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import threading
 from unittest.mock import MagicMock, patch
 
-from textual.widgets import RichLog
+from textual.widgets import RichLog, Static
 
 from scarecrow.app import AppState, InfoBar, ScarecrowApp
 
@@ -38,6 +39,11 @@ def _mock_recorder():
     mock.start.return_value = None
     mock.stop.return_value = MagicMock()
     return mock
+
+
+def _live_text(app: ScarecrowApp) -> str:
+    widget = app.query_one("#live-content", Static)
+    return widget.render().plain
 
 
 # ---------------------------------------------------------------------------
@@ -207,9 +213,7 @@ async def test_update_live_preview() -> None:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
         app.update_live_preview("partial text...")
         await pilot.pause()
-        live_log = app.query_one("#live-log", RichLog)
-        lines_text = " ".join(str(line) for line in live_log.lines)
-        assert "partial text..." in lines_text
+        assert "partial text..." in _live_text(app)
 
 
 async def test_append_caption_adds_to_transcript() -> None:
@@ -229,9 +233,37 @@ async def test_live_not_cleared_on_caption() -> None:
         await pilot.pause()
         app.append_caption("Finalized sentence.")
         await pilot.pause()
-        live_log = app.query_one("#live-log", RichLog)
-        lines_text = " ".join(str(line) for line in live_log.lines)
-        assert "still streaming..." in lines_text
+        assert "still streaming..." in _live_text(app)
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_transcriber_error_surfaces_in_ui(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    mock_recorder_cls.return_value = _mock_recorder()
+    mock_session_cls.return_value = MagicMock()
+
+    async with _app(with_transcriber=True).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause(delay=0.5)
+        app._set_status("")
+        app.query_one("#captions", RichLog).clear()
+
+        thread = threading.Thread(
+            target=app._on_transcriber_error,
+            args=("batch", "Batch transcription failed."),
+        )
+        thread.start()
+        await pilot.pause(delay=0.1)
+        thread.join(timeout=1)
+
+        captions = app.query_one("#captions", RichLog)
+        caption_text = " ".join(str(line) for line in captions.lines)
+        bar = app.query_one(InfoBar)
+        assert "Batch transcription failed." in caption_text
+        assert bar.status_message == "batch: Batch transcription failed."
+        assert bar.status_is_error is True
 
 
 async def test_pane_labels_show_model_names() -> None:

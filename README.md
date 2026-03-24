@@ -4,6 +4,15 @@ Always-recording TUI with live captions and transcription.
 
 Scarecrow runs two Whisper models simultaneously: a fast model for real-time captions and a larger model for accurate batch transcription every 30 seconds. Audio and transcripts are saved per-session.
 
+## Bug Tracking
+
+Scarecrow keeps a persistent bug ledger in [BUGS.md](/Users/dave/Documents/Projects/scarecrow/BUGS.md). Future fixes must follow these rules:
+
+- Append a `BUGS.md` entry whenever a bug is found, investigated, worked around, or fixed.
+- A bug is not considered squashed until a regression test exists for the exact failing logic path and that test passes.
+- Do not rely on heavily mocked alternate paths to declare a bug fixed.
+- Record temporary mitigations as workarounds until the root cause is actually fixed.
+
 ## Requirements
 
 - Python 3.12+
@@ -14,11 +23,25 @@ Scarecrow runs two Whisper models simultaneously: a fast model for real-time cap
 
 ```bash
 git clone <repo-url> && cd scarecrow
-uv sync
+python3 scripts/sync_env.py
 python scripts/setup.py   # interactive model selection + alias setup
 ```
 
 The setup script explains the two-model architecture and walks you through choosing models.
+
+### Virtualenv health
+
+This project uses an editable install inside `.venv`. On this macOS setup, the editable-install path file can occasionally be recreated with the `UF_HIDDEN` flag during environment rebuilds, which breaks `import scarecrow` outside the project root.
+
+Use these helpers instead of raw ad-hoc repairs:
+
+```bash
+python3 scripts/sync_env.py                 # uv sync + editable-install repair + import validation
+python3 scripts/repair_venv.py              # repair/check existing .venv without syncing
+python3 scripts/sync_env.py --reinstall-package scarecrow
+```
+
+If you still choose to run `uv sync` directly, follow it with `python3 scripts/repair_venv.py`.
 
 ### iTerm2 profile (recommended)
 
@@ -118,13 +141,15 @@ Audio is saved as uncompressed WAV (~1.8 MB/min at 16kHz mono) rather than MP3 (
 ## Development
 
 ```bash
-uv sync                              # install deps + dev tools
+python3 scripts/sync_env.py          # install deps + repair editable install
 uv run pytest                        # run tests
 uv run ruff check scarecrow/ tests/  # lint
-uv run vulture scarecrow/            # dead code check
+uv run vulture scarecrow/ vulture_whitelist.py --ignore-names inter_op_num_threads,intra_op_num_threads,log_severity_level  # dead code check
 ```
 
 Pre-commit hooks run ruff (lint + format) and vulture automatically.
+
+When fixing bugs, update `BUGS.md` and add or extend the matching regression test in the same change.
 
 ## Architecture
 

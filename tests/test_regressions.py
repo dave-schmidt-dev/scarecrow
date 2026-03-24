@@ -98,10 +98,8 @@ def test_drain_buffer_sample_rate_is_44100(tmp_path: Path) -> None:
 
 
 def test_batch_passes_audio_directly_at_16khz() -> None:
-    """_run_batch passes 16kHz audio directly to Whisper (no resampling)."""
-    from scarecrow.app import ScarecrowApp
-
-    app = ScarecrowApp()
+    """Batch transcription passes 16kHz audio directly to Whisper."""
+    from scarecrow.transcriber import Transcriber
 
     # Create 1 second of 16kHz audio
     audio_16k = np.zeros(16000, dtype=np.float32)
@@ -111,11 +109,12 @@ def test_batch_passes_audio_directly_at_16khz() -> None:
     mock_segment.text = "hello world"
     mock_model = MagicMock()
     mock_model.transcribe.return_value = ([mock_segment], None)
-    app._batch_model = mock_model
+    t = Transcriber()
+    t._ready = True
+    t._model_manager = MagicMock()
+    t._model_manager.get_batch_model.return_value = mock_model
 
-    # Run batch — audio should pass through unchanged
-    with patch.object(app, "_safe_call"):
-        app._run_batch(audio_16k, batch_elapsed=30)
+    t.transcribe_batch(audio_16k, batch_elapsed=30)
 
     mock_model.transcribe.assert_called_once()
     transcribed_audio = mock_model.transcribe.call_args[0][0]
@@ -259,25 +258,24 @@ def test_drain_buffer_clears_completely(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Bug: live pane used two widgets (RichLog + Static) causing empty space
-# and text rendering outside the bordered area. Single RichLog is correct.
+# Bug: live pane used multiple disjoint widgets causing empty space
+# and text rendering outside the bordered area. Single pane is required.
 # ---------------------------------------------------------------------------
 
 
-def test_live_pane_is_single_richlog() -> None:
-    """Live pane must be a single #live-log RichLog (no separate partial widget)."""
-    from textual.widgets import RichLog as _RichLog
+def test_live_pane_is_single_scrollable_container() -> None:
+    """Live pane must render as one scrollable pane with a single content widget."""
+    from textual.widgets import Static
 
     from scarecrow.app import ScarecrowApp
 
     async def _check():
         async with ScarecrowApp().run_test() as pilot:
             app = pilot.app
-            live_log = app.query_one("#live-log", _RichLog)
-            assert live_log is not None
-            # Must NOT have a separate #live-partial widget
-            matches = app.query("#live-partial")
-            assert len(matches) == 0, "Should not have a #live-partial widget"
+            live_pane = app.query_one("#live-pane")
+            live_content = app.query_one("#live-content", Static)
+            assert live_pane is not None
+            assert live_content is not None
 
     import asyncio
 

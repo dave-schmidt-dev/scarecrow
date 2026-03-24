@@ -1,50 +1,44 @@
 """Entry point for `python -m scarecrow` and the `scarecrow` console script."""
 
+from __future__ import annotations
+
+import contextlib
 import logging
-import os
 import sys
 import time
-import warnings
 from datetime import datetime
 from pathlib import Path
 
-# Suppress HuggingFace Hub authentication warnings and network requests.
-# Models are cached locally; HF Hub online checks can stall for 30-60s.
-os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-warnings.filterwarnings("ignore", message=".*unauthenticated requests.*")
+from scarecrow.runtime import configure_runtime_environment, model_cache_path
+
+configure_runtime_environment()
 
 
 def _wait_for_enter_or_timeout(timeout: int = 30) -> None:
     """Wait for Enter key or timeout, whichever comes first."""
-    import contextlib
     import select
     import termios
     import tty
 
     fd = sys.stdin.fileno()
+    old_settings = None
     try:
         old_settings = termios.tcgetattr(fd)
-        # Restore cooked mode so Enter works normally
         tty.setcbreak(fd)
         ready, _, _ = select.select([sys.stdin], [], [], timeout)
         if ready:
             sys.stdin.read(1)
     except (termios.error, OSError, ValueError):
-        # Fallback: just sleep if terminal is unavailable
-        import time
-
         time.sleep(timeout)
     finally:
-        with contextlib.suppress(termios.error, OSError, ValueError):
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        if old_settings is not None:
+            with contextlib.suppress(termios.error, OSError, ValueError):
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
 def _model_cache_path(model_name: str) -> Path | None:
-    """Return the HuggingFace cache path for a model, or None if not cached."""
-    cache_dir = Path.home() / ".cache" / "huggingface" / "hub"
-    path = cache_dir / f"models--Systran--faster-whisper-{model_name}"
-    return path if path.exists() else None
+    """Backward-compatible wrapper used by tests and startup output."""
+    return model_cache_path(model_name)
 
 
 def main() -> None:
@@ -57,23 +51,26 @@ def main() -> None:
     )
 
     from scarecrow import config
+    from scarecrow.app import ScarecrowApp
+    from scarecrow.transcriber import Transcriber
 
     print(flush=True)
     print("  Scarecrow", flush=True)
-    print("  " + "\u2500" * 40, flush=True)
+    print("  " + "─" * 40, flush=True)
     live = config.REALTIME_MODEL
     batch = config.FINAL_MODEL
     print(f"  Live model:   {live} (always-on, real-time)", flush=True)
     print(f"  Batch model:  {batch} (accurate, every 30s)", flush=True)
 
-    models = [("Live", live), ("Batch", batch)]
-    for label, model in models:
+    for label, model in [("Live", live), ("Batch", batch)]:
         cache = _model_cache_path(model)
-        if cache:
+        if cache is not None:
             print(f"  {label} cache:  {cache}", flush=True)
         else:
-            msg = "not cached \u2014 will download on first run"
-            print(f"  {label} cache:  {msg}", flush=True)
+            print(
+                f"  {label} cache:  not cached — will download on first run",
+                flush=True,
+            )
 
     recordings_dir = config.DEFAULT_RECORDINGS_DIR.resolve()
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -81,36 +78,20 @@ def main() -> None:
     print(f"  This session: {recordings_dir}/{timestamp}/", flush=True)
     print(flush=True)
 
-    print("  Loading models\u2026", flush=True)
+    print("  Loading models…", flush=True)
     t0 = time.monotonic()
-
-    from scarecrow.transcriber import Transcriber
-
     transcriber = Transcriber()
     try:
         transcriber.prepare()
-    except Exception as e:
-        print(f"Failed to start transcriber: {e}", file=sys.stderr)
+    except Exception as exc:
+        print(f"Failed to start transcriber: {exc}", file=sys.stderr)
         sys.exit(1)
 
     t1 = time.monotonic()
     print(f"  Ready ({t1 - t0:.1f}s)", flush=True)
-    print(f"  Batch model ({batch}) loads on first use", flush=True)
-    # Pre-initialize tqdm's multiprocessing lock before Textual takes over
-    # file descriptors. faster_whisper uses tqdm internally, and tqdm tries
-    # to create an mp.RLock on first use — which fails inside Textual's
-    # event loop due to fd manipulation. Warming it here prevents the crash.
-    try:
-        from tqdm import tqdm
-
-        tqdm.get_lock()
-    except Exception:
-        pass
-
-    print("  Starting TUI\u2026", flush=True)
+    print(f"  Batch model ({batch}) loads on first batch run", flush=True)
+    print("  Starting TUI…", flush=True)
     print(flush=True)
-
-    from scarecrow.app import ScarecrowApp
 
     app = ScarecrowApp(transcriber=transcriber)
     try:
@@ -118,13 +99,13 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        print("\n  Shutting down\u2026", flush=True)
+        print("\n  Shutting down…", flush=True)
         transcriber.shutdown()
-        if hasattr(app, "_shutdown_summary") and app._shutdown_summary:
+        if app._shutdown_summary:
             print(app._shutdown_summary, flush=True)
         print("  Done.", flush=True)
         print(flush=True)
-        print("  Press Enter to close (auto-close in 30s)\u2026", flush=True)
+        print("  Press Enter to close (auto-close in 30s)…", flush=True)
         _wait_for_enter_or_timeout(30)
 
 

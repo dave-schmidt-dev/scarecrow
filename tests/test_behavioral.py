@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from textual.widgets import RichLog
+from textual.widgets import RichLog, Static
 
 from scarecrow.app import (
     BATCH_INTERVAL_SECONDS,
@@ -49,6 +49,11 @@ def _app(with_transcriber: bool = False) -> ScarecrowApp:
     return ScarecrowApp()
 
 
+def _live_text(app: ScarecrowApp) -> str:
+    widget = app.query_one("#live-content", Static)
+    return widget.render().plain
+
+
 # ---------------------------------------------------------------------------
 # 1. RichLog widgets are created with wrap=True and min_width=0
 # ---------------------------------------------------------------------------
@@ -63,13 +68,14 @@ async def test_captions_richlog_has_wrap_and_min_width() -> None:
         assert captions.min_width == 0
 
 
-async def test_live_log_richlog_has_wrap_and_min_width() -> None:
-    """#live-log RichLog must be created with wrap=True and min_width=0."""
+async def test_live_pane_present() -> None:
+    """Live pane should render as a single scrollable widget with content."""
     async with _app().run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        live_log = app.query_one("#live-log", RichLog)
-        assert live_log.wrap is True
-        assert live_log.min_width == 0
+        live_pane = app.query_one("#live-pane")
+        live_content = app.query_one("#live-content", Static)
+        assert live_pane is not None
+        assert live_content is not None
 
 
 # ---------------------------------------------------------------------------
@@ -470,9 +476,7 @@ async def test_action_quit_writes_shutting_down_to_live_pane() -> None:
             app.action_quit()
             await pilot.pause()
 
-        live_log = app.query_one("#live-log", RichLog)
-        lines_text = " ".join(str(line) for line in live_log.lines)
-        assert "Shutting down" in lines_text
+        assert "Shutting down" in _live_text(app)
 
 
 async def test_deferred_quit_calls_stop_recording_then_exit() -> None:
@@ -511,7 +515,7 @@ async def test_deferred_quit_calls_stop_recording_then_exit() -> None:
 
 
 async def test_live_partial_shows_in_richlog() -> None:
-    """Partial (in-progress) transcription must appear in #live-log."""
+    """Partial (in-progress) transcription must appear in the live pane."""
     async with _app().run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
         await pilot.pause()
@@ -519,13 +523,11 @@ async def test_live_partial_shows_in_richlog() -> None:
         app._update_live_partial("streaming words...")
         await pilot.pause()
 
-        live_log = app.query_one("#live-log", RichLog)
-        lines_text = " ".join(str(line) for line in live_log.lines)
-        assert "streaming words..." in lines_text
+        assert "streaming words..." in _live_text(app)
 
 
 async def test_stabilized_text_goes_to_richlog() -> None:
-    """Stabilized (final) text must be written to #live-log RichLog."""
+    """Stabilized (final) text must be written to the live pane."""
     async with _app().run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
         await pilot.pause()
@@ -534,8 +536,7 @@ async def test_stabilized_text_goes_to_richlog() -> None:
         app._append_live("final sentence two")
         await pilot.pause()
 
-        live_log = app.query_one("#live-log", RichLog)
-        lines_text = " ".join(str(line) for line in live_log.lines)
+        lines_text = _live_text(app)
         assert "final sentence one" in lines_text
         assert "final sentence two" in lines_text
 
@@ -555,8 +556,7 @@ async def test_history_preserved_across_partial_updates() -> None:
         app._update_live_partial("in progress...")
         await pilot.pause()
 
-        live_log = app.query_one("#live-log", RichLog)
-        lines_text = " ".join(str(line) for line in live_log.lines)
+        lines_text = _live_text(app)
         assert "history line one" in lines_text
         assert "history line two" in lines_text
         assert "in progress..." in lines_text
@@ -574,8 +574,7 @@ async def test_stabilized_replaces_partial() -> None:
         app._append_live("finalized text")
         await pilot.pause()
 
-        live_log = app.query_one("#live-log", RichLog)
-        lines_text = " ".join(str(line) for line in live_log.lines)
+        lines_text = _live_text(app)
         assert "finalized text" in lines_text
         # Partial should be gone — replaced by stabilized
         assert "in progress..." not in lines_text

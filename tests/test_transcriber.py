@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from scarecrow.transcriber import Transcriber, _SileroVAD
+from scarecrow.transcriber import Transcriber, TranscriberBindings, _SileroVAD
 
 # ---------------------------------------------------------------------------
 # _SileroVAD unit tests
@@ -160,3 +160,25 @@ def test_worker_stops_on_poison_pill() -> None:
     t.stop()
     t._worker.join(timeout=3)
     assert not t._worker.is_alive()
+
+
+def test_batch_transcription_error_emits_callback() -> None:
+    """Batch transcription failures must surface through on_error."""
+    errors: list[tuple[str, str]] = []
+    t = Transcriber()
+    t._ready = True
+    failing_model = MagicMock()
+    failing_model.transcribe.side_effect = RuntimeError("boom")
+    t._model_manager = MagicMock()
+    t._model_manager.get_batch_model.return_value = failing_model
+    t.bind(
+        TranscriberBindings(
+            on_error=lambda source, message: errors.append((source, message))
+        )
+    )
+
+    t.transcribe_batch(np.zeros(16000, dtype=np.float32), batch_elapsed=30)
+
+    assert errors == [
+        ("batch", "Batch transcription failed. See debug log for the stack trace.")
+    ]

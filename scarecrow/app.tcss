@@ -37,11 +37,15 @@ Screen {
 
 /* ── Live pane (real-time captions) ── */
 
-#live-log {
+#live-pane {
     height: 8;
     margin: 0 1;
     padding: 0 1;
     color: $text;
     border: solid $primary-darken-3;
     overflow-x: hidden;
+}
+
+#live-content {
+    width: 100%;
 }
