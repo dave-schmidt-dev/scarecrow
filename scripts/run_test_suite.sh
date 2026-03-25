@@ -45,6 +45,7 @@ run_pytest "$@" tests/test_recorder.py
 run_pytest "$@" tests/test_regressions.py
 run_pytest "$@" tests/test_repo_policy.py
 run_pytest "$@" tests/test_session.py
+run_pytest "$@" tests/test_setup.py
 run_pytest "$@" tests/test_startup.py
 run_pytest "$@" tests/test_suite_runner.py
 run_pytest "$@" tests/test_transcriber.py

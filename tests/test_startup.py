@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 # ---------------------------------------------------------------------------
 # 1. Package importability
@@ -58,6 +58,27 @@ def test_main_function_is_importable() -> None:
     from scarecrow.__main__ import main
 
     assert callable(main)
+
+
+def test_main_finally_uses_app_cleanup_hook() -> None:
+    """The entrypoint finally block must delegate shutdown to the app cleanup hook."""
+    from scarecrow import __main__
+
+    fake_transcriber = MagicMock()
+    fake_transcriber.prepare.return_value = None
+    fake_app = MagicMock()
+    fake_app.run.side_effect = KeyboardInterrupt()
+    fake_app._shutdown_summary = ""
+
+    with (
+        patch("scarecrow.transcriber.Transcriber", return_value=fake_transcriber),
+        patch("scarecrow.app.ScarecrowApp", return_value=fake_app),
+        patch("scarecrow.__main__._wait_for_enter_or_timeout"),
+        patch("scarecrow.__main__._model_cache_path", return_value=None),
+    ):
+        __main__.main()
+
+    fake_app.cleanup_after_exit.assert_called_once_with()
 
 
 def test_main_module_importable_from_outside_project(tmp_path: Path) -> None:

@@ -274,6 +274,58 @@ def test_batch_transcription_error_emits_callback() -> None:
     ]
 
 
+def test_transcribe_batch_returns_text_and_emits_callback_once() -> None:
+    """The normal batch path should return text and emit one callback."""
+    results: list[tuple[str, int]] = []
+    segment = MagicMock()
+    segment.text = "hello batch"
+
+    model = MagicMock()
+    model.transcribe.return_value = ([segment], None)
+
+    t = Transcriber(
+        TranscriberBindings(
+            on_batch_result=lambda text, elapsed: results.append((text, elapsed))
+        )
+    )
+    t._ready = True
+    t._model_manager = MagicMock()
+    t._model_manager.get_batch_model.return_value = model
+
+    text = t.transcribe_batch(np.zeros(16000, dtype=np.float32), batch_elapsed=30)
+
+    assert text == "hello batch"
+    assert results == [("hello batch", 30)]
+
+
+def test_transcribe_batch_can_skip_callback_for_synchronous_flush() -> None:
+    """The synchronous shutdown flush must be able to bypass the async callback."""
+    results: list[tuple[str, int]] = []
+    segment = MagicMock()
+    segment.text = "final flush"
+
+    model = MagicMock()
+    model.transcribe.return_value = ([segment], None)
+
+    t = Transcriber(
+        TranscriberBindings(
+            on_batch_result=lambda text, elapsed: results.append((text, elapsed))
+        )
+    )
+    t._ready = True
+    t._model_manager = MagicMock()
+    t._model_manager.get_batch_model.return_value = model
+
+    text = t.transcribe_batch(
+        np.zeros(16000, dtype=np.float32),
+        batch_elapsed=30,
+        emit_callback=False,
+    )
+
+    assert text == "final flush"
+    assert results == []
+
+
 def test_get_batch_model_thread_safety() -> None:
     """Concurrent get_batch_model() calls must only create the model once."""
     from scarecrow.runtime import ModelManager

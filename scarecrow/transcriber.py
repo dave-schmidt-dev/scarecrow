@@ -215,12 +215,18 @@ class Transcriber:
         """Backward-compatible audio ingestion wrapper."""
         self.accept_audio(chunk)
 
-    def transcribe_batch(self, audio: np.ndarray, batch_elapsed: int) -> str | None:
+    def transcribe_batch(
+        self,
+        audio: np.ndarray,
+        batch_elapsed: int,
+        *,
+        emit_callback: bool = True,
+    ) -> str | None:
         """Run the accurate batch model on a drained recorder buffer.
 
         Returns the transcribed text, empty string if nothing was recognized,
-        or None on error.  The on_batch_result callback is still fired for the
-        normal (executor-driven) path so the UI updates via call_from_thread.
+        or None on error. The normal executor-driven path still emits the
+        callback so the UI updates via call_from_thread.
         """
         try:
             with self._batch_lock:
@@ -241,7 +247,7 @@ class Transcriber:
             )
             return None
 
-        if text and self._bindings.on_batch_result is not None:
+        if text and emit_callback and self._bindings.on_batch_result is not None:
             self._bindings.on_batch_result(text, batch_elapsed)
 
         return text if text else ""

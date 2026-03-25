@@ -27,8 +27,16 @@ def _mock_transcriber():
     """Return a mock Transcriber that doesn't load models."""
     mock = MagicMock()
     mock.is_ready = True
+    mock._worker = None
     mock.set_callbacks.return_value = None
-    mock.shutdown.return_value = None
+    mock.end_session.return_value = None
+
+    def _shutdown(*, timeout=None):
+        mock.is_ready = False
+        mock._worker = None
+        return None
+
+    mock.shutdown.side_effect = _shutdown
     return mock
 
 
@@ -669,8 +677,9 @@ async def test_stop_recording_flushes_final_batch_before_finalize(
     transcriber = _mock_transcriber()
     transcriber.end_session.side_effect = lambda: calls.append("end-session")
 
-    def fake_final_batch(audio, elapsed):
+    def fake_final_batch(audio, elapsed, *, emit_callback=False):
         calls.append("final-batch")
+        assert emit_callback is False
         return "transcribed text"
 
     transcriber.transcribe_batch.side_effect = fake_final_batch
@@ -718,6 +727,7 @@ async def test_stop_recording_waits_for_inflight_batch_before_finalize(
         calls.append("batch-start")
         release.wait(timeout=1)
         calls.append("batch-end")
+        return "completed text"
 
     transcriber = _mock_transcriber()
     transcriber.transcribe_batch.side_effect = slow_batch
@@ -822,34 +832,76 @@ async def test_flush_final_batch_writes_to_transcript_file(tmp_path: Path) -> No
     assert "final transcribed text" in content
 
 
+async def test_flush_final_batch_disables_async_callback_path(tmp_path: Path) -> None:
+    """Synchronous final flush must not also route the same text through
+    the async callback path."""
+    from scarecrow.session import Session
+
+    real_session = Session(base_dir=tmp_path)
+    mock_recorder = _mock_recorder()
+    mock_recorder.drain_buffer.return_value = np.zeros(16000, dtype=np.float32)
+
+    transcriber = _mock_transcriber()
+
+    def fake_batch(_audio, _elapsed, *, emit_callback=True):
+        assert emit_callback is False
+        return "one final line"
+
+    transcriber.transcribe_batch.side_effect = fake_batch
+
+    with patch.object(ScarecrowApp, "_auto_start"):
+        async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
+            app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+            await pilot.pause(delay=0.2)
+            app._session = real_session
+            app._audio_recorder = mock_recorder
+            app.state = AppState.RECORDING
+
+            app._stop_recording()
+            await pilot.pause()
+
+    content = real_session.transcript_path.read_text(encoding="utf-8")
+    assert content.count("one final line") == 1
+
+
 # ---------------------------------------------------------------------------
 # Audit gap: Ctrl+C finally-block must clean up recorder and session
 # ---------------------------------------------------------------------------
 
 
-def test_ctrl_c_finally_block_cleans_up_recorder_and_session() -> None:
-    """Simulate Ctrl+C: the __main__ finally block must stop the recorder and
-    finalize the session when _stop_recording did not run."""
-    mock_recorder = MagicMock()
-    mock_session = MagicMock()
+def test_ctrl_c_cleanup_after_exit_flushes_and_finalizes(tmp_path: Path) -> None:
+    """The Ctrl+C cleanup path must flush buffered audio to the real session file."""
+    from scarecrow.session import Session
+
+    real_session = Session(base_dir=tmp_path)
+    mock_recorder = _mock_recorder()
+    mock_recorder.drain_buffer.return_value = np.zeros(16000, dtype=np.float32)
     mock_transcriber = _mock_transcriber()
-    mock_transcriber.is_ready = False  # already shut down by TUI
+    mock_transcriber.transcribe_batch.return_value = "ctrl c text"
 
     app = ScarecrowApp(transcriber=mock_transcriber)
     app._audio_recorder = mock_recorder
-    app._session = mock_session
+    app._session = real_session
+    app._reactive_state = AppState.RECORDING
 
-    # Replicate what __main__.py's finally block does
-    if app._audio_recorder is not None:
-        app._audio_recorder.stop()
-    if app._session is not None:
-        app._session.finalize()
-    if mock_transcriber.is_ready:
-        mock_transcriber.shutdown()
+    app.cleanup_after_exit()
 
+    content = real_session.transcript_path.read_text(encoding="utf-8")
+    assert "ctrl c text" in content
     mock_recorder.stop.assert_called_once()
-    mock_session.finalize.assert_called_once()
-    mock_transcriber.shutdown.assert_not_called()
+    mock_transcriber.shutdown.assert_called_once_with(timeout=None)
+    assert app._session is None
+
+
+def test_cleanup_after_exit_is_idempotent_for_normal_quit() -> None:
+    """The shared cleanup path must not double-shutdown already-closed resources."""
+    mock_transcriber = _mock_transcriber()
+    app = ScarecrowApp(transcriber=mock_transcriber)
+    app.cleanup_after_exit()
+    app.cleanup_after_exit()
+
+    mock_transcriber.end_session.assert_called_once()
+    mock_transcriber.shutdown.assert_called_once_with(timeout=None)
 
 
 # ---------------------------------------------------------------------------
@@ -869,10 +921,51 @@ async def test_wait_for_batch_workers_survives_timeout() -> None:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
         await pilot.pause()
         app._batch_futures = {hung_future}
+        app._batch_executor = MagicMock()
 
-        app._wait_for_batch_workers()
+        completed = app._wait_for_batch_workers()
 
+        assert completed is False
         assert app._batch_futures == set()
+        assert app._batch_executor is None
+        assert app._ignore_batch_results is True
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_stop_recording_skips_final_flush_after_batch_timeout(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """A timed-out worker must not block shutdown by re-entering batch transcription."""
+    from concurrent.futures import Future
+    from concurrent.futures import TimeoutError as FuturesTimeoutError
+
+    mock_recorder = _mock_recorder()
+    mock_recorder.drain_buffer.return_value = np.zeros(16000)
+    mock_recorder_cls.return_value = mock_recorder
+
+    mock_session = MagicMock()
+    mock_session_cls.return_value = mock_session
+
+    hung_future: Future[None] = Future()
+    hung_future.result = MagicMock(side_effect=FuturesTimeoutError())  # type: ignore[method-assign]
+
+    transcriber = _mock_transcriber()
+
+    async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause(delay=0.2)
+        app._audio_recorder = mock_recorder
+        app._session = mock_session
+        app._batch_futures = {hung_future}
+        app._batch_executor = MagicMock()
+        app.state = AppState.RECORDING
+
+        app._stop_recording()
+        await pilot.pause()
+
+    transcriber.transcribe_batch.assert_not_called()
+    mock_session.finalize.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

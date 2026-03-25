@@ -14,6 +14,7 @@ def test_runner_script_runs_isolated_processes_for_files_and_behavioral_nodes() 
     assert 'local test_file="$1"' in script
     assert "shift" in script
     assert "--collect-only -q" in script
+    assert "tests/test_setup.py" in script
     assert "tests/test_transcriber.py" in script
     assert "tests/test_suite_runner.py" in script
 

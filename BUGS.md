@@ -233,36 +233,39 @@ Scarecrow keeps a running bug ledger in this file. Append to it every time a bug
 - Area: app, transcriber, shutdown
 - Symptom: the final batch of buffered speech was silently lost on quit because `_flush_final_batch` fired the result through the `call_from_thread` callback path, which deferred the transcript write past `session.finalize()`.
 - Root cause: `_flush_final_batch` called `transcribe_batch()` from the Textual event loop; the result flowed through `on_batch_result` → `_post_to_ui` → `call_from_thread`, which deferred `_append_transcript` behind `session.finalize()`. By the time it ran, `_session` was `None`.
-- Fix: `transcribe_batch` now returns the transcribed text; `_flush_final_batch` calls `_append_transcript` directly on the event loop, bypassing the cross-thread callback path.
-- Regression test: `tests/test_behavioral.py::test_flush_final_batch_writes_to_transcript_file`
+- Fix: `cleanup_after_exit()` now flushes the final buffered batch to the session transcript before the session finalizes, and `_flush_final_batch()` writes directly instead of routing through the async callback path.
+- Regression test: `tests/test_behavioral.py::test_stop_recording_flushes_final_batch_before_finalize`, `tests/test_behavioral.py::test_flush_final_batch_writes_to_transcript_file`, `tests/test_behavioral.py::test_flush_final_batch_disables_async_callback_path`
 - Notes: verified 2026-03-24.
 
 ## [BUG-20260324-ctrlc-cleanup]
-- Status: open
+- Status: squashed
 - Found: 2026-03-24
 - Area: app, recorder, session, shutdown
 - Symptom: pressing Ctrl+C during recording left the microphone stream and WAV file open; the transcript file was not flushed or closed.
 - Root cause: the `finally` block in `__main__.py` only called `transcriber.shutdown()`; it did not stop the recorder or finalize the session because Ctrl+C never runs `_stop_recording`.
-- Regression test: `tests/test_behavioral.py::test_ctrl_c_finally_block_cleans_up_recorder_and_session`
-- Notes: the cleanup path still needs a real `python -m scarecrow`/Ctrl+C regression before it can be considered squashed.
+- Fix: `main()` now routes Ctrl+C through `app.cleanup_after_exit()`, which stops intake, flushes the final buffered batch, shuts down the transcriber, and finalizes the session.
+- Regression test: `tests/test_behavioral.py::test_ctrl_c_cleanup_after_exit_flushes_and_finalizes`, `tests/test_startup.py::test_main_finally_uses_app_cleanup_hook`
+- Notes: `tests/test_behavioral.py::test_cleanup_after_exit_is_idempotent_for_normal_quit` covers the shared cleanup path on repeated calls.
 
 ## [BUG-20260324-setup-defaults-drift]
-- Status: open
+- Status: squashed
 - Found: 2026-03-24
 - Area: scripts, setup
 - Symptom: running `scripts/setup.py` and selecting a different live model silently failed to update `config.py` because the setup script's `DEFAULTS["live"]` was `"tiny.en"` but the config already contained `"base.en"`.
 - Root cause: `write_config()` used exact string replacement with the hardcoded default; since the default didn't match what was in the file, the replacement found nothing and wrote the file unchanged.
-- Regression test: manual only — interactive setup script
-- Notes: the config rewrite still needs an automated regression before this can be marked squashed under repo policy.
+- Fix: `write_config()` now uses regex replacement that updates whatever model names are currently in `config.py`, and the setup helper has automated regression coverage.
+- Regression test: `tests/test_setup.py::test_write_config_updates_current_models_without_exact_default_match`, `tests/test_setup.py::test_write_config_treats_model_names_as_plain_text`
+- Notes: included in `scripts/run_test_suite.sh`.
 
 ## [BUG-20260324-batch-worker-infinite-block]
-- Status: open
+- Status: squashed
 - Found: 2026-03-24
 - Area: app, shutdown
 - Symptom: if a batch model inference hangs during shutdown, `_wait_for_batch_workers` blocks the Textual event loop indefinitely with no recovery path.
 - Root cause: `future.result()` was called without a timeout.
-- Regression test: `tests/test_behavioral.py::test_wait_for_batch_workers_survives_timeout`
-- Notes: the timeout path still needs end-to-end shutdown validation because a timed-out batch future can still affect later flush/teardown behavior.
+- Fix: `_wait_for_batch_workers()` now times out, abandons the batch executor, ignores late batch callbacks, skips the final flush when a worker times out, and lets shutdown continue.
+- Regression test: `tests/test_behavioral.py::test_wait_for_batch_workers_survives_timeout`, `tests/test_behavioral.py::test_stop_recording_skips_final_flush_after_batch_timeout`
+- Notes: verified 2026-03-24.
 
 ## [BUG-20260324-policy-na-bypass]
 - Status: squashed
@@ -280,6 +283,6 @@ Scarecrow keeps a running bug ledger in this file. Append to it every time a bug
 - Area: app, shutdown
 - Symptom: on normal quit, `transcriber.shutdown()` was called twice — once by `_stop_recording` and once by the `finally` block in `__main__.py`. Harmless but wasteful and confusing.
 - Root cause: the `finally` block called `transcriber.shutdown()` unconditionally.
-- Fix: the `finally` block now checks `transcriber.is_ready` and `transcriber._worker` before calling shutdown, skipping the call when the TUI has already shut down cleanly.
-- Regression test: `tests/test_behavioral.py::test_ctrl_c_finally_block_cleans_up_recorder_and_session` (covers both the Ctrl+C and normal paths)
+- Fix: the shared cleanup path is now idempotent, so repeated cleanup calls do not double-shutdown the transcriber or finalize the session twice.
+- Regression test: `tests/test_behavioral.py::test_cleanup_after_exit_is_idempotent_for_normal_quit`, `tests/test_behavioral.py::test_ctrl_c_cleanup_after_exit_flushes_and_finalizes`
 - Notes: verified 2026-03-24.

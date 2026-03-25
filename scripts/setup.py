@@ -93,13 +93,13 @@ def write_config(live_model: str, batch_model: str):
     text = config_path.read_text()
     text = re.sub(
         r'^(REALTIME_MODEL\s*=\s*")[^"]*(")',
-        rf"\g<1>{live_model}\g<2>",
+        lambda match: f"{match.group(1)}{live_model}{match.group(2)}",
         text,
         flags=re.MULTILINE,
     )
     text = re.sub(
         r'^(FINAL_MODEL\s*=\s*")[^"]*(")',
-        rf"\g<1>{batch_model}\g<2>",
+        lambda match: f"{match.group(1)}{batch_model}{match.group(2)}",
         text,
         flags=re.MULTILINE,
     )

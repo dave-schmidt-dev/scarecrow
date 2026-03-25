@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from concurrent.futures import (
     Future,
     ThreadPoolExecutor,
@@ -118,6 +119,8 @@ class ScarecrowApp(App[None]):
         self._shutdown_summary = ""
         self._batch_executor: ThreadPoolExecutor | None = None
         self._batch_futures: set[Future[None]] = set()
+        self._shutdown_lock = threading.RLock()
+        self._ignore_batch_results = False
 
     def compose(self) -> ComposeResult:
         yield InfoBar(id="info-bar")
@@ -199,6 +202,9 @@ class ScarecrowApp(App[None]):
     def watch_state(self, _new_state: AppState) -> None:
         self._sync_info_bar()
 
+    def _current_state(self) -> AppState:
+        return getattr(self, "_reactive_state", AppState.IDLE)
+
     def _set_status(self, message: str, *, error: bool = False) -> None:
         self._status_message = message
         self._status_is_error = error
@@ -246,6 +252,9 @@ class ScarecrowApp(App[None]):
             self._post_to_ui(self._append_live, text)
 
     def _on_batch_result(self, text: str, batch_elapsed: int) -> None:
+        if self._ignore_batch_results:
+            log.debug("Ignoring late batch result during shutdown")
+            return
         self._post_to_ui(self._append_transcript, text, batch_elapsed)
 
     def _on_transcriber_error(self, source: str, message: str) -> None:
@@ -335,7 +344,48 @@ class ScarecrowApp(App[None]):
         self._batch_futures.add(future)
         return True
 
-    def _flush_final_batch(self) -> None:
+    def _transcript_divider(self, elapsed: int, path) -> str:
+        h = elapsed // 3600
+        m = (elapsed % 3600) // 60
+        s = elapsed % 60
+        ts = f"{h:02d}:{m:02d}:{s:02d}"
+        return f"── {ts} · {path} ──"
+
+    def _record_transcript(
+        self,
+        text: str,
+        batch_elapsed: int | None = None,
+        *,
+        include_ui: bool = True,
+    ) -> None:
+        elapsed = batch_elapsed if batch_elapsed is not None else self._elapsed
+        divider = None
+        if self._session is not None:
+            divider = self._transcript_divider(elapsed, self._session.transcript_path)
+
+        if include_ui:
+            try:
+                captions = self.query_one("#captions", RichLog)
+            except NoMatches:
+                captions = None
+            if captions is not None:
+                if divider is not None:
+                    captions.write(f"[dim]{divider}[/dim]")
+                captions.write(text)
+
+        if self._session is not None:
+            if divider is not None:
+                self._session.append_sentence(f"\n{divider}")
+            self._session.append_sentence(text)
+
+        self._word_count += len(text.split())
+        if include_ui:
+            self._set_status(
+                "Listening…" if self._current_state() is AppState.RECORDING else ""
+            )
+            self._sync_info_bar()
+
+    def _flush_final_batch(self, *, include_ui: bool = True) -> None:
         if self._audio_recorder is None or self._transcriber is None:
             return
 
@@ -344,17 +394,26 @@ class ScarecrowApp(App[None]):
             return
 
         batch_elapsed = self._elapsed
-        text = self._transcriber.transcribe_batch(audio, batch_elapsed)
-        # Write directly — call_from_thread would defer past session.finalize().
+        text = self._transcriber.transcribe_batch(
+            audio,
+            batch_elapsed,
+            emit_callback=False,
+        )
         if text:
-            self._append_transcript(text, batch_elapsed)
+            self._record_transcript(
+                text,
+                batch_elapsed,
+                include_ui=include_ui,
+            )
 
-    def _wait_for_batch_workers(self) -> None:
+    def _wait_for_batch_workers(self) -> bool:
         self._reap_batch_futures()
+        timed_out = False
         for future in list(self._batch_futures):
             try:
                 future.result(timeout=10)
             except FuturesTimeoutError:
+                timed_out = True
                 log.warning(
                     "Batch worker did not finish within 10s during shutdown; "
                     "proceeding without it."
@@ -362,6 +421,11 @@ class ScarecrowApp(App[None]):
             except Exception:
                 log.exception("Batch worker raised during shutdown")
         self._batch_futures.clear()
+        if timed_out and self._batch_executor is not None:
+            self._ignore_batch_results = True
+            self._batch_executor.shutdown(wait=False, cancel_futures=False)
+            self._batch_executor = None
+        return not timed_out
 
     def _batch_transcribe(self) -> None:
         if self._audio_recorder is None or self._transcriber is None:
@@ -384,23 +448,7 @@ class ScarecrowApp(App[None]):
         self._submit_batch_transcription(audio, batch_elapsed)
 
     def _append_transcript(self, text: str, batch_elapsed: int | None = None) -> None:
-        captions = self.query_one("#captions", RichLog)
-        if self._session is not None:
-            path = self._session.transcript_path
-            elapsed = batch_elapsed if batch_elapsed is not None else self._elapsed
-            h = elapsed // 3600
-            m = (elapsed % 3600) // 60
-            s = elapsed % 60
-            ts = f"{h:02d}:{m:02d}:{s:02d}"
-            divider = f"── {ts} · {path} ──"
-            captions.write(f"[dim]{divider}[/dim]")
-            self._session.append_sentence(f"\n{divider}")
-        captions.write(text)
-        if self._session is not None:
-            self._session.append_sentence(text)
-        self._word_count += len(text.split())
-        self._set_status("Listening…" if self.state is AppState.RECORDING else "")
-        self._sync_info_bar()
+        self._record_transcript(text, batch_elapsed)
 
     def _write_pause_marker(self) -> None:
         h = self._elapsed // 3600
@@ -420,6 +468,7 @@ class ScarecrowApp(App[None]):
             return
 
         self._bind_transcriber()
+        self._ignore_batch_results = False
         self._session = Session(base_dir=config.DEFAULT_RECORDINGS_DIR)
         self._audio_recorder = AudioRecorder(
             output_path=self._session.audio_path,
@@ -526,51 +575,89 @@ class ScarecrowApp(App[None]):
         self.exit()
 
     def _stop_recording(self) -> None:
-        if self.state not in (AppState.RECORDING, AppState.PAUSED):
-            return
+        self.cleanup_after_exit(include_ui=True)
 
-        self._tick_timer.pause()
-        if hasattr(self, "_batch_timer"):
-            self._batch_timer.pause()
+    def cleanup_after_exit(self, *, include_ui: bool = False) -> None:
+        with self._shutdown_lock:
+            has_recording_state = self._current_state() in (
+                AppState.RECORDING,
+                AppState.PAUSED,
+            )
+            has_open_resources = (
+                has_recording_state
+                or self._audio_recorder is not None
+                or self._session is not None
+                or bool(self._batch_futures)
+            )
+            has_active_transcriber = self._transcriber is not None and (
+                self._transcriber.is_ready or self._transcriber._worker is not None
+            )
+            if not has_open_resources and not has_active_transcriber:
+                return
 
-        if self._transcriber is not None:
-            self._transcriber.end_session()
+            if hasattr(self, "_tick_timer"):
+                self._tick_timer.pause()
+            if hasattr(self, "_batch_timer"):
+                self._batch_timer.pause()
 
-        if self._audio_recorder is not None:
-            try:
-                self._audio_recorder.stop()
-            except Exception as exc:
-                log.exception("Failed to stop audio recorder")
-                self._show_error(f"Could not stop audio recorder: {exc}")
-            finally:
+            if self._transcriber is not None:
+                self._transcriber.end_session()
+
+            if self._audio_recorder is not None:
                 try:
-                    self._wait_for_batch_workers()
-                    self._flush_final_batch()
+                    self._audio_recorder.stop()
                 except Exception as exc:
-                    log.exception(
-                        "Failed while flushing batch transcription during shutdown"
+                    log.exception("Failed to stop audio recorder")
+                    if include_ui:
+                        self._show_error(f"Could not stop audio recorder: {exc}")
+
+            try:
+                batch_workers_finished = self._wait_for_batch_workers()
+                if batch_workers_finished:
+                    self._flush_final_batch(include_ui=include_ui)
+                else:
+                    log.warning(
+                        "Skipping final batch flush because a batch worker "
+                        "is still running after shutdown timeout"
                     )
+                    if include_ui:
+                        self._show_error(
+                            "Batch worker timed out during shutdown; "
+                            "skipping final transcript flush."
+                        )
+            except Exception as exc:
+                log.exception(
+                    "Failed while flushing batch transcription during shutdown"
+                )
+                if include_ui:
                     self._show_error(f"Could not flush final transcript batch: {exc}")
-                finally:
-                    self._audio_recorder = None
-
-        if self._transcriber is not None:
-            try:
-                self._transcriber.shutdown(timeout=None)
-            except Exception as exc:
-                log.exception("Failed to shut down transcriber")
-                self._show_error(f"Could not shut down transcriber: {exc}")
-
-        if self._session is not None:
-            try:
-                self._session.finalize()
-            except Exception as exc:
-                log.exception("Failed to finalize session")
-                self._show_error(f"Could not finalize session: {exc}")
             finally:
-                self._session = None
+                self._audio_recorder = None
 
-        self.state = AppState.IDLE
+            if self._transcriber is not None and (
+                self._transcriber.is_ready or self._transcriber._worker is not None
+            ):
+                try:
+                    self._transcriber.shutdown(timeout=None)
+                except Exception as exc:
+                    log.exception("Failed to shut down transcriber")
+                    if include_ui:
+                        self._show_error(f"Could not shut down transcriber: {exc}")
+
+            if self._session is not None:
+                try:
+                    self._session.finalize()
+                except Exception as exc:
+                    log.exception("Failed to finalize session")
+                    if include_ui:
+                        self._show_error(f"Could not finalize session: {exc}")
+                finally:
+                    self._session = None
+
+            try:
+                self.state = AppState.IDLE
+            except Exception:
+                self._reactive_state = AppState.IDLE
 
     def on_unmount(self) -> None:
         if self._batch_executor is not None:

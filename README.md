@@ -105,14 +105,15 @@ On quit (`q`), Scarecrow prints session metrics to the terminal:
 - Audio and transcript file sizes
 - "Press Enter to close" prompt (auto-closes after 30s)
 
-On a clean quit, Scarecrow attempts to:
+On a clean quit, Scarecrow routes shutdown through `app.cleanup_after_exit()` to:
 - stop microphone intake
 - wait for any in-flight batch transcription to finish
 - drain and transcribe the final buffered audio window
+- abandon the batch executor if a worker times out, ignore late batch callbacks, and continue shutdown
 - shut down the realtime worker
 - flush and close the session transcript file
 
-Open shutdown caveats are tracked in [BUGS.md](/Users/dave/Documents/Projects/scarecrow/BUGS.md), including Ctrl+C cleanup and batch-worker shutdown timing.
+Ctrl+C uses the same cleanup path, so the final buffered batch is flushed before the session closes.
 
 ### Startup output
 
@@ -151,7 +152,7 @@ Audio is saved as uncompressed WAV (~1.8 MB/min at 16kHz mono) rather than MP3 (
 
 ```bash
 python3 scripts/sync_env.py          # install deps + repair editable install
-bash scripts/run_test_suite.sh       # run tests (isolated stable groups)
+bash scripts/run_test_suite.sh       # run tests (isolated stable groups, including setup regressions)
 uv run ruff check scarecrow/ tests/  # lint
 uv run vulture scarecrow/ vulture_whitelist.py --ignore-names inter_op_num_threads,intra_op_num_threads,log_severity_level  # dead code check
 ```

@@ -1,9 +1,11 @@
 # History
 
-## 2026-03-24 (docs reconciliation)
+## 2026-03-24 (shutdown and setup follow-up)
 
-- Reconciled the top-level docs with the current audit state so they no longer overclaim shutdown and setup fixes that still need exact-path validation.
-- Kept the bug ledger aligned with the repo policy by marking the unresolved shutdown and setup items as open until automated regression coverage is in place.
+- Routed Ctrl+C cleanup through `app.cleanup_after_exit()` so the final buffered batch is flushed to the session transcript before shutdown completes.
+- Hardened shutdown after batch-worker timeout by abandoning the executor, ignoring late batch callbacks, skipping the final flush, and continuing shutdown.
+- Added automated regression coverage for `scripts/setup.py` in `tests/test_setup.py`, and included that file in `scripts/run_test_suite.sh`.
+- Reconciled `README.md` and `BUGS.md` with the new shutdown and setup behavior.
 
 ## 2026-03-24
 
