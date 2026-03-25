@@ -105,6 +105,13 @@ On quit (`q`), Scarecrow prints session metrics to the terminal:
 - Audio and transcript file sizes
 - "Press Enter to close" prompt (auto-closes after 30s)
 
+Before the TUI exits, Scarecrow now:
+- stops microphone intake
+- waits for any in-flight batch transcription to finish
+- drains and transcribes the final buffered audio window
+- shuts down the realtime worker
+- flushes and closes the session transcript file
+
 ### Startup output
 
 On launch, Scarecrow prints:
@@ -142,7 +149,7 @@ Audio is saved as uncompressed WAV (~1.8 MB/min at 16kHz mono) rather than MP3 (
 
 ```bash
 python3 scripts/sync_env.py          # install deps + repair editable install
-uv run pytest                        # run tests
+bash scripts/run_test_suite.sh       # run tests (isolated stable groups)
 uv run ruff check scarecrow/ tests/  # lint
 uv run vulture scarecrow/ vulture_whitelist.py --ignore-names inter_op_num_threads,intra_op_num_threads,log_severity_level  # dead code check
 ```

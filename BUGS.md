@@ -31,6 +31,66 @@ Scarecrow keeps a running bug ledger in this file. Append to it every time a bug
 
 ## Current Bugs
 
+## [BUG-20260324-quit-drops-final-batch]
+- Status: squashed
+- Found: 2026-03-24
+- Area: app, shutdown, session
+- Symptom: quitting can lose the final buffered speech window because the transcript file closes before the last batch is transcribed.
+- Root cause: `_stop_recording()` stopped the recorder and finalized the session without draining/transcribing the final recorder buffer or waiting for in-flight batch workers.
+- Fix: the shutdown path now stops intake, waits for active batch work, flushes the final buffered audio batch, shuts down the transcriber, and only then finalizes the session.
+- Regression test: `tests/test_behavioral.py::test_stop_recording_flushes_final_batch_before_finalize`, `tests/test_behavioral.py::test_stop_recording_waits_for_inflight_batch_before_finalize`
+- Notes: verified 2026-03-24.
+
+## [BUG-20260324-startup-unwind-leak]
+- Status: squashed
+- Found: 2026-03-24
+- Area: app, recorder, session
+- Symptom: if the recorder starts successfully and the transcriber then fails to begin, the mic stream and WAV handle stay open until process exit.
+- Root cause: `_start_recording()` discarded `_audio_recorder` and `_session` references on startup failure without calling `stop()` / `finalize()`.
+- Fix: startup failure now explicitly stops the recorder and finalizes the session before surfacing the error.
+- Regression test: `tests/test_behavioral.py::test_start_recording_unwinds_recorder_when_transcriber_begin_fails`
+- Notes: verified 2026-03-24.
+
+## [BUG-20260324-overlapping-batch-workers]
+- Status: squashed
+- Found: 2026-03-24
+- Area: app, transcriber, runtime
+- Symptom: batch transcriptions can overlap on the shared batch model, and a second batch tick can drain/drop audio while the first batch is still running.
+- Root cause: each tick launched an untracked background worker, and `transcribe_batch()` had no lock around shared batch-model inference.
+- Fix: the app now allows only one in-flight batch worker, preserves audio when a tick lands while batch work is already running, and `Transcriber.transcribe_batch()` serializes access to the shared batch model.
+- Regression test: `tests/test_behavioral.py::test_batch_tick_skips_overlap_without_draining_new_audio`, `tests/test_transcriber.py::test_transcribe_batch_serializes_overlapping_calls`
+- Notes: verified 2026-03-24.
+
+## [BUG-20260324-vad-failure-session-fatal]
+- Status: squashed
+- Found: 2026-03-24
+- Area: transcriber
+- Symptom: a single transient VAD failure permanently stops live transcription for the rest of the session.
+- Root cause: `_run_worker()` set `_stop_event` and exited on any VAD exception.
+- Fix: VAD failures now emit an error, reset VAD/transient speech state, and continue processing future audio.
+- Regression test: `tests/test_transcriber.py::test_vad_failure_resets_and_recovers`
+- Notes: verified 2026-03-24.
+
+## [BUG-20260324-brittle-whisper-test-patch]
+- Status: squashed
+- Found: 2026-03-24
+- Area: tests, startup, transcriber
+- Symptom: tests intended to mock Whisper model loading can still hit the real model loader and become flaky or crash.
+- Root cause: tests patched `faster_whisper.WhisperModel` instead of the already-imported `scarecrow.runtime.WhisperModel` symbol used by `ModelManager`.
+- Fix: updated tests to patch `scarecrow.runtime.WhisperModel`, which is the actual symbol dereferenced during prepare/startup.
+- Regression test: `tests/test_transcriber.py::test_prepare_sets_is_ready`, `tests/test_transcriber.py::test_shutdown_joins_thread`, `tests/test_startup.py::test_transcriber_prepare_with_mocked_whisper`
+- Notes: verified 2026-03-24.
+
+## [BUG-20260324-full-suite-native-crash]
+- Status: squashed
+- Found: 2026-03-24
+- Area: tests, workflow
+- Symptom: `pytest` can segfault partway through the full suite even though the same test files pass when run in smaller groups.
+- Root cause: the repository relied on one long-lived pytest process to run the entire Textual/native-extension mix, which is unstable on this environment.
+- Fix: added `scripts/run_test_suite.sh` to run the suite in stable isolated subprocess groups and rewired the documented validation command plus git hooks to use that runner.
+- Regression test: `tests/test_suite_runner.py::test_runner_script_groups_app_and_behavioral_tests`, `tests/test_suite_runner.py::test_pre_commit_uses_shell_test_runner`
+- Notes: verified 2026-03-24.
+
 ## [BUG-20260324-silent-runtime-failures]
 - Status: squashed
 - Found: 2026-03-24

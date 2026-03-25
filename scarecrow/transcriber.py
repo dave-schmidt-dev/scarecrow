@@ -68,6 +68,13 @@ class _SileroVAD:
         self._state = np.zeros((2, 1, 128), dtype=np.float32)
         self._context = np.zeros((1, 64), dtype=np.float32)
 
+    def close(self) -> None:
+        """Release the ONNX session explicitly for deterministic teardown."""
+        self._session = None
+
+    def __del__(self) -> None:
+        self.close()
+
 
 class _VadState(Enum):
     SILENCE = auto()
@@ -93,6 +100,7 @@ class Transcriber:
         self._stop_event = threading.Event()
         self._ready = False
         self._audio_drop_reported = False
+        self._batch_lock = threading.Lock()
 
     def bind(self, bindings: TranscriberBindings) -> None:
         """Attach UI/runtime callbacks."""
@@ -161,17 +169,28 @@ class Transcriber:
         """Backward-compatible session stop wrapper."""
         self.end_session()
 
-    def shutdown(self) -> None:
+    def shutdown(self, timeout: float | None = 3) -> None:
         """Stop worker and release runtime resources."""
         self.end_session()
         if self._worker is not None:
-            self._worker.join(timeout=3)
+            self._worker.join(timeout=timeout)
             if self._worker.is_alive():
                 self._emit_error(
                     "shutdown",
-                    "Transcriber worker did not exit cleanly within 3 seconds.",
+                    (
+                        "Transcriber worker did not exit cleanly before shutdown "
+                        "timed out."
+                    ),
                 )
-            self._worker = None
+            else:
+                self._worker = None
+        if self._vad is not None:
+            self._vad.close()
+        self._vad = None
+        self._realtime_model = None
+        self._model = None
+        self._ready = False
+        self._model_manager.release_models()
 
     def accept_audio(self, chunk: np.ndarray) -> None:
         """Accept audio from the recorder callback without blocking."""
@@ -195,14 +214,15 @@ class Transcriber:
     def transcribe_batch(self, audio: np.ndarray, batch_elapsed: int) -> None:
         """Run the accurate batch model on a drained recorder buffer."""
         try:
-            model = self._model_manager.get_batch_model()
-            segments, _ = model.transcribe(
-                audio,
-                language=config.LANGUAGE,
-                beam_size=config.BEAM_SIZE,
-                vad_filter=True,
-                condition_on_previous_text=config.CONDITION_ON_PREVIOUS_TEXT,
-            )
+            with self._batch_lock:
+                model = self._model_manager.get_batch_model()
+                segments, _ = model.transcribe(
+                    audio,
+                    language=config.LANGUAGE,
+                    beam_size=config.BEAM_SIZE,
+                    vad_filter=True,
+                    condition_on_previous_text=config.CONDITION_ON_PREVIOUS_TEXT,
+                )
             text = " ".join(seg.text.strip() for seg in segments).strip()
         except Exception:
             log.exception("Batch transcription failed")
@@ -296,9 +316,19 @@ class Transcriber:
                     log.exception("VAD processing failed")
                     self._emit_error(
                         "vad",
-                        "Voice activity detection failed. Live transcription stopped.",
+                        (
+                            "Voice activity detection failed. Retrying with a fresh "
+                            "VAD state."
+                        ),
                     )
-                    self._stop_event.set()
+                    vad.reset_states()
+                    state = _VadState.SILENCE
+                    pre_buffer.clear()
+                    pre_buffer_samples = 0
+                    speech_audio = []
+                    speech_samples = 0
+                    silence_samples = 0
+                    last_transcribe_samples = 0
                     break
 
                 pre_buffer.append(chunk)
@@ -347,6 +377,8 @@ class Transcriber:
                     speech_samples = 0
                     silence_samples = 0
                     last_transcribe_samples = 0
+                    pre_buffer.clear()
+                    pre_buffer_samples = 0
                     vad.reset_states()
                     log.debug(
                         "VAD: speech end%s",

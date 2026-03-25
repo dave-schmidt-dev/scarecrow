@@ -9,13 +9,13 @@ repos:
         stages: [pre-commit]
       - id: pytest
         name: pytest
-        entry: uv run pytest
+        entry: bash scripts/run_test_suite.sh
         language: system
         pass_filenames: false
         stages: [pre-commit]
       - id: pre-push-pytest
         name: pre-push-pytest
-        entry: uv run pytest
+        entry: bash scripts/run_test_suite.sh
         language: system
         pass_filenames: false
         stages: [pre-push]

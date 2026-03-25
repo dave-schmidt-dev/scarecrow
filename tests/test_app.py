@@ -25,7 +25,9 @@ def _mock_transcriber():
 
 def _app(with_transcriber: bool = False) -> ScarecrowApp:
     if with_transcriber:
-        return ScarecrowApp(transcriber=_mock_transcriber())
+        app = ScarecrowApp(transcriber=_mock_transcriber())
+        app._preflight_check = lambda: True  # type: ignore[method-assign]
+        return app
     return ScarecrowApp()
 
 

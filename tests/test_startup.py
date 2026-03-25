@@ -130,11 +130,15 @@ def test_transcriber_prepare_with_mocked_whisper() -> None:
     """prepare() must succeed when WhisperModel is mocked (tests the wiring)."""
     from scarecrow.transcriber import Transcriber
 
-    with patch("faster_whisper.WhisperModel"):
+    with (
+        patch("scarecrow.runtime.WhisperModel"),
+        patch("scarecrow.transcriber._SileroVAD"),
+    ):
         t = Transcriber()
         t.prepare()
 
     assert t.is_ready
+    t.shutdown(timeout=0)
 
 
 _REALTIME_MODEL_CACHED: bool | None = None

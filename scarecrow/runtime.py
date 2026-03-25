@@ -72,6 +72,12 @@ class ModelManager:
                 self._batch_model = self._create_model(config.FINAL_MODEL)
             return self._batch_model
 
+    def release_models(self) -> None:
+        """Drop model references so process shutdown can reclaim memory."""
+        with self._lock:
+            self._live_model = None
+            self._batch_model = None
+
     @staticmethod
     def _create_model(model_name: str) -> WhisperModel:
         return WhisperModel(

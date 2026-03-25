@@ -8,6 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 from textual.widgets import RichLog, Static
 
 from scarecrow.app import (
@@ -44,7 +45,9 @@ def _mock_recorder():
 
 def _app(with_transcriber: bool = False) -> ScarecrowApp:
     if with_transcriber:
-        return ScarecrowApp(transcriber=_mock_transcriber())
+        app = ScarecrowApp(transcriber=_mock_transcriber())
+        app._preflight_check = lambda: True  # type: ignore[method-assign]
+        return app
     return ScarecrowApp()
 
 
@@ -618,3 +621,165 @@ async def test_pause_preserves_live_history(
         text = _live_text(app)
         assert "first utterance" in text
         assert "second utterance" in text
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_start_recording_unwinds_recorder_when_transcriber_begin_fails(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """Startup failure after mic acquisition must unwind recorder and session."""
+    mock_recorder = _mock_recorder()
+    mock_session = MagicMock()
+    mock_recorder_cls.return_value = mock_recorder
+    mock_session_cls.return_value = mock_session
+
+    transcriber = _mock_transcriber()
+    transcriber.begin_session.side_effect = RuntimeError("boom")
+
+    with patch.object(ScarecrowApp, "_auto_start"):
+        async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
+            app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+            app._start_recording()
+            await pilot.pause()
+
+            mock_recorder.stop.assert_called_once()
+            mock_session.finalize.assert_called_once()
+            assert app._audio_recorder is None
+            assert app._session is None
+            assert app.state is AppState.IDLE
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_stop_recording_flushes_final_batch_before_finalize(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """Shutdown must transcribe the last buffered audio before finalize()."""
+    calls: list[str] = []
+    mock_recorder = _mock_recorder()
+    mock_recorder.drain_buffer.return_value = np.zeros(16000)
+    mock_recorder.stop.side_effect = lambda: calls.append("recorder-stop")
+    mock_recorder_cls.return_value = mock_recorder
+
+    mock_session = MagicMock()
+    mock_session.finalize.side_effect = lambda: calls.append("session-finalize")
+    mock_session_cls.return_value = mock_session
+
+    transcriber = _mock_transcriber()
+    transcriber.end_session.side_effect = lambda: calls.append("end-session")
+    transcriber.transcribe_batch.side_effect = lambda audio, elapsed: calls.append(
+        "final-batch"
+    )
+    transcriber.shutdown.side_effect = lambda timeout=None: calls.append("shutdown")
+
+    async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause(delay=0.2)
+        app._session = mock_session
+        app._audio_recorder = mock_recorder
+        app.state = AppState.RECORDING
+
+        app._stop_recording()
+        await pilot.pause()
+
+    assert calls == [
+        "end-session",
+        "recorder-stop",
+        "final-batch",
+        "shutdown",
+        "session-finalize",
+    ]
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_stop_recording_waits_for_inflight_batch_before_finalize(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """A running batch worker must finish before the session file is finalized."""
+    import threading
+    import time
+
+    calls: list[str] = []
+    release = threading.Event()
+    mock_recorder = _mock_recorder()
+    mock_recorder.drain_buffer.return_value = None
+    mock_recorder_cls.return_value = mock_recorder
+
+    mock_session = MagicMock()
+    mock_session.finalize.side_effect = lambda: calls.append("session-finalize")
+    mock_session_cls.return_value = mock_session
+
+    def slow_batch(_audio, _elapsed):
+        calls.append("batch-start")
+        release.wait(timeout=1)
+        calls.append("batch-end")
+
+    transcriber = _mock_transcriber()
+    transcriber.transcribe_batch.side_effect = slow_batch
+    transcriber.shutdown.side_effect = lambda timeout=None: calls.append("shutdown")
+
+    async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause(delay=0.2)
+        app._session = mock_session
+        app._audio_recorder = mock_recorder
+        app.state = AppState.RECORDING
+
+        app._submit_batch_transcription(np.zeros(16000), batch_elapsed=30)
+        releaser = threading.Thread(
+            target=lambda: (time.sleep(0.1), release.set()),
+            daemon=True,
+        )
+        releaser.start()
+
+        app._stop_recording()
+        await pilot.pause()
+
+    assert calls == ["batch-start", "batch-end", "shutdown", "session-finalize"]
+
+
+async def test_batch_tick_skips_overlap_without_draining_new_audio() -> None:
+    """A second batch tick while one is inflight must leave recorder audio buffered."""
+    from concurrent.futures import Future
+
+    recorder = MagicMock()
+    recorder.drain_buffer.side_effect = [np.zeros(16000), np.ones(16000)]
+
+    async with ScarecrowApp(transcriber=_mock_transcriber()).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+        app._audio_recorder = recorder
+        app._batch_futures = {Future()}
+
+        app._batch_transcribe()
+
+    assert recorder.drain_buffer.call_count == 0
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_stop_recording_surfaces_session_finalize_failure(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """Disk or permission failures during finalize() must surface in the UI."""
+    mock_recorder_cls.return_value = _mock_recorder()
+    mock_session = MagicMock()
+    mock_session.finalize.side_effect = OSError("disk full")
+    mock_session_cls.return_value = mock_session
+
+    transcriber = _mock_transcriber()
+
+    async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause(delay=0.2)
+        app._session = mock_session
+        app._audio_recorder = _mock_recorder()
+        app.state = AppState.RECORDING
+
+        app._stop_recording()
+        await pilot.pause()
+
+        assert app._status_message == "Could not finalize session: disk full"
+        assert app._status_is_error is True
