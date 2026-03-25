@@ -1,8 +1,9 @@
 # History
 
-## 2026-03-25 (audio drop error spam fix)
+## 2026-03-25 (audio drop error handling)
 
-- Changed audio drop error to report once per session instead of on every queue full/not-full cycle. The error was flooding the transcript pane during sustained speech when the realtime model couldn't keep up.
+- Changed audio drop error to report once per session instead of on every queue full/not-full cycle.
+- Audio drop messages now appear in the status bar only, not the transcript pane. Other transcription errors still go to the transcript pane.
 
 ## 2026-03-25 (launch alias and iTerm2 profile fix)
 

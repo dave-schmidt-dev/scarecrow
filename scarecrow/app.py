@@ -258,7 +258,10 @@ class ScarecrowApp(App[None]):
         self._post_to_ui(self._append_transcript, text, batch_elapsed)
 
     def _on_transcriber_error(self, source: str, message: str) -> None:
-        self._post_to_ui(self._show_error, f"{source}: {message}")
+        if source == "audio":
+            self._post_to_ui(lambda: self._set_status(message, error=True))
+        else:
+            self._post_to_ui(self._show_error, f"{source}: {message}")
 
     def _render_live(self) -> None:
         if not self.is_mounted:
