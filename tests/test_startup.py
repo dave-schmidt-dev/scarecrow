@@ -89,6 +89,10 @@ def test_main_module_importable_from_outside_project(tmp_path: Path) -> None:
     """
     import subprocess
 
+    from scarecrow.env_health import ensure_editable_install_visible
+
+    ensure_editable_install_visible("scarecrow")
+
     result = subprocess.run(
         [sys.executable, "-c", "from scarecrow.__main__ import main; main.__name__"],
         capture_output=True,

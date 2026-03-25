@@ -118,7 +118,7 @@ class ScarecrowApp(App[None]):
         self._status_is_error = False
         self._shutdown_summary = ""
         self._batch_executor: ThreadPoolExecutor | None = None
-        self._batch_futures: set[Future[None]] = set()
+        self._batch_futures: set[Future[str | None]] = set()
         self._shutdown_lock = threading.RLock()
         self._ignore_batch_results = False
 
@@ -406,12 +406,14 @@ class ScarecrowApp(App[None]):
                 include_ui=include_ui,
             )
 
-    def _wait_for_batch_workers(self) -> bool:
-        self._reap_batch_futures()
+    def _wait_for_batch_workers(self) -> tuple[bool, list[str]]:
         timed_out = False
+        captured: list[str] = []
         for future in list(self._batch_futures):
             try:
-                future.result(timeout=10)
+                result = future.result(timeout=10)
+                if result:
+                    captured.append(result)
             except FuturesTimeoutError:
                 timed_out = True
                 log.warning(
@@ -425,7 +427,7 @@ class ScarecrowApp(App[None]):
             self._ignore_batch_results = True
             self._batch_executor.shutdown(wait=False, cancel_futures=False)
             self._batch_executor = None
-        return not timed_out
+        return not timed_out, captured
 
     def _batch_transcribe(self) -> None:
         if self._audio_recorder is None or self._transcriber is None:
@@ -590,7 +592,7 @@ class ScarecrowApp(App[None]):
                 or bool(self._batch_futures)
             )
             has_active_transcriber = self._transcriber is not None and (
-                self._transcriber.is_ready or self._transcriber._worker is not None
+                self._transcriber.is_ready or self._transcriber.has_active_worker
             )
             if not has_open_resources and not has_active_transcriber:
                 return
@@ -612,7 +614,10 @@ class ScarecrowApp(App[None]):
                         self._show_error(f"Could not stop audio recorder: {exc}")
 
             try:
-                batch_workers_finished = self._wait_for_batch_workers()
+                batch_workers_finished, captured = self._wait_for_batch_workers()
+                self._ignore_batch_results = True
+                for text in captured:
+                    self._record_transcript(text, include_ui=include_ui)
                 if batch_workers_finished:
                     self._flush_final_batch(include_ui=include_ui)
                 else:
@@ -634,11 +639,15 @@ class ScarecrowApp(App[None]):
             finally:
                 self._audio_recorder = None
 
+            if self._batch_executor is not None:
+                self._batch_executor.shutdown(wait=False, cancel_futures=False)
+                self._batch_executor = None
+
             if self._transcriber is not None and (
-                self._transcriber.is_ready or self._transcriber._worker is not None
+                self._transcriber.is_ready or self._transcriber.has_active_worker
             ):
                 try:
-                    self._transcriber.shutdown(timeout=None)
+                    self._transcriber.shutdown(timeout=5)
                 except Exception as exc:
                     log.exception("Failed to shut down transcriber")
                     if include_ui:

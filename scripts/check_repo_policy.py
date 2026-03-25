@@ -72,7 +72,13 @@ def check_bugs_regression_refs() -> list[str]:
             failures.append(f"{title.strip()}: missing regression test entry.")
             continue
         value = match.group(1).strip().lower()
-        if value in {"pending", "none", "n/a"} or "pending" in value or "n/a" in value:
+        reject = {"pending", "none", "n/a"}
+        has_test_ref = "::" in value or "tests/" in value
+        if (
+            value in reject
+            or any(k in value for k in reject)
+            or (not has_test_ref and "manual" in value)
+        ):
             failures.append(
                 f"{title.strip()}: squashed bug must name a regression test."
             )

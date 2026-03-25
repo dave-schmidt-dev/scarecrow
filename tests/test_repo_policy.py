@@ -68,3 +68,21 @@ def test_check_bugs_regression_refs_rejects_na_substring(tmp_path: Path) -> None
         check_repo_policy.REPO_ROOT = original_root
 
     assert failures == ["[BUG-demo]: squashed bug must name a regression test."]
+
+
+def test_check_bugs_regression_refs_rejects_manual_only(tmp_path: Path) -> None:
+    """'manual only' regression test entries must be rejected."""
+    original_root = check_repo_policy.REPO_ROOT
+    try:
+        check_repo_policy.REPO_ROOT = tmp_path
+        (tmp_path / "BUGS.md").write_text(
+            "## [BUG-demo]\n"
+            "- Status: squashed\n"
+            "- Regression test: manual only — not automated\n",
+            encoding="utf-8",
+        )
+        failures = check_repo_policy.check_bugs_regression_refs()
+    finally:
+        check_repo_policy.REPO_ROOT = original_root
+
+    assert failures == ["[BUG-demo]: squashed bug must name a regression test."]

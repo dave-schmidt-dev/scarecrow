@@ -107,10 +107,10 @@ On quit (`q`), Scarecrow prints session metrics to the terminal:
 
 On a clean quit, Scarecrow routes shutdown through `app.cleanup_after_exit()` to:
 - stop microphone intake
-- wait for any in-flight batch transcription to finish
+- wait for any in-flight batch transcription to finish and capture its text directly from the future
 - drain and transcribe the final buffered audio window
 - abandon the batch executor if a worker times out, ignore late batch callbacks, and continue shutdown
-- shut down the realtime worker
+- shut down the batch executor and realtime worker (5-second timeout)
 - flush and close the session transcript file
 
 Ctrl+C uses the same cleanup path, so the final buffered batch is flushed before the session closes.

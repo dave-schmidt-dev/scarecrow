@@ -317,6 +317,10 @@ def test_scarecrow_importable_from_outside_project_dir() -> None:
     import subprocess
     import sys
 
+    from scarecrow.env_health import ensure_editable_install_visible
+
+    ensure_editable_install_visible("scarecrow")
+
     result = subprocess.run(
         [sys.executable, "-c", "from scarecrow.__main__ import main"],
         capture_output=True,

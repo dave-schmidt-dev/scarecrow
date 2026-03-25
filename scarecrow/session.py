@@ -16,6 +16,7 @@ class Session:
         self._session_dir.mkdir(parents=True, exist_ok=True)
 
         self._transcript_file = None
+        self._finalized = False
 
     @property
     def session_dir(self) -> Path:
@@ -34,6 +35,8 @@ class Session:
 
     def append_sentence(self, text: str) -> None:
         """Appends a line to transcript.txt, flushes immediately."""
+        if self._finalized:
+            return
         if self._transcript_file is None:
             self._transcript_file = self.transcript_path.open("a", encoding="utf-8")
 
@@ -42,6 +45,7 @@ class Session:
 
     def finalize(self) -> None:
         """Closes any open file handles."""
+        self._finalized = True
         if self._transcript_file is not None:
             self._transcript_file.close()
             self._transcript_file = None

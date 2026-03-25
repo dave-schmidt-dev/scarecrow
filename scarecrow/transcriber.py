@@ -256,6 +256,11 @@ class Transcriber:
     def is_ready(self) -> bool:
         return self._ready
 
+    @property
+    def has_active_worker(self) -> bool:
+        """True when the realtime worker thread exists and has not been joined."""
+        return self._worker is not None
+
     def _drain_queue(self) -> None:
         while not self._queue.empty():
             try:

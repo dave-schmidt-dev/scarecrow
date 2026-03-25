@@ -1,5 +1,17 @@
 # History
 
+## 2026-03-25 (audit round 2: batch capture, timeout hardening, cleanup)
+
+- Fixed in-flight batch worker text being silently lost on quit by capturing future return values in `_wait_for_batch_workers` and writing them to the session transcript before finalize.
+- Fixed type annotation for `_batch_futures` (`Future[None]` → `Future[str | None]`).
+- Added explicit batch executor shutdown in the normal cleanup path to prevent atexit hangs.
+- Added 5-second timeout to realtime transcriber worker shutdown (was `None`, blocking indefinitely).
+- Replaced private `_worker` attribute access on Transcriber with a public `has_active_worker` property.
+- Made `Session.finalize()` fully idempotent under KeyboardInterrupt by tracking finalized state separately from the file handle.
+- Updated policy checker to reject "manual only" regression test entries in BUGS.md.
+- Marked BUG-20260324-quit-drops-final-batch as squashed; updated stale-manual-scripts entry.
+- Added regression tests for: in-flight batch text capture, session finalize under interrupt, transcriber shutdown timeout, batch executor cleanup, on_unmount safety.
+
 ## 2026-03-24 (shutdown and setup follow-up)
 
 - Routed Ctrl+C cleanup through `app.cleanup_after_exit()` so the final buffered batch is flushed to the session transcript before shutdown completes.

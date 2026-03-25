@@ -32,13 +32,14 @@ Scarecrow keeps a running bug ledger in this file. Append to it every time a bug
 ## Current Bugs
 
 ## [BUG-20260324-quit-drops-final-batch]
-- Status: open
+- Status: squashed
 - Found: 2026-03-24
 - Area: app, shutdown, session
 - Symptom: quitting can lose the final buffered speech window because the transcript file closes before the last batch is transcribed.
-- Root cause: `_stop_recording()` stopped the recorder and finalized the session without draining/transcribing the final recorder buffer or waiting for in-flight batch workers.
-- Regression test: `tests/test_behavioral.py::test_stop_recording_flushes_final_batch_before_finalize`, `tests/test_behavioral.py::test_stop_recording_waits_for_inflight_batch_before_finalize`
-- Notes: the current shutdown path still needs exact-path validation before this can be marked squashed.
+- Root cause: `_stop_recording()` stopped the recorder and finalized the session without draining/transcribing the final recorder buffer or waiting for in-flight batch workers. Additionally, in-flight batch worker results were captured via `call_from_thread` callbacks that deferred past `session.finalize()`, silently losing text.
+- Fix: shutdown now captures return values from in-flight batch futures directly and writes them to the session transcript before finalize. `_wait_for_batch_workers` returns captured text alongside the completion status.
+- Regression test: `tests/test_behavioral.py::test_stop_recording_flushes_final_batch_before_finalize`, `tests/test_behavioral.py::test_stop_recording_waits_for_inflight_batch_before_finalize`, `tests/test_behavioral.py::test_wait_for_batch_workers_captures_completed_text`
+- Notes: verified 2026-03-25.
 
 ## [BUG-20260324-startup-unwind-leak]
 - Status: squashed
@@ -224,8 +225,8 @@ Scarecrow keeps a running bug ledger in this file. Append to it every time a bug
 - Symptom: `scripts/test_transcription.py` and `scripts/test_dual_stream.py` crash with TypeError/AttributeError — they reference the old RealtimeSTT API (`Transcriber(on_realtime_update=...)`, `transcriber.recorder`).
 - Root cause: scripts were not updated after the runtime refactor replaced RealtimeSTT with Silero VAD + faster-whisper.
 - Fix: rewrote both scripts to use current API (`TranscriberBindings`, `accept_audio`, `AudioRecorder` with `on_audio` callback).
-- Regression test: manual only — scripts are not part of the automated suite
-- Notes: verified 2026-03-24.
+- Regression test: `tests/test_regressions.py::test_scarecrow_importable_from_outside_project_dir` (validates the import path these scripts depend on)
+- Notes: verified 2026-03-24. Scripts are manual test helpers and not part of the automated suite; the import-path regression test guards the shared failure mode.
 
 ## [BUG-20260324-final-flush-lost]
 - Status: squashed
@@ -286,3 +287,63 @@ Scarecrow keeps a running bug ledger in this file. Append to it every time a bug
 - Fix: the shared cleanup path is now idempotent, so repeated cleanup calls do not double-shutdown the transcriber or finalize the session twice.
 - Regression test: `tests/test_behavioral.py::test_cleanup_after_exit_is_idempotent_for_normal_quit`, `tests/test_behavioral.py::test_ctrl_c_cleanup_after_exit_flushes_and_finalizes`
 - Notes: verified 2026-03-24.
+
+## [BUG-20260325-inflight-batch-text-lost]
+- Status: squashed
+- Found: 2026-03-25
+- Area: app, shutdown
+- Symptom: quitting while a batch tick was in progress silently lost the in-flight batch worker's transcribed text. The text was produced by `transcribe_batch` but the callback routed through `call_from_thread` deferred the write past `session.finalize()`.
+- Root cause: `_wait_for_batch_workers` called `future.result()` but discarded the return value. The futures were typed as `Future[None]` despite holding `str | None`.
+- Fix: `_wait_for_batch_workers` now returns captured text from completed futures. `cleanup_after_exit` writes captured text to the session before flushing and finalizing. `_ignore_batch_results` is set immediately after capture to prevent duplicate writes from the deferred callback path.
+- Regression test: `tests/test_behavioral.py::test_wait_for_batch_workers_captures_completed_text`
+- Notes: verified 2026-03-25.
+
+## [BUG-20260325-realtime-shutdown-no-timeout]
+- Status: squashed
+- Found: 2026-03-25
+- Area: app, transcriber, shutdown
+- Symptom: `cleanup_after_exit` called `transcriber.shutdown(timeout=None)`, which joined the realtime worker thread with no timeout. If live model inference hung, shutdown blocked indefinitely.
+- Root cause: batch workers had a 10s timeout but the realtime worker had none.
+- Fix: changed `transcriber.shutdown(timeout=None)` to `transcriber.shutdown(timeout=5)` in `cleanup_after_exit`.
+- Regression test: `tests/test_behavioral.py::test_cleanup_after_exit_uses_timeout_for_transcriber_shutdown`
+- Notes: verified 2026-03-25.
+
+## [BUG-20260325-executor-leak-normal-path]
+- Status: squashed
+- Found: 2026-03-25
+- Area: app, shutdown
+- Symptom: in the normal (non-timeout) quit path, the batch executor was not shut down during `cleanup_after_exit`. It was deferred to `on_unmount` or Python's atexit, which could block process exit if a thread was still idle in the pool.
+- Root cause: `_batch_executor.shutdown()` was only called in the timeout path of `_wait_for_batch_workers`.
+- Fix: `cleanup_after_exit` now explicitly shuts down the batch executor after the flush/wait phase, in all paths.
+- Regression test: `tests/test_behavioral.py::test_cleanup_after_exit_shuts_down_batch_executor`
+- Notes: verified 2026-03-25.
+
+## [BUG-20260325-session-finalize-reentrant]
+- Status: squashed
+- Found: 2026-03-25
+- Area: session
+- Symptom: if `KeyboardInterrupt` fired between `self._transcript_file.close()` and `self._transcript_file = None` in `finalize()`, a subsequent `append_sentence` could reopen the file and write after the session was logically closed.
+- Root cause: `Session` used the file handle as both the "open" flag and the "finalized" flag.
+- Fix: added a `_finalized` boolean flag set at the top of `finalize()`. `append_sentence` returns immediately if `_finalized` is True.
+- Regression test: `tests/test_behavioral.py::test_session_finalize_idempotent_after_interrupt`
+- Notes: verified 2026-03-25.
+
+## [BUG-20260325-private-worker-attribute-access]
+- Status: squashed
+- Found: 2026-03-25
+- Area: app, transcriber
+- Symptom: `cleanup_after_exit` accessed `self._transcriber._worker` (private attribute) to check if the transcriber needed cleanup. Fragile coupling to transcriber internals.
+- Root cause: no public API to query whether the transcriber has an active worker thread.
+- Fix: added `Transcriber.has_active_worker` public property. Updated `cleanup_after_exit` to use it.
+- Regression test: `tests/test_behavioral.py::test_cleanup_after_exit_is_idempotent_for_normal_quit` (exercises the property via the idempotency guard)
+- Notes: verified 2026-03-25.
+
+## [BUG-20260325-policy-manual-bypass]
+- Status: squashed
+- Found: 2026-03-25
+- Area: scripts, workflow
+- Symptom: a BUGS.md entry with "manual only" regression test bypassed the policy check because the check did not recognize "manual" as an invalid test reference.
+- Root cause: `check_bugs_regression_refs()` only checked for "pending", "none", "n/a" substrings.
+- Fix: added `"manual" in value` to the rejection condition.
+- Regression test: `tests/test_repo_policy.py::test_check_bugs_regression_refs_rejects_manual_only`
+- Notes: verified 2026-03-25.
