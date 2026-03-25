@@ -32,14 +32,13 @@ Scarecrow keeps a running bug ledger in this file. Append to it every time a bug
 ## Current Bugs
 
 ## [BUG-20260324-quit-drops-final-batch]
-- Status: squashed
+- Status: open
 - Found: 2026-03-24
 - Area: app, shutdown, session
 - Symptom: quitting can lose the final buffered speech window because the transcript file closes before the last batch is transcribed.
 - Root cause: `_stop_recording()` stopped the recorder and finalized the session without draining/transcribing the final recorder buffer or waiting for in-flight batch workers.
-- Fix: the shutdown path now stops intake, waits for active batch work, flushes the final buffered audio batch, shuts down the transcriber, and only then finalizes the session.
 - Regression test: `tests/test_behavioral.py::test_stop_recording_flushes_final_batch_before_finalize`, `tests/test_behavioral.py::test_stop_recording_waits_for_inflight_batch_before_finalize`
-- Notes: verified 2026-03-24.
+- Notes: the current shutdown path still needs exact-path validation before this can be marked squashed.
 
 ## [BUG-20260324-startup-unwind-leak]
 - Status: squashed
@@ -239,34 +238,31 @@ Scarecrow keeps a running bug ledger in this file. Append to it every time a bug
 - Notes: verified 2026-03-24.
 
 ## [BUG-20260324-ctrlc-cleanup]
-- Status: squashed
+- Status: open
 - Found: 2026-03-24
 - Area: app, recorder, session, shutdown
 - Symptom: pressing Ctrl+C during recording left the microphone stream and WAV file open; the transcript file was not flushed or closed.
 - Root cause: the `finally` block in `__main__.py` only called `transcriber.shutdown()`; it did not stop the recorder or finalize the session because Ctrl+C never runs `_stop_recording`.
-- Fix: the `finally` block now stops the recorder and finalizes the session when they are still active, and guards the transcriber shutdown so it is only called once.
 - Regression test: `tests/test_behavioral.py::test_ctrl_c_finally_block_cleans_up_recorder_and_session`
-- Notes: verified 2026-03-24.
+- Notes: the cleanup path still needs a real `python -m scarecrow`/Ctrl+C regression before it can be considered squashed.
 
 ## [BUG-20260324-setup-defaults-drift]
-- Status: squashed
+- Status: open
 - Found: 2026-03-24
 - Area: scripts, setup
 - Symptom: running `scripts/setup.py` and selecting a different live model silently failed to update `config.py` because the setup script's `DEFAULTS["live"]` was `"tiny.en"` but the config already contained `"base.en"`.
 - Root cause: `write_config()` used exact string replacement with the hardcoded default; since the default didn't match what was in the file, the replacement found nothing and wrote the file unchanged.
-- Fix: corrected `DEFAULTS["live"]` to `"base.en"` and rewrote `write_config()` to use regex replacement that matches any current model name.
 - Regression test: manual only — interactive setup script
-- Notes: verified 2026-03-24.
+- Notes: the config rewrite still needs an automated regression before this can be marked squashed under repo policy.
 
 ## [BUG-20260324-batch-worker-infinite-block]
-- Status: squashed
+- Status: open
 - Found: 2026-03-24
 - Area: app, shutdown
 - Symptom: if a batch model inference hangs during shutdown, `_wait_for_batch_workers` blocks the Textual event loop indefinitely with no recovery path.
 - Root cause: `future.result()` was called without a timeout.
-- Fix: added `timeout=10` to `future.result()` with a logged warning; exceptions from the batch worker are also caught and logged.
 - Regression test: `tests/test_behavioral.py::test_wait_for_batch_workers_survives_timeout`
-- Notes: verified 2026-03-24.
+- Notes: the timeout path still needs end-to-end shutdown validation because a timed-out batch future can still affect later flush/teardown behavior.
 
 ## [BUG-20260324-policy-na-bypass]
 - Status: squashed

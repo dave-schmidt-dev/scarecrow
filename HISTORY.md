@@ -1,15 +1,9 @@
 # History
 
-## 2026-03-24 (final audit)
+## 2026-03-24 (docs reconciliation)
 
-- Fixed silent loss of the final batch transcript on quit: `transcribe_batch` now returns text directly and `_flush_final_batch` writes to the session file synchronously, bypassing the `call_from_thread` callback path that deferred the write past `session.finalize()`.
-- Fixed Ctrl+C shutdown leaving the microphone stream and WAV file open: the `__main__.py` finally block now stops the recorder and finalizes the session when they are still active, and guards the transcriber shutdown to avoid redundant calls.
-- Fixed `scripts/setup.py` DEFAULTS drift: corrected the live model default from `"tiny.en"` to `"base.en"` and rewrote `write_config()` to use regex replacement instead of exact-string matching.
-- Added `timeout=10` to `_wait_for_batch_workers` so a hung batch worker cannot block the event loop indefinitely during shutdown.
-- Strengthened the BUGS.md policy check to reject `"n/a (explanation)"` substring matches, not just exact `"n/a"`.
-- Added `ScarecrowApp.on_unmount` and `_SileroVAD.__del__` to the vulture whitelist to prevent false dead-code positives.
-- Updated the integration test to fall back to synthetic audio when the local fixture is absent, so the pipeline is exercised on fresh clones with cached models.
-- Added regression tests: final-flush transcript file write, Ctrl+C cleanup, batch worker timeout, `_post_to_ui` after idle, and policy "n/a" substring rejection.
+- Reconciled the top-level docs with the current audit state so they no longer overclaim shutdown and setup fixes that still need exact-path validation.
+- Kept the bug ledger aligned with the repo policy by marking the unresolved shutdown and setup items as open until automated regression coverage is in place.
 
 ## 2026-03-24
 

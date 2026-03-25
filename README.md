@@ -105,12 +105,14 @@ On quit (`q`), Scarecrow prints session metrics to the terminal:
 - Audio and transcript file sizes
 - "Press Enter to close" prompt (auto-closes after 30s)
 
-Before the TUI exits, Scarecrow now:
-- stops microphone intake
-- waits for any in-flight batch transcription to finish
-- drains and transcribes the final buffered audio window
-- shuts down the realtime worker
-- flushes and closes the session transcript file
+On a clean quit, Scarecrow attempts to:
+- stop microphone intake
+- wait for any in-flight batch transcription to finish
+- drain and transcribe the final buffered audio window
+- shut down the realtime worker
+- flush and close the session transcript file
+
+Open shutdown caveats are tracked in [BUGS.md](/Users/dave/Documents/Projects/scarecrow/BUGS.md), including Ctrl+C cleanup and batch-worker shutdown timing.
 
 ### Startup output
 
