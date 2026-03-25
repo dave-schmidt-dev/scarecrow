@@ -52,7 +52,7 @@ cp examples/scarecrow-iterm-profile.json \
    ~/Library/Application\ Support/iTerm2/DynamicProfiles/scarecrow.json
 ```
 
-Edit the file to update the path to your scarecrow project and `uv` binary.
+Edit the file to update the path to your scarecrow project (replace `$HOME/path/to/scarecrow` with the actual path). The profile calls the venv binary directly instead of `uv run` to avoid the macOS `UF_HIDDEN` flag issue that `uv run` can trigger on the editable-install `.pth` file.
 
 Then add this alias to `~/.zshrc`:
 
@@ -67,8 +67,10 @@ This opens a dedicated iTerm2 window that auto-runs scarecrow, shows errors on f
 If you don't use iTerm2, add to `~/.zshrc` (or `~/.bashrc`):
 
 ```bash
-alias sc="uv run --project /path/to/scarecrow scarecrow"
+alias sc="/path/to/scarecrow/.venv/bin/scarecrow"
 ```
+
+Avoid `uv run` in the alias — it can re-trigger the macOS `UF_HIDDEN` flag on the editable-install `.pth` file, breaking the import. If you must use `uv run`, prefix it with `chflags nohidden /path/to/scarecrow/.venv/lib/python3.12/site-packages/_scarecrow.pth 2>/dev/null;`.
 
 ## Usage
 

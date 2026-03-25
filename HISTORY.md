@@ -1,5 +1,11 @@
 # History
 
+## 2026-03-25 (launch alias and iTerm2 profile fix)
+
+- Changed iTerm2 profile and shell alias to call `.venv/bin/scarecrow` directly instead of `uv run`, which re-triggers the macOS `UF_HIDDEN` flag on the editable-install `.pth` file every launch.
+- Added `chflags nohidden` safety net to the iTerm2 profile command.
+- Updated README to document the `uv run` avoidance and the direct venv binary approach.
+
 ## 2026-03-25 (audit round 2: batch capture, timeout hardening, cleanup)
 
 - Fixed in-flight batch worker text being silently lost on quit by capturing future return values in `_wait_for_batch_workers` and writing them to the session transcript before finalize.
