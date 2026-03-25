@@ -12,8 +12,6 @@ from __future__ import annotations
 import signal
 import sys
 
-from Foundation import NSDate, NSRunLoop
-
 from scarecrow.live_captioner import CaptionerBindings, LiveCaptioner
 
 
@@ -62,10 +60,8 @@ def main() -> None:
     stop = [False]
     signal.signal(signal.SIGINT, lambda *_: stop.__setitem__(0, True))
 
-    run_loop = NSRunLoop.currentRunLoop()
     while not stop[0]:
-        run_loop.runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.1))
-        captioner.check_rotation()
+        captioner.tick()
 
     print("\nShutting down...")
     captioner.shutdown(timeout=5)

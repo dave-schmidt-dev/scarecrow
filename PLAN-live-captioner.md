@@ -1,5 +1,7 @@
 # Plan: Replace Live Captions with Apple Speech Framework
 
+**Status: Complete (2026-03-25)**
+
 ## Goal
 
 Replace the Silero VAD + Whisper base.en live captioning path with Apple's `SFSpeechRecognizer` for true streaming word-by-word captions. Keep Whisper medium.en batch transcription exactly as-is.
@@ -32,7 +34,7 @@ New module: `scarecrow/live_captioner.py`
 
 ## Phases
 
-### Phase 1: Proof of concept (standalone script)
+### Phase 1: Proof of concept (standalone script) ✓ Complete
 
 **Work**: Write `scripts/test_apple_speech.py` that:
 1. Imports `Speech` and `AVFoundation` via pyobjc
@@ -51,7 +53,7 @@ New module: `scarecrow/live_captioner.py`
 
 **Risk gate**: If PyObjC's block bridging doesn't work with `SFSpeechAudioBufferRecognitionRequest`, we stop here.
 
-### Phase 2: LiveCaptioner module
+### Phase 2: LiveCaptioner module ✓ Complete
 
 **Work**: Create `scarecrow/live_captioner.py`:
 - `LiveCaptioner` class with same callback interface as `TranscriberBindings` (partial + stabilized + error)
@@ -70,7 +72,7 @@ New module: `scarecrow/live_captioner.py`
 - `test_live_captioner.py`: mock-based unit tests for lifecycle, session rotation, error handling
 - Integration test with real mic (skipped without hardware, like existing integration tests)
 
-### Phase 3: Wire into the app
+### Phase 3: Wire into the app ✓ Complete
 
 **Work**:
 - `ScarecrowApp.__init__` accepts optional `LiveCaptioner`
@@ -89,7 +91,7 @@ New module: `scarecrow/live_captioner.py`
 - Update `test_behavioral.py` shutdown tests to cover `LiveCaptioner` cleanup
 - Existing batch tests must pass unchanged
 
-### Phase 4: Remove Whisper live path
+### Phase 4: Remove Whisper live path ✓ Complete
 
 **Work**:
 - Remove Silero VAD (`_SileroVAD` class, `silero_vad.onnx` model)
@@ -112,7 +114,7 @@ New module: `scarecrow/live_captioner.py`
 - Keep all batch, shutdown, and session tests
 - Full suite passes
 
-### Phase 5: Polish and document
+### Phase 5: Polish and document ✓ Complete
 
 **Work**:
 - Update README (architecture section, two-model → Apple + Whisper)

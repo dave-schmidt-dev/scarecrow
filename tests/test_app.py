@@ -18,14 +18,26 @@ def _mock_transcriber():
     """Return a mock Transcriber that doesn't load models."""
     mock = MagicMock()
     mock.is_ready = True
-    mock.set_callbacks.return_value = None
+    mock.shutdown.return_value = None
+    return mock
+
+
+def _mock_captioner():
+    """Return a mock LiveCaptioner that doesn't load models."""
+    mock = MagicMock()
+    mock.is_ready = True
+    mock.begin_session.return_value = None
+    mock.end_session.return_value = None
     mock.shutdown.return_value = None
     return mock
 
 
 def _app(with_transcriber: bool = False) -> ScarecrowApp:
     if with_transcriber:
-        app = ScarecrowApp(transcriber=_mock_transcriber())
+        app = ScarecrowApp(
+            transcriber=_mock_transcriber(),
+            live_captioner=_mock_captioner(),
+        )
         app._preflight_check = lambda: True  # type: ignore[method-assign]
         return app
     return ScarecrowApp()
@@ -269,12 +281,10 @@ async def test_transcriber_error_surfaces_in_ui(
 
 async def test_pane_labels_show_model_names() -> None:
     """Regression: pane labels must include model names."""
-    from scarecrow import config
-
     async with _app().run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
         labels = [w.render() for w in app.query(".pane-label")]
         label_text = " ".join(str(lbl) for lbl in labels)
-        assert config.REALTIME_MODEL in label_text
+        assert "Apple Speech" in label_text
         assert "Transcript" in label_text
         assert "Live" in label_text

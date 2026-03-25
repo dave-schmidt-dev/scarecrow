@@ -23,6 +23,7 @@ from textual.reactive import reactive
 from textual.widgets import Footer, RichLog, Static
 
 from scarecrow import config
+from scarecrow.live_captioner import CaptionerBindings, LiveCaptioner
 from scarecrow.recorder import AudioRecorder
 from scarecrow.session import Session
 from scarecrow.transcriber import TranscriberBindings
@@ -107,11 +108,16 @@ class ScarecrowApp(App[None]):
     _word_count: reactive[int] = reactive(0)
     _batch_countdown: reactive[int] = reactive(BATCH_INTERVAL_SECONDS)
 
-    def __init__(self, transcriber: Transcriber | None = None) -> None:
+    def __init__(
+        self,
+        transcriber: Transcriber | None = None,
+        live_captioner: LiveCaptioner | None = None,
+    ) -> None:
         super().__init__()
         self._session: Session | None = None
         self._audio_recorder: AudioRecorder | None = None
         self._transcriber: Transcriber | None = transcriber
+        self._live_captioner: LiveCaptioner | None = live_captioner
         self._live_stable: list[str] = []
         self._live_partial: str = ""
         self._status_message: str = ""
@@ -139,7 +145,7 @@ class ScarecrowApp(App[None]):
             min_width=0,
         )
         yield Static(
-            f"Live  [dim]({config.REALTIME_MODEL})[/dim]",
+            "Live  [dim](Apple Speech)[/dim]",
             classes="pane-label",
         )
         with VerticalScroll(id="live-pane"):
@@ -175,7 +181,7 @@ class ScarecrowApp(App[None]):
             return False
 
         if self._transcriber is None or not self._transcriber.is_ready:
-            self._show_error("Transcriber not initialized.")
+            self._show_error("Batch transcriber not initialized.")
             return False
 
         return True
@@ -231,25 +237,30 @@ class ScarecrowApp(App[None]):
             else:
                 log.debug("UI callback skipped during shutdown: %s", callback)
 
-    def _bind_transcriber(self) -> None:
-        if self._transcriber is None:
-            return
-        self._transcriber.bind(
-            TranscriberBindings(
-                on_realtime_update=self._on_realtime_update,
-                on_realtime_stabilized=self._on_realtime_stabilized,
-                on_batch_result=self._on_batch_result,
-                on_error=self._on_transcriber_error,
+    def _bind_callbacks(self) -> None:
+        if self._transcriber is not None:
+            self._transcriber.bind(
+                TranscriberBindings(
+                    on_batch_result=self._on_batch_result,
+                    on_error=self._on_transcriber_error,
+                )
             )
-        )
+        if self._live_captioner is not None:
+            self._live_captioner.bind(
+                CaptionerBindings(
+                    on_realtime_update=self._on_realtime_update,
+                    on_realtime_stabilized=self._on_realtime_stabilized,
+                    on_error=self._on_transcriber_error,
+                )
+            )
 
     def _on_realtime_update(self, text: str) -> None:
         if text:
-            self._post_to_ui(self._set_live_partial, text)
+            self._set_live_partial(text)
 
     def _on_realtime_stabilized(self, text: str) -> None:
         if text:
-            self._post_to_ui(self._append_live, text)
+            self._append_live(text)
 
     def _on_batch_result(self, text: str, batch_elapsed: int) -> None:
         if self._ignore_batch_results:
@@ -472,18 +483,18 @@ class ScarecrowApp(App[None]):
             self._show_error("Transcriber not ready.")
             return
 
-        self._bind_transcriber()
+        self._bind_callbacks()
         self._ignore_batch_results = False
         self._session = Session(base_dir=config.DEFAULT_RECORDINGS_DIR)
         self._audio_recorder = AudioRecorder(
             output_path=self._session.audio_path,
             sample_rate=config.SAMPLE_RATE,
-            on_audio=self._transcriber.accept_audio,
         )
 
         try:
             self._audio_recorder.start()
-            self._transcriber.begin_session()
+            if self._live_captioner is not None:
+                self._live_captioner.begin_session()
         except Exception as exc:
             log.exception("Failed to start recording session")
             try:
@@ -503,6 +514,7 @@ class ScarecrowApp(App[None]):
             BATCH_INTERVAL_SECONDS,
             self._on_batch_tick,
         )
+        self._captioner_timer = self.set_interval(0.05, self._tick_captioner)
         self._elapsed = 0
         self._batch_countdown = BATCH_INTERVAL_SECONDS
         self._word_count = 0
@@ -512,6 +524,10 @@ class ScarecrowApp(App[None]):
         self._tick_timer.resume()
         self._set_status("Listening…")
         self._update_live("Listening…")
+
+    def _tick_captioner(self) -> None:
+        if self._live_captioner is not None:
+            self._live_captioner.tick()
 
     def _on_batch_tick(self) -> None:
         self._batch_countdown = BATCH_INTERVAL_SECONDS
@@ -597,16 +613,27 @@ class ScarecrowApp(App[None]):
             has_active_transcriber = self._transcriber is not None and (
                 self._transcriber.is_ready or self._transcriber.has_active_worker
             )
-            if not has_open_resources and not has_active_transcriber:
+            has_active_captioner = (
+                self._live_captioner is not None and self._live_captioner.is_ready
+            )
+            needs_cleanup = (
+                has_open_resources or has_active_transcriber or has_active_captioner
+            )
+            if not needs_cleanup:
                 return
 
             if hasattr(self, "_tick_timer"):
                 self._tick_timer.pause()
             if hasattr(self, "_batch_timer"):
                 self._batch_timer.pause()
+            if hasattr(self, "_captioner_timer"):
+                self._captioner_timer.pause()
 
-            if self._transcriber is not None:
-                self._transcriber.end_session()
+            if self._live_captioner is not None:
+                try:
+                    self._live_captioner.end_session()
+                except Exception:
+                    log.exception("Failed to end live captioner session")
 
             if self._audio_recorder is not None:
                 try:
@@ -655,6 +682,14 @@ class ScarecrowApp(App[None]):
                     log.exception("Failed to shut down transcriber")
                     if include_ui:
                         self._show_error(f"Could not shut down transcriber: {exc}")
+
+            if self._live_captioner is not None and self._live_captioner.is_ready:
+                try:
+                    self._live_captioner.shutdown(timeout=5)
+                except Exception as exc:
+                    log.exception("Failed to shut down live captioner")
+                    if include_ui:
+                        self._show_error(f"Could not shut down live captioner: {exc}")
 
             if self._session is not None:
                 try:

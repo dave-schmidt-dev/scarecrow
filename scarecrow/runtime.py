@@ -39,12 +39,11 @@ class ModelManager:
     """Owns Whisper model bootstrap for both realtime and batch paths."""
 
     def __init__(self) -> None:
-        self._live_model: WhisperModel | None = None
         self._batch_model: WhisperModel | None = None
         self._lock = threading.Lock()
 
     def prepare(self) -> None:
-        """Initialize runtime state and load the realtime model."""
+        """Initialize runtime state."""
         with self._lock:
             self._prepare_unlocked()
 
@@ -52,16 +51,6 @@ class ModelManager:
         """Internal prepare — caller must hold self._lock."""
         configure_runtime_environment()
         warm_tqdm_lock()
-        if self._live_model is None:
-            self._live_model = self._create_model(config.REALTIME_MODEL)
-
-    def get_live_model(self) -> WhisperModel:
-        """Return the realtime model, loading bootstrap state if needed."""
-        with self._lock:
-            if self._live_model is None:
-                self._prepare_unlocked()
-            assert self._live_model is not None
-            return self._live_model
 
     def get_batch_model(self) -> WhisperModel:
         """Return the batch model, loading it on first use."""
@@ -75,7 +64,6 @@ class ModelManager:
     def release_models(self) -> None:
         """Drop model references so process shutdown can reclaim memory."""
         with self._lock:
-            self._live_model = None
             self._batch_model = None
 
     @staticmethod

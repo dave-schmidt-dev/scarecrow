@@ -2,7 +2,7 @@
 
 Always-recording TUI with live captions and transcription.
 
-Scarecrow runs two Whisper models simultaneously: a fast model for real-time captions and a larger model for accurate batch transcription every 30 seconds. Audio and transcripts are saved per-session.
+Scarecrow uses Apple's on-device speech recognition for real-time captions and Whisper medium.en for accurate batch transcription every 30 seconds. Audio and transcripts are saved per-session.
 
 ## Bug Tracking
 
@@ -27,7 +27,7 @@ python3 scripts/sync_env.py
 python scripts/setup.py   # interactive model selection + alias setup
 ```
 
-The setup script explains the two-model architecture and walks you through choosing models.
+The setup script walks you through choosing the batch transcription model.
 
 ### Virtualenv health
 
@@ -87,7 +87,7 @@ sc          # start recording (auto-starts on launch)
 The TUI shows:
 - **Info bar** — recording state (`REC` / `PAUSED`), mic indicator, elapsed time, word count, batch countdown
 - **Transcript pane** — batch transcription output with timestamped dividers (upper, scrollable)
-- **Live pane** — real-time captions from the fast model (lower, bordered; text promotes to stable scrolling lines every ~10s or at natural pauses, current partial updates in-place at bottom)
+- **Live pane** — real-time captions from Apple Speech (lower, bordered; text promotes to stable scrolling lines at natural pauses, current partial updates in-place at bottom)
 - **Footer** — keybindings
 
 ### Pause behavior
@@ -112,7 +112,7 @@ On a clean quit, Scarecrow routes shutdown through `app.cleanup_after_exit()` to
 - wait for any in-flight batch transcription to finish and capture its text directly from the future
 - drain and transcribe the final buffered audio window
 - abandon the batch executor if a worker times out, ignore late batch callbacks, and continue shutdown
-- shut down the batch executor and realtime worker (5-second timeout)
+- shut down the live captioner and batch executor (5-second timeout)
 - flush and close the session transcript file
 
 Ctrl+C uses the same cleanup path, so the final buffered batch is flushed before the session closes.
@@ -120,22 +120,22 @@ Ctrl+C uses the same cleanup path, so the final buffered batch is flushed before
 ### Startup output
 
 On launch, Scarecrow prints:
-- Which models are loading (live + batch) with timing
+- Which model is loading (batch) with timing
 - Model cache locations (or whether they need downloading)
 - Where recordings and transcripts are saved
 
 Models load in offline mode (`HF_HUB_OFFLINE=1`) to avoid network stalls. Debug logs are written to `~/.cache/scarecrow/debug.log`.
 
-### Two-model architecture
+### Two-engine architecture
 
-| Role | Default model | Behaviour |
-|------|--------------|-----------|
-| **Live** (lower pane) | `base.en` | VAD-gated, transcribes during speech every ~1s, forced break every 10s |
-| **Batch** (upper pane) | `medium.en` | Runs every 30s on buffered audio, produces accurate transcript |
+| Role | Engine | Behaviour |
+|------|--------|-----------|
+| **Live** (lower pane) | Apple Speech (on-device, streaming) | Word-by-word captions as you speak, session rotation every 55s |
+| **Batch** (upper pane) | Whisper `medium.en` | Runs every 30s on buffered audio, produces accurate transcript |
 
-A single 16kHz audio stream feeds both models. Silero VAD (ONNX, bundled) detects speech boundaries, triggering live transcription with base.en during speech. Continuous speech is force-broken every 10s so the live pane scrolls. Batch transcription with medium.en runs independently every 30 seconds. No subprocesses — everything runs in a single process with one worker thread.
+A single 16kHz audio stream feeds both engines. Apple's `SFSpeechRecognizer` provides on-device streaming captions in the live pane with no network access required. Batch transcription with `medium.en` runs independently every 30 seconds. No subprocesses — everything runs in a single process.
 
-Models are configured in `scarecrow/config.py` or via `scripts/setup.py`.
+The batch model is configured in `scarecrow/config.py` or via `scripts/setup.py`.
 
 ## Session files
 
@@ -156,7 +156,7 @@ Audio is saved as uncompressed WAV (~1.8 MB/min at 16kHz mono) rather than MP3 (
 python3 scripts/sync_env.py          # install deps + repair editable install
 bash scripts/run_test_suite.sh       # run tests (isolated stable groups, including setup regressions)
 uv run ruff check scarecrow/ tests/  # lint
-uv run vulture scarecrow/ vulture_whitelist.py --ignore-names inter_op_num_threads,intra_op_num_threads,log_severity_level  # dead code check
+uv run vulture scarecrow/ vulture_whitelist.py  # dead code check
 ```
 
 Pre-commit hooks run ruff (lint + format) and vulture automatically.
@@ -183,30 +183,33 @@ The hooks enforce these repo rules:
 
 ```
 scarecrow/
-  __main__.py      # entry point, model loading, startup output
-  app.py           # Textual TUI, batch transcription scheduling
-  config.py        # model names, audio/VAD settings, defaults
-  env_health.py    # editable-install .pth repair (macOS UF_HIDDEN)
-  recorder.py      # sounddevice audio capture + WAV writing
-  runtime.py       # HF offline bootstrap, tqdm lock, Whisper model manager
-  session.py       # timestamped session dirs + transcript files
-  transcriber.py   # Silero VAD + faster-whisper live transcription
-  models/          # bundled ONNX models (silero_vad.onnx)
-  app.tcss         # TUI stylesheet
+  __main__.py        # entry point, model loading, startup output
+  app.py             # Textual TUI, batch transcription scheduling
+  config.py          # model names, audio settings, defaults
+  env_health.py      # editable-install .pth repair (macOS UF_HIDDEN)
+  live_captioner.py  # Apple SFSpeechRecognizer streaming live captions
+  recorder.py        # sounddevice audio capture + WAV writing
+  runtime.py         # HF offline bootstrap, tqdm lock, Whisper model manager
+  session.py         # timestamped session dirs + transcript files
+  transcriber.py     # batch-only faster-whisper transcription (medium.en)
+  app.tcss           # TUI stylesheet
+bin/
+  scarecrow          # wrapper script (sets PYTHONPATH, bypasses UF_HIDDEN)
 scripts/
-  setup.py         # interactive first-time setup
-  sync_env.py      # uv sync + editable-install repair
-  repair_venv.py   # standalone .pth repair/validation
+  setup.py           # interactive batch-model selection + alias setup
+  sync_env.py        # uv sync + editable-install repair
+  repair_venv.py     # standalone .pth repair/validation
 examples/
   scarecrow-iterm-profile.json  # iTerm2 dynamic profile template
 tests/
-  test_app.py          # TUI integration tests
-  test_behavioral.py   # behavioral contract tests
-  test_env_health.py   # editable-install repair tests
-  test_integration.py  # real-model pipeline tests
-  test_recorder.py     # audio recorder unit tests
-  test_session.py      # session/file management tests
-  test_regressions.py  # regression tests for fixed bugs
-  test_startup.py      # startup smoke tests (imports, .pth, HF offline, model load)
-  test_transcriber.py  # VAD + transcription tests
+  test_app.py            # TUI integration tests
+  test_behavioral.py     # behavioral contract tests
+  test_env_health.py     # editable-install repair tests
+  test_integration.py    # real-model pipeline tests
+  test_live_captioner.py # LiveCaptioner lifecycle and error tests
+  test_recorder.py       # audio recorder unit tests
+  test_session.py        # session/file management tests
+  test_regressions.py    # regression tests for fixed bugs
+  test_startup.py        # startup smoke tests (imports, .pth, HF offline, model load)
+  test_transcriber.py    # batch transcription tests
 ```

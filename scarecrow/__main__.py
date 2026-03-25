@@ -52,25 +52,24 @@ def main() -> None:
 
     from scarecrow import config
     from scarecrow.app import ScarecrowApp
+    from scarecrow.live_captioner import LiveCaptioner
     from scarecrow.transcriber import Transcriber
 
     print(flush=True)
     print("  Scarecrow", flush=True)
     print("  " + "─" * 40, flush=True)
-    live = config.REALTIME_MODEL
     batch = config.FINAL_MODEL
-    print(f"  Live model:   {live} (always-on, real-time)", flush=True)
+    print("  Live:         Apple Speech (on-device, streaming)", flush=True)
     print(f"  Batch model:  {batch} (accurate, every 30s)", flush=True)
 
-    for label, model in [("Live", live), ("Batch", batch)]:
-        cache = _model_cache_path(model)
-        if cache is not None:
-            print(f"  {label} cache:  {cache}", flush=True)
-        else:
-            print(
-                f"  {label} cache:  not cached — will download on first run",
-                flush=True,
-            )
+    cache = _model_cache_path(batch)
+    if cache is not None:
+        print(f"  Batch cache:  {cache}", flush=True)
+    else:
+        print(
+            "  Batch cache:  not cached — will download on first run",
+            flush=True,
+        )
 
     recordings_dir = config.DEFAULT_RECORDINGS_DIR.resolve()
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -78,13 +77,21 @@ def main() -> None:
     print(f"  This session: {recordings_dir}/{timestamp}/", flush=True)
     print(flush=True)
 
-    print("  Loading models…", flush=True)
+    print("  Preparing…", flush=True)
     t0 = time.monotonic()
+
+    captioner = LiveCaptioner()
+    try:
+        captioner.prepare()
+    except Exception as exc:
+        print(f"Failed to prepare live captioner: {exc}", file=sys.stderr)
+        sys.exit(1)
+
     transcriber = Transcriber()
     try:
         transcriber.prepare()
     except Exception as exc:
-        print(f"Failed to start transcriber: {exc}", file=sys.stderr)
+        print(f"Failed to prepare batch transcriber: {exc}", file=sys.stderr)
         sys.exit(1)
 
     t1 = time.monotonic()
@@ -93,7 +100,7 @@ def main() -> None:
     print("  Starting TUI…", flush=True)
     print(flush=True)
 
-    app = ScarecrowApp(transcriber=transcriber)
+    app = ScarecrowApp(transcriber=transcriber, live_captioner=captioner)
     try:
         app.run()
     except KeyboardInterrupt:

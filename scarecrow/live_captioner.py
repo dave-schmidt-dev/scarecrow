@@ -24,6 +24,13 @@ ErrorCallback = Callable[[str, str], None]
 
 SESSION_DURATION = 55  # seconds before rotating (Apple limit is ~60)
 
+# Incremental-commit tuning.  Apple's formattedString() returns ALL text since
+# the session started, so without early commits the partial grows to fill the
+# entire pane before flushing on isFinal.  We commit words to stable in chunks,
+# keeping only the trailing PARTIAL_TAIL words as a potentially-unstable partial.
+_COMMIT_THRESHOLD = 10  # min uncommitted words before we flush a chunk to stable
+_PARTIAL_TAIL = 4  # words kept as partial after each early commit
+
 
 @dataclass(slots=True)
 class CaptionerBindings:
@@ -60,6 +67,8 @@ class LiveCaptioner:
         self._session_start: float = 0
         self._prev_text = ""
         self._tap_installed = False
+        self._needs_restart = False  # set by result_handler, consumed by tick()
+        self._committed_word_count = 0  # words from this session committed to stable
 
     def bind(self, bindings: CaptionerBindings) -> None:
         """Attach callbacks."""
@@ -132,6 +141,7 @@ class LiveCaptioner:
         if not self._active:
             return
         self._active = False
+        self._needs_restart = False
         self._cleanup()
         log.info("LiveCaptioner: session ended")
 
@@ -141,13 +151,40 @@ class LiveCaptioner:
         self._ready = False
         self._recognizer = None
 
-    def check_rotation(self) -> None:
-        """Rotate the recognition session if approaching the time limit.
+    def tick(self) -> None:
+        """Pump the Cocoa run loop and rotate if needed.
 
-        Call this periodically from a timer (e.g. Textual set_interval).
+        Must be called periodically from a timer (e.g. Textual set_interval).
+        asyncio does not pump the Cocoa NSRunLoop, so recognition callbacks
+        will not fire without this.
+
+        Session restarts after a natural isFinal are deferred here rather than
+        done inline inside the result handler, because creating a new
+        recognitionTask from within an existing task's result callback causes
+        reentrancy problems in Apple's Speech framework (hang then stale words).
         """
         if not self._active:
             return
+        self._pump_runloop()
+        self._tick_body()
+
+    def _pump_runloop(self) -> None:
+        """Run the main NSRunLoop briefly so recognition callbacks can fire."""
+        from Foundation import NSDate, NSRunLoop
+
+        NSRunLoop.currentRunLoop().runUntilDate_(
+            NSDate.dateWithTimeIntervalSinceNow_(0.01)
+        )
+
+    def _tick_body(self) -> None:
+        """Post-pump logic: handle deferred restart and 55s rotation."""
+        if self._needs_restart:
+            self._needs_restart = False
+            self._request = None
+            self._task = None
+            self._start_recognition_session()
+            return  # _session_start just reset; skip rotation check this tick
+
         elapsed = time.monotonic() - self._session_start
         if elapsed >= SESSION_DURATION:
             self._rotate_session()
@@ -184,14 +221,16 @@ class LiveCaptioner:
         """Create a new recognition request and task."""
         import Speech
 
-        self._request = Speech.SFSpeechAudioBufferRecognitionRequest.alloc().init()
-        self._request.setShouldReportPartialResults_(True)
-        self._request.setRequiresOnDeviceRecognition_(True)
-        if hasattr(self._request, "setAddsPunctuation_"):
-            self._request.setAddsPunctuation_(True)
+        request = Speech.SFSpeechAudioBufferRecognitionRequest.alloc().init()
+        request.setShouldReportPartialResults_(True)
+        request.setRequiresOnDeviceRecognition_(True)
+        if hasattr(request, "setAddsPunctuation_"):
+            request.setAddsPunctuation_(True)
 
+        self._request = request
         self._session_start = time.monotonic()
         self._prev_text = ""
+        self._committed_word_count = 0
 
         def result_handler(result, error):
             if error is not None:
@@ -208,24 +247,52 @@ class LiveCaptioner:
 
             text = result.bestTranscription().formattedString()
             is_final = result.isFinal()
+            words = text.split()
 
             if is_final:
-                if text and self._bindings.on_realtime_stabilized is not None:
-                    self._bindings.on_realtime_stabilized(text)
+                # Commit any words not yet sent to stable.
+                committed = min(self._committed_word_count, len(words))
+                remaining = " ".join(words[committed:])
+                if remaining and self._bindings.on_realtime_stabilized is not None:
+                    self._bindings.on_realtime_stabilized(remaining)
+                self._committed_word_count = 0
                 self._prev_text = ""
+                # Schedule restart via tick() — starting a new recognitionTask
+                # inline from inside a result handler causes reentrancy problems.
+                if self._active and self._request is request:
+                    self._needs_restart = True
             else:
-                if text and self._bindings.on_realtime_update is not None:
-                    self._bindings.on_realtime_update(text)
+                # Incremental commit: Apple's formattedString() grows to contain
+                # the entire session; flush settled words to stable in chunks so
+                # the live pane scrolls rather than fills-and-clears.
+                committed = min(
+                    self._committed_word_count, max(0, len(words) - _PARTIAL_TAIL)
+                )
+                uncommitted = words[committed:]
+
+                if len(uncommitted) >= _COMMIT_THRESHOLD + _PARTIAL_TAIL:
+                    flush_end = len(words) - _PARTIAL_TAIL
+                    chunk = " ".join(words[committed:flush_end])
+                    if chunk and self._bindings.on_realtime_stabilized is not None:
+                        self._bindings.on_realtime_stabilized(chunk)
+                    self._committed_word_count = flush_end
+                    partial = " ".join(words[-_PARTIAL_TAIL:])
+                else:
+                    partial = " ".join(uncommitted)
+
+                if partial and self._bindings.on_realtime_update is not None:
+                    self._bindings.on_realtime_update(partial)
                 self._prev_text = text
 
         self._task = self._recognizer.recognitionTaskWithRequest_resultHandler_(
-            self._request, result_handler
+            request, result_handler
         )
         log.debug("LiveCaptioner: recognition session started")
 
     def _rotate_session(self) -> None:
         """End current session and start a new one."""
         log.debug("LiveCaptioner: rotating recognition session")
+        self._needs_restart = False  # cancel any pending deferred restart
         if self._request is not None:
             self._request.endAudio()
         self._request = None

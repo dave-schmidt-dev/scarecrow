@@ -1,5 +1,25 @@
 # History
 
+## 2026-03-25 (live captioner debugging: four bugs fixed, one open)
+
+- Fixed: live pane showed no output at all — `_on_realtime_update` and `_on_realtime_stabilized` were routing through `_post_to_ui` / `call_from_thread`, which Textual rejects with `RuntimeError` when called from the app's own thread (recognition callbacks fire on the main thread via `tick()` → `NSRunLoop.runUntilDate_`). Fixed by calling `_set_live_partial` / `_append_live` directly.
+- Fixed: live pane stopped updating mid-session — Apple's Speech framework fires `isFinal` on silence, ending the recognition task. After `isFinal`, audio continued flowing into the dead task but no new results arrived until the 55s rotation. Fixed by detecting natural `isFinal` (via `self._request is request` closure capture) and scheduling a session restart.
+- Fixed: after adding the session restart, live output showed a few words, hung, then cleared and repeated — starting a new `recognitionTaskWithRequest_resultHandler_` from inside an existing task's result handler is a reentrancy problem in Apple's Speech framework. Fixed by setting a `_needs_restart` flag in the result handler and restarting in `tick()` after the NSRunLoop pump returns, outside any callback. Split `tick()` into `_pump_runloop()` + `_tick_body()` for testability.
+- Fixed: live pane filled with growing text then cleared rather than scrolling — Apple's `formattedString()` returns all text accumulated since the session started, so `_live_partial` grew to fill the entire pane before committing as one huge stable blob on `isFinal`. Fixed by incremental commit in the result handler: every `_COMMIT_THRESHOLD` (10) uncommitted words are flushed to `on_realtime_stabilized`; only `_PARTIAL_TAIL` (4) words remain as the unstable partial. Stable lines now accumulate sentence-by-sentence and the pane scrolls.
+- Open (BUG-20260325-live-pane-scroll-resets-at-boundary): scroll works for ~9 lines then resets — at the pane overflow boundary, Textual's `VerticalScroll` + `Static` appears to reset virtual height rather than extending it. Logged in BUGS.md for next session.
+- Added regression tests for all four fixed bugs in `tests/test_live_captioner.py` and `tests/test_behavioral.py`.
+
+## 2026-03-25 (Phases 3-5: Apple Speech live captions)
+
+- Replaced Whisper base.en + Silero VAD live captioning with Apple's SFSpeechRecognizer (on-device, streaming).
+- Stripped Transcriber to batch-only: removed VAD state machine, realtime worker, audio queue, and accept_audio path.
+- Removed onnxruntime dependency and Silero VAD ONNX model from the live path.
+- ModelManager no longer loads a live Whisper model — only the batch model on first use.
+- App now accepts a LiveCaptioner alongside the batch-only Transcriber, with separate callback bindings.
+- Added captioner session rotation timer (every 55s) and cleanup in shutdown paths.
+- Updated setup script to batch-model-only selection.
+- Updated all tests, removed VAD/realtime-specific tests, added captioner shutdown coverage.
+
 ## 2026-03-25 (live captioner: Phases 1-2, segfault tolerance)
 
 - Added `scarecrow/live_captioner.py`: streaming live captions via Apple's SFSpeechRecognizer (on-device, no network).

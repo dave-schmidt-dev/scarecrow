@@ -8,24 +8,11 @@ CHANNELS = 1
 SUBTYPE = "PCM_16"
 
 # Transcription models
-REALTIME_MODEL = "base.en"  # Fast model for live preview (runs constantly)
 FINAL_MODEL = "medium.en"  # Accurate model for settled text (runs at sentence breaks)
 LANGUAGE = "en"
 BEAM_SIZE = 5
-BEAM_SIZE_REALTIME = 3
 CONDITION_ON_PREVIOUS_TEXT = False
-REALTIME_PROCESSING_PAUSE = 1.0  # seconds between realtime updates
-REALTIME_MAX_WINDOW = 5.0  # max seconds of audio to transcribe for live
-REALTIME_MAX_SPEECH = 10.0  # force utterance break after this many seconds
 LIVE_HISTORY_LIMIT = 50
-
-# VAD settings (Silero VAD, ONNX)
-VAD_THRESHOLD = 0.5  # speech probability above this = speech
-VAD_NEG_THRESHOLD = 0.35  # speech probability below this = silence
-VAD_PRE_BUFFER_SECONDS = 1.0  # audio buffered before speech detected
-VAD_MIN_SPEECH_SECONDS = 0.5  # minimum utterance length to transcribe
-VAD_SILENCE_SECONDS = 0.6  # silence duration to end utterance
-VAD_CHUNK_SAMPLES = 512  # Silero requires exactly 512 at 16kHz
 
 # Storage
 DEFAULT_RECORDINGS_DIR = Path("recordings")

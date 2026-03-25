@@ -347,3 +347,54 @@ Scarecrow keeps a running bug ledger in this file. Append to it every time a bug
 - Fix: added `"manual" in value` to the rejection condition.
 - Regression test: `tests/test_repo_policy.py::test_check_bugs_regression_refs_rejects_manual_only`
 - Notes: verified 2026-03-25.
+
+## [BUG-20260325-live-pane-call-from-thread]
+- Status: squashed
+- Found: 2026-03-25
+- Area: app, live_captioner
+- Symptom: live pane showed "Listening…" but never displayed any Apple Speech recognition output, despite the captioner receiving and processing audio.
+- Root cause: `_on_realtime_update` and `_on_realtime_stabilized` routed through `_post_to_ui`, which calls `call_from_thread`. Apple Speech callbacks fire on the app's main thread (via `tick()` → `NSRunLoop.currentRunLoop().runUntilDate_()` → `result_handler`). Textual's `call_from_thread` explicitly raises `RuntimeError` when called from the app's own thread. `_post_to_ui` caught the error, logged it, and silently dropped every live caption update.
+- Fix: removed the `_post_to_ui` indirection from both captioner callbacks; `_on_realtime_update` now calls `_set_live_partial` directly and `_on_realtime_stabilized` calls `_append_live` directly. Both are safe to call from the main thread.
+- Regression test: `tests/test_behavioral.py::test_realtime_callbacks_update_live_pane_directly`
+- Notes: verified 2026-03-25. Root cause visible in `~/.cache/scarecrow/debug.log` as repeated `UI callback failed while app still active: _set_live_partial` errors.
+
+## [BUG-20260325-live-pane-clears-on-isFinal]
+- Status: squashed
+- Found: 2026-03-25
+- Area: live_captioner
+- Symptom: live pane text cleared periodically mid-speech — partial text vanished and no new text appeared until the 55s rotation timer fired.
+- Root cause: Apple's Speech framework fires `isFinal` when it detects a pause in speech, which terminates the `SFSpeechRecognitionTask`. The captioner handled `isFinal` by emitting a stabilized callback and clearing `_prev_text`, but never started a new recognition task. Audio continued flowing into the now-dead request via the AVAudioEngine tap, but no results were delivered until the 55s rotation.
+- Fix: when `isFinal` fires and `self._request is request` (the task ended naturally, not via our explicit rotation), immediately start a new recognition session. The closure captures the specific `request` object so rotation-triggered final callbacks don't spawn duplicate sessions.
+- Regression test: `tests/test_live_captioner.py::test_natural_isfinal_restarts_session`
+- Notes: verified 2026-03-25.
+
+## [BUG-20260325-live-pane-fills-and-clears]
+- Status: squashed
+- Found: 2026-03-25
+- Area: live_captioner, app
+- Symptom: live pane filled with text then cleared rather than scrolling. Text never accumulated — each cycle replaced rather than appended.
+- Root cause: Apple's `formattedString()` returns the entire session text since the session started, not just the latest words. `on_realtime_update` was passing this growing blob as `_live_partial`, which filled the 8-row pane. When `isFinal` fired, the blob committed as one huge stable entry and `_live_partial` was cleared. The next session's partial started fresh with just a few words, so the pane appeared to clear even though the stable history remained scrolled off the top.
+- Fix: incremental commit in the result handler. When uncommitted words exceed `_COMMIT_THRESHOLD` (10), the settled portion is flushed to `on_realtime_stabilized` and only `_PARTIAL_TAIL` (4) words remain as the unstable partial. `isFinal` commits any remaining uncommitted words. Stable lines now accumulate sentence-by-sentence and the pane scrolls naturally.
+- Regression test: `tests/test_live_captioner.py::test_partial_below_threshold_emits_update_only`, `tests/test_live_captioner.py::test_partial_above_threshold_flushes_chunk_to_stable`, `tests/test_live_captioner.py::test_isfinal_commits_remaining_uncommitted_words`
+- Notes: verified 2026-03-25.
+
+## [BUG-20260325-live-captioner-isfinal-reentrancy]
+- Status: squashed
+- Found: 2026-03-25
+- Area: live_captioner
+- Symptom: after fixing the dead-session bug (BUG-20260325-live-pane-clears-on-isFinal), live captions showed a few words, hung briefly, then cleared and repeated — never accumulating text.
+- Root cause: the natural-isFinal restart called `_start_recognition_session()` directly from inside the existing task's result handler callback. Creating a new `recognitionTaskWithRequest_resultHandler_` while inside another task's result handler is a reentrancy problem in Apple's Speech framework: the new task starts in a broken or delayed state, causing the hang and stale partial words.
+- Fix: result handler now sets a `_needs_restart` flag instead of restarting inline. `tick()` was split into `_pump_runloop()` + `_tick_body()`; `_tick_body()` checks `_needs_restart` after the NSRunLoop pump returns (cleanly outside any callback) and starts the new session there.
+- Regression test: `tests/test_live_captioner.py::test_natural_isfinal_sets_needs_restart`, `tests/test_live_captioner.py::test_natural_isfinal_restarts_session`, `tests/test_live_captioner.py::test_rotation_isfinal_does_not_set_needs_restart`
+- Notes: verified 2026-03-25.
+
+## [BUG-20260325-live-pane-scroll-resets-at-boundary]
+- Status: open
+- Found: 2026-03-25
+- Area: app
+- Symptom: live pane scrolls correctly for ~9 stable lines, then on the 10th committed line the pane clears and resets to show only the latest caption — scrolling stops and history is lost from view.
+- Root cause: unknown. Suspected: Textual's `VerticalScroll` + `Static` widget does not correctly recompute virtual height once the `Static` content exceeds the container's visible area (pane is `height: 8` in CSS). At the overflow boundary, `content.update(text)` or `scroll_end` may reset the scroll position and virtual size rather than extending them. The 9-line threshold matches the pane height (8 visible rows + 1 overflow row).
+- Workaround: none.
+- Fix: pending.
+- Regression test: pending.
+- Notes: `_live_stable` is accumulating correctly (confirmed by `LIVE_HISTORY_LIMIT = 50`). The bug is in how Textual renders the growing `Static` widget inside `VerticalScroll`, not in the captioner or stable-list logic. Investigate whether replacing `Static` + `VerticalScroll` with `RichLog` (which has its own scroll management) resolves it, or whether a `height: auto` / layout tweak on `#live-content` is sufficient.

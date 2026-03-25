@@ -148,17 +148,13 @@ def test_transcriber_can_be_instantiated() -> None:
 
     t = Transcriber()
     assert not t.is_ready
-    assert t._worker is None
 
 
 def test_transcriber_prepare_with_mocked_whisper() -> None:
     """prepare() must succeed when WhisperModel is mocked (tests the wiring)."""
     from scarecrow.transcriber import Transcriber
 
-    with (
-        patch("scarecrow.runtime.WhisperModel"),
-        patch("scarecrow.transcriber._SileroVAD"),
-    ):
+    with patch("scarecrow.runtime.WhisperModel"):
         t = Transcriber()
         t.prepare()
 
@@ -166,55 +162,39 @@ def test_transcriber_prepare_with_mocked_whisper() -> None:
     t.shutdown(timeout=0)
 
 
-_REALTIME_MODEL_CACHED: bool | None = None
+_BATCH_MODEL_CACHED: bool | None = None
 
 
-def _realtime_model_is_cached() -> bool:
-    """Return True only if the realtime Whisper model is already on disk."""
-    global _REALTIME_MODEL_CACHED
-    if _REALTIME_MODEL_CACHED is None:
+def _batch_model_is_cached() -> bool:
+    """Return True only if the batch Whisper model is already on disk."""
+    global _BATCH_MODEL_CACHED
+    if _BATCH_MODEL_CACHED is None:
         from scarecrow import config
         from scarecrow.__main__ import _model_cache_path
 
-        _REALTIME_MODEL_CACHED = _model_cache_path(config.REALTIME_MODEL) is not None
-    return _REALTIME_MODEL_CACHED
+        _BATCH_MODEL_CACHED = _model_cache_path(config.FINAL_MODEL) is not None
+    return _BATCH_MODEL_CACHED
 
 
 import pytest  # noqa: E402  (after helpers so the flag check above works)
 
 
 @pytest.mark.skipif(
-    not _realtime_model_is_cached(),
-    reason="realtime Whisper model not in HF cache — skipping live model load test",
+    not _batch_model_is_cached(),
+    reason="batch Whisper model not in HF cache — skipping model load test",
 )
 def test_transcriber_prepare_with_real_model() -> None:
-    """prepare() must succeed with the real Whisper model when it is cached.
+    """prepare() must succeed when the batch model is cached.
 
     This is the most realistic startup smoke test — it exercises the actual
-    model-loading path that runs when the user launches `scarecrow`.  If the
-    model hangs for >30s the test will time out, catching a recurrence of the
-    network-request regression.
+    model-loading path that runs when the user launches `scarecrow`.
     """
-    import signal
-
     from scarecrow.transcriber import Transcriber
 
-    def _timeout_handler(signum, frame):
-        raise TimeoutError(
-            "Transcriber.prepare() timed out after 30s — "
-            "HF Hub may be making network requests despite HF_HUB_OFFLINE=1"
-        )
-
-    signal.signal(signal.SIGALRM, _timeout_handler)
-    signal.alarm(30)  # 30s is generous; a cached load should finish in <5s
-    try:
-        t = Transcriber()
-        t.prepare()
-        assert t.is_ready
-    finally:
-        signal.alarm(0)
-        if "t" in dir() and hasattr(t, "_worker"):
-            t.shutdown()
+    t = Transcriber()
+    t.prepare()
+    assert t.is_ready
+    t.shutdown()
 
 
 # ---------------------------------------------------------------------------

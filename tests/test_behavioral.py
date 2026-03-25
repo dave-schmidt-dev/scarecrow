@@ -24,16 +24,30 @@ from scarecrow.app import (
 
 
 def _mock_transcriber():
-    """Return a mock Transcriber that doesn't load models."""
+    """Return a mock batch-only Transcriber."""
     mock = MagicMock()
     mock.is_ready = True
     mock.has_active_worker = False
-    mock.set_callbacks.return_value = None
+    mock.shutdown.return_value = None
+
+    def _shutdown(timeout=5):
+        mock.is_ready = False
+        return None
+
+    mock.shutdown.side_effect = _shutdown
+    return mock
+
+
+def _mock_captioner():
+    """Return a mock LiveCaptioner."""
+    mock = MagicMock()
+    mock.is_ready = True
+    mock.has_active_worker = False
+    mock.begin_session.return_value = None
     mock.end_session.return_value = None
 
-    def _shutdown(*, timeout=None):
+    def _shutdown(timeout=5):
         mock.is_ready = False
-        mock.has_active_worker = False
         return None
 
     mock.shutdown.side_effect = _shutdown
@@ -53,7 +67,10 @@ def _mock_recorder():
 
 def _app(with_transcriber: bool = False) -> ScarecrowApp:
     if with_transcriber:
-        app = ScarecrowApp(transcriber=_mock_transcriber())
+        app = ScarecrowApp(
+            transcriber=_mock_transcriber(),
+            live_captioner=_mock_captioner(),
+        )
         app._preflight_check = lambda: True  # type: ignore[method-assign]
         return app
     return ScarecrowApp()
@@ -590,6 +607,29 @@ async def test_stabilized_replaces_partial() -> None:
         assert "in progress..." not in lines_text
 
 
+async def test_realtime_callbacks_update_live_pane_directly() -> None:
+    """Regression: captioner callbacks must update the UI without call_from_thread.
+
+    These callbacks fire on the app's main thread (via tick() → NSRunLoop),
+    so Textual raises RuntimeError if call_from_thread is used. The fix calls
+    _set_live_partial / _append_live directly.
+    """
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        app._on_realtime_update("hello world")
+        await pilot.pause()
+
+        assert "hello world" in _live_text(app)
+
+        app._on_realtime_stabilized("final sentence")
+        await pilot.pause()
+
+        assert "final sentence" in _live_text(app)
+        assert "hello world" not in _live_text(app)  # partial cleared by stabilized
+
+
 async def test_shutdown_summary_contains_metrics() -> None:
     """_shutdown_summary must contain duration and word count for terminal output."""
     async with _app().run_test() as pilot:
@@ -642,11 +682,15 @@ async def test_start_recording_unwinds_recorder_when_transcriber_begin_fails(
     mock_recorder_cls.return_value = mock_recorder
     mock_session_cls.return_value = mock_session
 
-    transcriber = _mock_transcriber()
-    transcriber.begin_session.side_effect = RuntimeError("boom")
+    captioner = _mock_captioner()
+    captioner.begin_session.side_effect = RuntimeError("boom")
 
     with patch.object(ScarecrowApp, "_auto_start"):
-        async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
+        app = ScarecrowApp(
+            transcriber=_mock_transcriber(),
+            live_captioner=captioner,
+        )
+        async with app.run_test() as pilot:
             app: ScarecrowApp = pilot.app  # type: ignore[assignment]
             app._start_recording()
             await pilot.pause()
@@ -675,7 +719,6 @@ async def test_stop_recording_flushes_final_batch_before_finalize(
     mock_session_cls.return_value = mock_session
 
     transcriber = _mock_transcriber()
-    transcriber.end_session.side_effect = lambda: calls.append("end-session")
 
     def fake_final_batch(audio, elapsed, *, emit_callback=False):
         calls.append("final-batch")
@@ -696,7 +739,6 @@ async def test_stop_recording_flushes_final_batch_before_finalize(
         await pilot.pause()
 
     assert calls == [
-        "end-session",
         "recorder-stop",
         "final-batch",
         "shutdown",
@@ -900,7 +942,6 @@ def test_cleanup_after_exit_is_idempotent_for_normal_quit() -> None:
     app.cleanup_after_exit()
     app.cleanup_after_exit()
 
-    mock_transcriber.end_session.assert_called_once()
     mock_transcriber.shutdown.assert_called_once_with(timeout=5)
 
 

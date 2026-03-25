@@ -1,24 +1,21 @@
 #!/usr/bin/env python3
-"""Interactive setup for Scarecrow — walks through model selection."""
+"""Interactive setup for Scarecrow — walks through batch model selection."""
 
 import re
 from pathlib import Path
 
-# Models available for each role, ordered by size
+# Models available for batch transcription, ordered by size
 MODELS = [
-    ("tiny.en", "~75 MB", "Fastest, least accurate — good for live preview"),
+    ("tiny.en", "~75 MB", "Fastest, least accurate"),
     ("base.en", "~140 MB", "Fast, slightly better accuracy"),
     ("small.en", "~460 MB", "Good balance of speed and accuracy"),
-    ("medium.en", "~1.5 GB", "High accuracy, slower — good for final transcript"),
+    ("medium.en", "~1.5 GB", "High accuracy, slower — recommended"),
     ("large-v3", "~3 GB", "Best accuracy, multilingual, slowest"),
 ]
 
 MODEL_NAMES = [m[0] for m in MODELS]
 
-DEFAULTS = {
-    "live": "base.en",
-    "batch": "medium.en",
-}
+DEFAULT_BATCH = "medium.en"
 
 
 def print_header():
@@ -29,45 +26,37 @@ def print_header():
     print()
 
 
-def explain_two_model():
-    print("HOW SCARECROW USES TWO MODELS")
+def explain_architecture():
+    print("HOW SCARECROW WORKS")
     print("-" * 40)
     print()
-    print("Scarecrow runs two Whisper models simultaneously:")
+    print("Scarecrow uses two transcription engines:")
     print()
-    print("  1. LIVE model (always running)")
-    print("     Shows real-time captions as you speak.")
-    print("     Needs to be fast, so accuracy is secondary.")
-    print(f"     Default: {DEFAULTS['live']}")
+    print("  1. LIVE captions (Apple Speech)")
+    print("     Streaming on-device speech recognition.")
+    print("     No configuration needed — uses macOS built-in models.")
     print()
-    print("  2. BATCH model (runs every 30 seconds)")
-    print("     Produces the final, accurate transcript.")
-    print("     Can be slower since it runs in the background.")
-    print(f"     Default: {DEFAULTS['batch']}")
-    print()
-    print("A smaller live model + larger batch model gives you")
-    print("instant feedback AND an accurate transcript.")
+    print("  2. BATCH transcript (Whisper)")
+    print("     Accurate transcription every 30 seconds.")
+    print("     You choose the model below.")
+    print(f"     Default: {DEFAULT_BATCH}")
     print()
 
 
 def print_models():
-    print("AVAILABLE MODELS")
+    print("AVAILABLE BATCH MODELS")
     print("-" * 40)
     for i, (name, size, desc) in enumerate(MODELS, 1):
-        default_tag = ""
-        if name == DEFAULTS["live"]:
-            default_tag = " [default live]"
-        elif name == DEFAULTS["batch"]:
-            default_tag = " [default batch]"
+        default_tag = " [default]" if name == DEFAULT_BATCH else ""
         print(f"  {i}. {name:<12} {size:<10} {desc}{default_tag}")
     print()
 
 
-def choose_model(role: str, default: str) -> str:
-    """Prompt user to pick a model for a given role."""
+def choose_model(default: str) -> str:
+    """Prompt user to pick a batch model."""
     default_idx = MODEL_NAMES.index(default) + 1
     while True:
-        choice = input(f"  {role} model [{default_idx}]: ").strip()
+        choice = input(f"  Batch model [{default_idx}]: ").strip()
         if not choice:
             return default
         try:
@@ -75,7 +64,6 @@ def choose_model(role: str, default: str) -> str:
             if 1 <= idx <= len(MODELS):
                 return MODEL_NAMES[idx - 1]
         except ValueError:
-            # Allow typing model name directly
             if choice in MODEL_NAMES:
                 return choice
         print(f"    Please enter 1-{len(MODELS)} or a model name.")
@@ -87,16 +75,10 @@ def check_cached(model_name: str) -> bool:
     return (cache_dir / f"models--Systran--faster-whisper-{model_name}").exists()
 
 
-def write_config(live_model: str, batch_model: str):
-    """Update config.py with selected models."""
+def write_config(batch_model: str):
+    """Update config.py with selected batch model."""
     config_path = Path(__file__).resolve().parent.parent / "scarecrow" / "config.py"
     text = config_path.read_text()
-    text = re.sub(
-        r'^(REALTIME_MODEL\s*=\s*")[^"]*(")',
-        lambda match: f"{match.group(1)}{live_model}{match.group(2)}",
-        text,
-        flags=re.MULTILINE,
-    )
     text = re.sub(
         r'^(FINAL_MODEL\s*=\s*")[^"]*(")',
         lambda match: f"{match.group(1)}{batch_model}{match.group(2)}",
@@ -114,7 +96,7 @@ def setup_alias():
     print()
     print("Add this to your ~/.zshrc (or ~/.bashrc):")
     print()
-    print(f'  alias sc="uv run --project {project_dir} scarecrow"')
+    print(f'  alias sc="{project_dir}/bin/scarecrow"')
     print()
     print("Then reload your shell or run: source ~/.zshrc")
     print()
@@ -122,7 +104,7 @@ def setup_alias():
 
 def main():
     print_header()
-    explain_two_model()
+    explain_architecture()
     print_models()
 
     print("MODEL SELECTION")
@@ -130,32 +112,27 @@ def main():
     print("  Enter a number (1-5) or press Enter for the default.")
     print()
 
-    live_model = choose_model("Live", DEFAULTS["live"])
-    batch_model = choose_model("Batch", DEFAULTS["batch"])
+    batch_model = choose_model(DEFAULT_BATCH)
 
     print()
-    print(f"  Live model:  {live_model}")
+    print("  Live:        Apple Speech (on-device, no config needed)")
     print(f"  Batch model: {batch_model}")
 
-    # Check cache status
-    print()
-    for label, model in [("Live", live_model), ("Batch", batch_model)]:
-        cached = check_cached(model)
-        status = "cached" if cached else "will download on first run"
-        print(f"  {label} ({model}): {status}")
+    cached = check_cached(batch_model)
+    status = "cached" if cached else "will download on first run"
+    print(f"  Batch ({batch_model}): {status}")
 
-    # Write config if models changed
-    if live_model != DEFAULTS["live"] or batch_model != DEFAULTS["batch"]:
+    if batch_model != DEFAULT_BATCH:
         print()
         confirm = input("  Write to config.py? [Y/n]: ").strip().lower()
         if confirm in ("", "y", "yes"):
-            write_config(live_model, batch_model)
+            write_config(batch_model)
             print("  Config updated.")
         else:
             print("  Skipped — config unchanged.")
     else:
         print()
-        print("  Using defaults — no config changes needed.")
+        print("  Using default — no config changes needed.")
 
     print()
     setup_alias()
