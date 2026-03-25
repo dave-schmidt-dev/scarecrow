@@ -1,5 +1,9 @@
 # History
 
+## 2026-03-25 (audio drop error spam fix)
+
+- Changed audio drop error to report once per session instead of on every queue full/not-full cycle. The error was flooding the transcript pane during sustained speech when the realtime model couldn't keep up.
+
 ## 2026-03-25 (launch alias and iTerm2 profile fix)
 
 - Changed iTerm2 profile and shell alias to call `.venv/bin/scarecrow` directly instead of `uv run`, which re-triggers the macOS `UF_HIDDEN` flag on the editable-install `.pth` file every launch.

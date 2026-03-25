@@ -202,7 +202,6 @@ class Transcriber:
             return
         try:
             self._queue.put_nowait(chunk.copy())
-            self._audio_drop_reported = False
         except queue.Full:
             if not self._audio_drop_reported:
                 self._audio_drop_reported = True
