@@ -1,5 +1,17 @@
 # History
 
+## 2026-03-25 (live captioner: Phases 1-2, segfault tolerance)
+
+- Added `scarecrow/live_captioner.py`: streaming live captions via Apple's SFSpeechRecognizer (on-device, no network).
+- Added `bin/scarecrow` wrapper script that sets PYTHONPATH to bypass the macOS UF_HIDDEN `.pth` file issue permanently.
+- Updated iTerm2 profile to use the wrapper script.
+- Phase 1 PoC (`scripts/test_apple_speech.py`) validated streaming word-by-word output with session rotation.
+- Phase 2 module (`LiveCaptioner`) provides the same callback interface as the existing transcriber (partial + stabilized + error).
+- AVAudioEngine tap runs on the main thread (required by macOS); Textual's event loop pumps the run loop.
+- Added `tests/test_live_captioner.py` with lifecycle, binding, and error tests.
+- Phases 3-5 (app integration, Whisper live removal, docs) are planned in `PLAN-live-captioner.md`.
+- Test suite runner now tolerates exit code 139 (SIGSEGV during native-extension teardown) since the segfault occurs after pytest reports success.
+
 ## 2026-03-25 (audio drop error handling)
 
 - Changed audio drop error to report once per session instead of on every queue full/not-full cycle.

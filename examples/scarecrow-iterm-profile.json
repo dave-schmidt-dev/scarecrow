@@ -11,7 +11,7 @@
       "Title Components": 2,
       "Custom Window Title": "Scarecrow",
       "Custom Command": "Yes",
-      "Command": "/bin/zsh -lc 'chflags nohidden $HOME/path/to/scarecrow/.venv/lib/python3.12/site-packages/_scarecrow.pth 2>/dev/null; $HOME/path/to/scarecrow/.venv/bin/scarecrow; rc=$?; if [ $rc -ne 0 ]; then echo; echo \"Scarecrow exited with error. Press Enter to close.\"; read; else sleep 3; fi'",
+      "Command": "/bin/zsh -lc '$HOME/path/to/scarecrow/bin/scarecrow; rc=$?; if [ $rc -ne 0 ]; then echo; echo \"Scarecrow exited with error. Press Enter to close.\"; read; else sleep 3; fi'",
       "Session Close Undo Timeout": 0,
       "Prompt Before Closing 2": 0
     }

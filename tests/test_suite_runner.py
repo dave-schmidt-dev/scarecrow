@@ -17,6 +17,7 @@ def test_runner_script_runs_isolated_processes_for_files_and_behavioral_nodes() 
     assert "tests/test_setup.py" in script
     assert "tests/test_transcriber.py" in script
     assert "tests/test_suite_runner.py" in script
+    assert "tests/test_live_captioner.py" in script
 
 
 def test_pre_commit_uses_shell_test_runner() -> None:
