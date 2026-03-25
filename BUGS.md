@@ -87,8 +87,8 @@ Scarecrow keeps a running bug ledger in this file. Append to it every time a bug
 - Area: tests, workflow
 - Symptom: `pytest` can segfault partway through the full suite even though the same test files pass when run in smaller groups.
 - Root cause: the repository relied on one long-lived pytest process to run the entire Textual/native-extension mix, which is unstable on this environment.
-- Fix: added `scripts/run_test_suite.sh` plus `scripts/run_pytest_file.py` so every test file runs in its own sanitized subprocess and exits through `os._exit()` after `pytest.main(...)`, avoiding the native interpreter-teardown crash seen in hook contexts; rewired the documented validation command plus git hooks to use that runner.
-- Regression test: `tests/test_suite_runner.py::test_runner_script_runs_each_test_file_in_its_own_process`, `tests/test_suite_runner.py::test_pre_commit_uses_shell_test_runner`
+- Fix: added `scripts/run_test_suite.sh` plus `scripts/run_pytest_file.py` so the suite runs in sanitized subprocesses, `test_behavioral.py` is further split to one test node per process, and each invocation exits through `os._exit()` after `pytest.main(...)`; rewired the documented validation command plus git hooks to use that runner.
+- Regression test: `tests/test_suite_runner.py::test_runner_script_runs_isolated_processes_for_files_and_behavioral_nodes`, `tests/test_suite_runner.py::test_pre_commit_uses_shell_test_runner`
 - Notes: verified 2026-03-24.
 
 ## [BUG-20260324-shutdown-timeout-release-race]

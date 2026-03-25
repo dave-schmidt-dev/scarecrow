@@ -18,8 +18,27 @@ run_pytest() {
     "$PYTHON" "$PYTEST_WRAPPER" "$@"
 }
 
+collect_nodes() {
+  env -i \
+    HOME="$HOME" \
+    PATH="$PATH" \
+    TMPDIR="${TMPDIR:-/tmp}" \
+    TERM="${TERM:-xterm-256color}" \
+    LANG="${LANG:-en_US.UTF-8}" \
+    LC_ALL="${LC_ALL:-en_US.UTF-8}" \
+    "$PYTHON" "$PYTEST_WRAPPER" --collect-only -q "$1" | grep '^tests/'
+}
+
+run_collected_nodes() {
+  local test_file="$1"
+  shift
+  while IFS= read -r test_id; do
+    run_pytest "$@" "$test_id"
+  done < <(collect_nodes "$test_file")
+}
+
 run_pytest "$@" tests/test_app.py
-run_pytest "$@" tests/test_behavioral.py
+run_collected_nodes tests/test_behavioral.py
 run_pytest "$@" tests/test_env_health.py
 run_pytest "$@" tests/test_integration.py
 run_pytest "$@" tests/test_recorder.py
