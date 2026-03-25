@@ -5,9 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def test_runner_script_groups_app_and_behavioral_tests() -> None:
+def test_runner_script_runs_each_test_file_in_its_own_process() -> None:
     script = Path("scripts/run_test_suite.sh").read_text(encoding="utf-8")
-    assert "tests/test_app.py tests/test_behavioral.py" in script
+    assert "env -i" in script
+    assert 'run_pytest "$@" tests/test_app.py' in script
+    assert 'run_pytest "$@" tests/test_behavioral.py' in script
     assert "tests/test_transcriber.py" in script
     assert "tests/test_suite_runner.py" in script
 

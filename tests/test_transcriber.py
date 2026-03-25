@@ -152,6 +152,46 @@ def test_shutdown_releases_runtime_references() -> None:
     t._model_manager.release_models.assert_called_once()
 
 
+def test_shutdown_timeout_preserves_runtime_until_worker_exits() -> None:
+    """Timed-out shutdown must not tear down VAD/models still in use by the worker."""
+    errors: list[tuple[str, str]] = []
+    t = Transcriber(
+        TranscriberBindings(
+            on_error=lambda source, message: errors.append((source, message))
+        )
+    )
+    t._ready = True
+    t._vad = MagicMock()
+    t._realtime_model = MagicMock()
+    t._model = t._realtime_model
+    t._model_manager = MagicMock()
+
+    worker = MagicMock()
+    worker.is_alive.side_effect = [True, False]
+    t._worker = worker
+
+    t.shutdown(timeout=0)
+
+    assert errors == [
+        (
+            "shutdown",
+            "Transcriber worker did not exit cleanly before shutdown timed out.",
+        )
+    ]
+    assert t._vad is not None
+    assert t._realtime_model is not None
+    assert t._model is not None
+    assert not t.is_ready
+    t._model_manager.release_models.assert_not_called()
+
+    t.shutdown(timeout=0)
+
+    assert t._vad is None
+    assert t._realtime_model is None
+    assert t._model is None
+    t._model_manager.release_models.assert_called_once()
+
+
 def test_start_before_prepare_is_noop() -> None:
     """start() before prepare should not start a thread."""
     t = Transcriber()

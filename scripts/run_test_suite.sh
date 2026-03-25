@@ -6,13 +6,25 @@ PYTHON="$ROOT/.venv/bin/python"
 
 cd "$ROOT"
 
-"$PYTHON" -m pytest "$@" tests/test_app.py tests/test_behavioral.py
-"$PYTHON" -m pytest "$@" tests/test_env_health.py
-"$PYTHON" -m pytest "$@" tests/test_integration.py
-"$PYTHON" -m pytest "$@" tests/test_recorder.py
-"$PYTHON" -m pytest "$@" tests/test_regressions.py
-"$PYTHON" -m pytest "$@" tests/test_repo_policy.py
-"$PYTHON" -m pytest "$@" tests/test_session.py
-"$PYTHON" -m pytest "$@" tests/test_startup.py
-"$PYTHON" -m pytest "$@" tests/test_suite_runner.py
-"$PYTHON" -m pytest "$@" tests/test_transcriber.py
+run_pytest() {
+  env -i \
+    HOME="$HOME" \
+    PATH="$PATH" \
+    TMPDIR="${TMPDIR:-/tmp}" \
+    TERM="${TERM:-xterm-256color}" \
+    LANG="${LANG:-en_US.UTF-8}" \
+    LC_ALL="${LC_ALL:-en_US.UTF-8}" \
+    "$PYTHON" -m pytest "$@"
+}
+
+run_pytest "$@" tests/test_app.py
+run_pytest "$@" tests/test_behavioral.py
+run_pytest "$@" tests/test_env_health.py
+run_pytest "$@" tests/test_integration.py
+run_pytest "$@" tests/test_recorder.py
+run_pytest "$@" tests/test_regressions.py
+run_pytest "$@" tests/test_repo_policy.py
+run_pytest "$@" tests/test_session.py
+run_pytest "$@" tests/test_startup.py
+run_pytest "$@" tests/test_suite_runner.py
+run_pytest "$@" tests/test_transcriber.py

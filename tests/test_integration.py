@@ -75,7 +75,7 @@ def test_transcriber_pipeline_with_real_audio_fixture() -> None:
             # Pace the feed enough to exercise the real queue/VAD path without drops.
             time.sleep(0.05)
         transcriber.end_session()
-        transcriber.shutdown()
+        transcriber.shutdown(timeout=None)
         transcriber.transcribe_batch(audio, batch_elapsed=30)
     finally:
         signal.alarm(0)

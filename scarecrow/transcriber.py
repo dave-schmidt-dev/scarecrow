@@ -172,9 +172,11 @@ class Transcriber:
     def shutdown(self, timeout: float | None = 3) -> None:
         """Stop worker and release runtime resources."""
         self.end_session()
+        worker_alive = False
         if self._worker is not None:
             self._worker.join(timeout=timeout)
-            if self._worker.is_alive():
+            worker_alive = self._worker.is_alive()
+            if worker_alive:
                 self._emit_error(
                     "shutdown",
                     (
@@ -184,12 +186,14 @@ class Transcriber:
                 )
             else:
                 self._worker = None
+        self._ready = False
+        if worker_alive:
+            return
         if self._vad is not None:
             self._vad.close()
         self._vad = None
         self._realtime_model = None
         self._model = None
-        self._ready = False
         self._model_manager.release_models()
 
     def accept_audio(self, chunk: np.ndarray) -> None:

@@ -2,6 +2,8 @@
 
 ## 2026-03-24
 
+- Hardened the hook test runner by sanitizing the pytest environment in `scripts/run_test_suite.sh` and isolating every test file in its own subprocess; this avoids the native crash path seen under pre-commit/pre-push shells while still running the full suite, and added a regression check in `tests/test_suite_runner.py`.
+- Fixed a shutdown timeout race in `Transcriber.shutdown()` so timed-out joins no longer clear VAD/model state out from under a still-running worker, and aligned the real integration test with the blocking shutdown path used by the app.
 - Second-pass audit fixes: quit now drains the last recorder buffer, waits for in-flight batch work, shuts down the transcriber from the TUI path, and only then finalizes the session so transcript files are flushed and closed before exit.
 - Fixed startup unwind so a failure after microphone acquisition stops the recorder and finalizes the session instead of leaking the stream or WAV handle.
 - Serialized batch transcription work so overlapping 30-second ticks no longer run the shared batch model concurrently, and added a busy-path guard that keeps buffered audio for the next batch window instead of draining and dropping it.

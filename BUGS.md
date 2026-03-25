@@ -87,8 +87,18 @@ Scarecrow keeps a running bug ledger in this file. Append to it every time a bug
 - Area: tests, workflow
 - Symptom: `pytest` can segfault partway through the full suite even though the same test files pass when run in smaller groups.
 - Root cause: the repository relied on one long-lived pytest process to run the entire Textual/native-extension mix, which is unstable on this environment.
-- Fix: added `scripts/run_test_suite.sh` to run the suite in stable isolated subprocess groups and rewired the documented validation command plus git hooks to use that runner.
-- Regression test: `tests/test_suite_runner.py::test_runner_script_groups_app_and_behavioral_tests`, `tests/test_suite_runner.py::test_pre_commit_uses_shell_test_runner`
+- Fix: added `scripts/run_test_suite.sh` to run every test file in its own sanitized subprocess and rewired the documented validation command plus git hooks to use that runner.
+- Regression test: `tests/test_suite_runner.py::test_runner_script_runs_each_test_file_in_its_own_process`, `tests/test_suite_runner.py::test_pre_commit_uses_shell_test_runner`
+- Notes: verified 2026-03-24.
+
+## [BUG-20260324-shutdown-timeout-release-race]
+- Status: squashed
+- Found: 2026-03-24
+- Area: transcriber, shutdown
+- Symptom: if `shutdown()` times out while the realtime worker is still transcribing, later worker iterations can crash because the VAD session and model references were already cleared.
+- Root cause: `Transcriber.shutdown()` released `_vad` and model references unconditionally even when `join(timeout=...)` returned with the worker still alive.
+- Fix: `shutdown()` now marks the transcriber unready and reports the timeout, but defers runtime release until a later shutdown call after the worker has actually exited; the real integration path now uses the same blocking shutdown path as the app.
+- Regression test: `tests/test_transcriber.py::test_shutdown_timeout_preserves_runtime_until_worker_exits`, `tests/test_integration.py::test_transcriber_pipeline_with_real_audio_fixture`
 - Notes: verified 2026-03-24.
 
 ## [BUG-20260324-silent-runtime-failures]
