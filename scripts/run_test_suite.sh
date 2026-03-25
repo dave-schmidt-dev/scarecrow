@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON="$ROOT/.venv/bin/python"
+PYTEST_WRAPPER="$ROOT/scripts/run_pytest_file.py"
 
 cd "$ROOT"
 
@@ -14,7 +15,7 @@ run_pytest() {
     TERM="${TERM:-xterm-256color}" \
     LANG="${LANG:-en_US.UTF-8}" \
     LC_ALL="${LC_ALL:-en_US.UTF-8}" \
-    "$PYTHON" -m pytest "$@"
+    "$PYTHON" "$PYTEST_WRAPPER" "$@"
 }
 
 run_pytest "$@" tests/test_app.py
