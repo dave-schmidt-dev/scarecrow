@@ -100,7 +100,26 @@ def main() -> None:
         pass
     finally:
         print("\n  Shutting down…", flush=True)
-        transcriber.shutdown()
+        # If Ctrl+C interrupted the TUI before _stop_recording ran,
+        # the recorder and session may still be open.
+        if app._audio_recorder is not None:
+            try:
+                app._audio_recorder.stop()
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Finally: failed to stop recorder"
+                )
+        if app._session is not None:
+            try:
+                app._session.finalize()
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Finally: failed to finalize session"
+                )
+        # _stop_recording already shuts down the transcriber on normal quit;
+        # only call again if it is still active (e.g. after Ctrl+C).
+        if transcriber.is_ready or transcriber._worker is not None:
+            transcriber.shutdown()
         if app._shutdown_summary:
             print(app._shutdown_summary, flush=True)
         print("  Done.", flush=True)

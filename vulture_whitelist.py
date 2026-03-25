@@ -7,7 +7,7 @@ from scarecrow.env_health import (
     verify_import_outside_project,
 )
 from scarecrow.recorder import AudioRecorder
-from scarecrow.transcriber import Transcriber
+from scarecrow.transcriber import Transcriber, _SileroVAD
 
 _ = (
     InfoBar.render,
@@ -26,8 +26,10 @@ _ = (
     AudioRecorder.is_recording,
     AudioRecorder.is_paused,
     AudioRecorder.peak_level,
+    ScarecrowApp.on_unmount,
     Transcriber.set_callbacks,
     Transcriber.feed_audio,
+    _SileroVAD.__del__,
     has_hidden_flag,
     ensure_editable_install_visible,
     verify_import_outside_project,

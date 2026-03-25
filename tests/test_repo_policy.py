@@ -50,3 +50,21 @@ def test_check_bugs_regression_refs_accepts_named_test(tmp_path: Path) -> None:
         check_repo_policy.REPO_ROOT = original_root
 
     assert failures == []
+
+
+def test_check_bugs_regression_refs_rejects_na_substring(tmp_path: Path) -> None:
+    """'n/a (not applicable)' must also be rejected, not just exact 'n/a'."""
+    original_root = check_repo_policy.REPO_ROOT
+    try:
+        check_repo_policy.REPO_ROOT = tmp_path
+        (tmp_path / "BUGS.md").write_text(
+            "## [BUG-demo]\n"
+            "- Status: squashed\n"
+            "- Regression test: n/a (not applicable)\n",
+            encoding="utf-8",
+        )
+        failures = check_repo_policy.check_bugs_regression_refs()
+    finally:
+        check_repo_policy.REPO_ROOT = original_root
+
+    assert failures == ["[BUG-demo]: squashed bug must name a regression test."]

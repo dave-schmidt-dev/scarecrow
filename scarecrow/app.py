@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 import logging
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import (
+    Future,
+    ThreadPoolExecutor,
+)
+from concurrent.futures import (
+    TimeoutError as FuturesTimeoutError,
+)
 from enum import Enum, auto
 from typing import TYPE_CHECKING, ClassVar
 
@@ -338,12 +344,23 @@ class ScarecrowApp(App[None]):
             return
 
         batch_elapsed = self._elapsed
-        self._transcriber.transcribe_batch(audio, batch_elapsed)
+        text = self._transcriber.transcribe_batch(audio, batch_elapsed)
+        # Write directly — call_from_thread would defer past session.finalize().
+        if text:
+            self._append_transcript(text, batch_elapsed)
 
     def _wait_for_batch_workers(self) -> None:
         self._reap_batch_futures()
         for future in list(self._batch_futures):
-            future.result()
+            try:
+                future.result(timeout=10)
+            except FuturesTimeoutError:
+                log.warning(
+                    "Batch worker did not finish within 10s during shutdown; "
+                    "proceeding without it."
+                )
+            except Exception:
+                log.exception("Batch worker raised during shutdown")
         self._batch_futures.clear()
 
     def _batch_transcribe(self) -> None:

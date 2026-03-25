@@ -99,7 +99,7 @@ class Transcriber:
         self._worker: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._ready = False
-        self._audio_drop_reported = False
+        self._audio_drop_reported = False  # bool; GIL-atomic in CPython
         self._batch_lock = threading.Lock()
 
     def bind(self, bindings: TranscriberBindings) -> None:
@@ -215,8 +215,13 @@ class Transcriber:
         """Backward-compatible audio ingestion wrapper."""
         self.accept_audio(chunk)
 
-    def transcribe_batch(self, audio: np.ndarray, batch_elapsed: int) -> None:
-        """Run the accurate batch model on a drained recorder buffer."""
+    def transcribe_batch(self, audio: np.ndarray, batch_elapsed: int) -> str | None:
+        """Run the accurate batch model on a drained recorder buffer.
+
+        Returns the transcribed text, empty string if nothing was recognized,
+        or None on error.  The on_batch_result callback is still fired for the
+        normal (executor-driven) path so the UI updates via call_from_thread.
+        """
         try:
             with self._batch_lock:
                 model = self._model_manager.get_batch_model()
@@ -234,10 +239,12 @@ class Transcriber:
                 "batch",
                 "Batch transcription failed. See debug log for the stack trace.",
             )
-            return
+            return None
 
         if text and self._bindings.on_batch_result is not None:
             self._bindings.on_batch_result(text, batch_elapsed)
+
+        return text if text else ""
 
     @property
     def is_ready(self) -> bool:

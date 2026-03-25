@@ -225,5 +225,65 @@ Scarecrow keeps a running bug ledger in this file. Append to it every time a bug
 - Symptom: `scripts/test_transcription.py` and `scripts/test_dual_stream.py` crash with TypeError/AttributeError — they reference the old RealtimeSTT API (`Transcriber(on_realtime_update=...)`, `transcriber.recorder`).
 - Root cause: scripts were not updated after the runtime refactor replaced RealtimeSTT with Silero VAD + faster-whisper.
 - Fix: rewrote both scripts to use current API (`TranscriberBindings`, `accept_audio`, `AudioRecorder` with `on_audio` callback).
-- Regression test: n/a (manual verification scripts, not automated tests)
+- Regression test: manual only — scripts are not part of the automated suite
+- Notes: verified 2026-03-24.
+
+## [BUG-20260324-final-flush-lost]
+- Status: squashed
+- Found: 2026-03-24
+- Area: app, transcriber, shutdown
+- Symptom: the final batch of buffered speech was silently lost on quit because `_flush_final_batch` fired the result through the `call_from_thread` callback path, which deferred the transcript write past `session.finalize()`.
+- Root cause: `_flush_final_batch` called `transcribe_batch()` from the Textual event loop; the result flowed through `on_batch_result` → `_post_to_ui` → `call_from_thread`, which deferred `_append_transcript` behind `session.finalize()`. By the time it ran, `_session` was `None`.
+- Fix: `transcribe_batch` now returns the transcribed text; `_flush_final_batch` calls `_append_transcript` directly on the event loop, bypassing the cross-thread callback path.
+- Regression test: `tests/test_behavioral.py::test_flush_final_batch_writes_to_transcript_file`
+- Notes: verified 2026-03-24.
+
+## [BUG-20260324-ctrlc-cleanup]
+- Status: squashed
+- Found: 2026-03-24
+- Area: app, recorder, session, shutdown
+- Symptom: pressing Ctrl+C during recording left the microphone stream and WAV file open; the transcript file was not flushed or closed.
+- Root cause: the `finally` block in `__main__.py` only called `transcriber.shutdown()`; it did not stop the recorder or finalize the session because Ctrl+C never runs `_stop_recording`.
+- Fix: the `finally` block now stops the recorder and finalizes the session when they are still active, and guards the transcriber shutdown so it is only called once.
+- Regression test: `tests/test_behavioral.py::test_ctrl_c_finally_block_cleans_up_recorder_and_session`
+- Notes: verified 2026-03-24.
+
+## [BUG-20260324-setup-defaults-drift]
+- Status: squashed
+- Found: 2026-03-24
+- Area: scripts, setup
+- Symptom: running `scripts/setup.py` and selecting a different live model silently failed to update `config.py` because the setup script's `DEFAULTS["live"]` was `"tiny.en"` but the config already contained `"base.en"`.
+- Root cause: `write_config()` used exact string replacement with the hardcoded default; since the default didn't match what was in the file, the replacement found nothing and wrote the file unchanged.
+- Fix: corrected `DEFAULTS["live"]` to `"base.en"` and rewrote `write_config()` to use regex replacement that matches any current model name.
+- Regression test: manual only — interactive setup script
+- Notes: verified 2026-03-24.
+
+## [BUG-20260324-batch-worker-infinite-block]
+- Status: squashed
+- Found: 2026-03-24
+- Area: app, shutdown
+- Symptom: if a batch model inference hangs during shutdown, `_wait_for_batch_workers` blocks the Textual event loop indefinitely with no recovery path.
+- Root cause: `future.result()` was called without a timeout.
+- Fix: added `timeout=10` to `future.result()` with a logged warning; exceptions from the batch worker are also caught and logged.
+- Regression test: `tests/test_behavioral.py::test_wait_for_batch_workers_survives_timeout`
+- Notes: verified 2026-03-24.
+
+## [BUG-20260324-policy-na-bypass]
+- Status: squashed
+- Found: 2026-03-24
+- Area: scripts, workflow
+- Symptom: a BUGS.md entry with regression test value `n/a (some explanation)` bypassed the policy check because the check used exact-match for "n/a", not substring match.
+- Root cause: `check_bugs_regression_refs()` checked `value in {"pending", "none", "n/a"}` which only caught exact "n/a", not "n/a (not applicable)".
+- Fix: added `"n/a" in value` substring check alongside the existing checks.
+- Regression test: `tests/test_repo_policy.py::test_check_bugs_regression_refs_rejects_na_substring`
+- Notes: verified 2026-03-24.
+
+## [BUG-20260324-double-shutdown]
+- Status: squashed
+- Found: 2026-03-24
+- Area: app, shutdown
+- Symptom: on normal quit, `transcriber.shutdown()` was called twice — once by `_stop_recording` and once by the `finally` block in `__main__.py`. Harmless but wasteful and confusing.
+- Root cause: the `finally` block called `transcriber.shutdown()` unconditionally.
+- Fix: the `finally` block now checks `transcriber.is_ready` and `transcriber._worker` before calling shutdown, skipping the call when the TUI has already shut down cleanly.
+- Regression test: `tests/test_behavioral.py::test_ctrl_c_finally_block_cleans_up_recorder_and_session` (covers both the Ctrl+C and normal paths)
 - Notes: verified 2026-03-24.

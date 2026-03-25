@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Interactive setup for Scarecrow — walks through model selection."""
 
+import re
 from pathlib import Path
 
 # Models available for each role, ordered by size
@@ -15,7 +16,7 @@ MODELS = [
 MODEL_NAMES = [m[0] for m in MODELS]
 
 DEFAULTS = {
-    "live": "tiny.en",
+    "live": "base.en",
     "batch": "medium.en",
 }
 
@@ -90,13 +91,17 @@ def write_config(live_model: str, batch_model: str):
     """Update config.py with selected models."""
     config_path = Path(__file__).resolve().parent.parent / "scarecrow" / "config.py"
     text = config_path.read_text()
-    text = text.replace(
-        f'REALTIME_MODEL = "{DEFAULTS["live"]}"',
-        f'REALTIME_MODEL = "{live_model}"',
+    text = re.sub(
+        r'^(REALTIME_MODEL\s*=\s*")[^"]*(")',
+        rf"\g<1>{live_model}\g<2>",
+        text,
+        flags=re.MULTILINE,
     )
-    text = text.replace(
-        f'FINAL_MODEL = "{DEFAULTS["batch"]}"',
-        f'FINAL_MODEL = "{batch_model}"',
+    text = re.sub(
+        r'^(FINAL_MODEL\s*=\s*")[^"]*(")',
+        rf"\g<1>{batch_model}\g<2>",
+        text,
+        flags=re.MULTILINE,
     )
     config_path.write_text(text)
 

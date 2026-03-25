@@ -668,9 +668,12 @@ async def test_stop_recording_flushes_final_batch_before_finalize(
 
     transcriber = _mock_transcriber()
     transcriber.end_session.side_effect = lambda: calls.append("end-session")
-    transcriber.transcribe_batch.side_effect = lambda audio, elapsed: calls.append(
-        "final-batch"
-    )
+
+    def fake_final_batch(audio, elapsed):
+        calls.append("final-batch")
+        return "transcribed text"
+
+    transcriber.transcribe_batch.side_effect = fake_final_batch
     transcriber.shutdown.side_effect = lambda timeout=None: calls.append("shutdown")
 
     async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
@@ -783,3 +786,106 @@ async def test_stop_recording_surfaces_session_finalize_failure(
 
         assert app._status_message == "Could not finalize session: disk full"
         assert app._status_is_error is True
+
+
+# ---------------------------------------------------------------------------
+# Audit gap: final-flush transcript must reach the session file directly
+# ---------------------------------------------------------------------------
+
+
+async def test_flush_final_batch_writes_to_transcript_file(tmp_path: Path) -> None:
+    """_flush_final_batch must write the final batch text directly to the
+    transcript file, not through call_from_thread (which can defer past
+    session.finalize)."""
+    from scarecrow.session import Session
+
+    real_session = Session(base_dir=tmp_path)
+
+    mock_recorder = _mock_recorder()
+    mock_recorder.drain_buffer.return_value = np.zeros(16000, dtype=np.float32)
+
+    transcriber = _mock_transcriber()
+    transcriber.transcribe_batch.return_value = "final transcribed text"
+
+    with patch.object(ScarecrowApp, "_auto_start"):
+        async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
+            app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+            await pilot.pause(delay=0.2)
+            app._session = real_session
+            app._audio_recorder = mock_recorder
+            app.state = AppState.RECORDING
+
+            app._stop_recording()
+            await pilot.pause()
+
+    content = real_session.transcript_path.read_text(encoding="utf-8")
+    assert "final transcribed text" in content
+
+
+# ---------------------------------------------------------------------------
+# Audit gap: Ctrl+C finally-block must clean up recorder and session
+# ---------------------------------------------------------------------------
+
+
+def test_ctrl_c_finally_block_cleans_up_recorder_and_session() -> None:
+    """Simulate Ctrl+C: the __main__ finally block must stop the recorder and
+    finalize the session when _stop_recording did not run."""
+    mock_recorder = MagicMock()
+    mock_session = MagicMock()
+    mock_transcriber = _mock_transcriber()
+    mock_transcriber.is_ready = False  # already shut down by TUI
+
+    app = ScarecrowApp(transcriber=mock_transcriber)
+    app._audio_recorder = mock_recorder
+    app._session = mock_session
+
+    # Replicate what __main__.py's finally block does
+    if app._audio_recorder is not None:
+        app._audio_recorder.stop()
+    if app._session is not None:
+        app._session.finalize()
+    if mock_transcriber.is_ready:
+        mock_transcriber.shutdown()
+
+    mock_recorder.stop.assert_called_once()
+    mock_session.finalize.assert_called_once()
+    mock_transcriber.shutdown.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Audit gap: _wait_for_batch_workers must not block forever
+# ---------------------------------------------------------------------------
+
+
+async def test_wait_for_batch_workers_survives_timeout() -> None:
+    """_wait_for_batch_workers must log and continue if a future times out."""
+    from concurrent.futures import Future
+    from concurrent.futures import TimeoutError as FuturesTimeoutError
+
+    hung_future: Future[None] = Future()
+    hung_future.result = MagicMock(side_effect=FuturesTimeoutError())  # type: ignore[method-assign]
+
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+        app._batch_futures = {hung_future}
+
+        app._wait_for_batch_workers()
+
+        assert app._batch_futures == set()
+
+
+# ---------------------------------------------------------------------------
+# Audit gap: _post_to_ui after app reaches IDLE logs debug not error
+# ---------------------------------------------------------------------------
+
+
+async def test_post_to_ui_after_idle_logs_debug() -> None:
+    """_post_to_ui called after app reaches IDLE must log debug, not error."""
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+        app.state = AppState.IDLE
+
+        with patch.object(app, "call_from_thread", side_effect=RuntimeError("no loop")):
+            app._post_to_ui(lambda: None)

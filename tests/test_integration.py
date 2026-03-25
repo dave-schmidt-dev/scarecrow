@@ -36,11 +36,16 @@ def _resample(audio: np.ndarray, src_sr: int, dst_sr: int = 16000) -> np.ndarray
 
 
 @pytest.mark.skipif(
-    not _models_cached() or not _FIXTURE_PATH.exists(),
-    reason="models must be cached and audio fixture must exist",
+    not _models_cached(),
+    reason="models must be cached to run integration test",
 )
 def test_transcriber_pipeline_with_real_audio_fixture() -> None:
-    """Feed a real recording through live and batch paths with actual models."""
+    """Feed audio through live and batch paths with actual models.
+
+    Uses the local fixture when available for content assertions.  Falls back
+    to synthetic audio so the pipeline mechanics are still exercised on
+    machines without the fixture.
+    """
     from scarecrow import config
 
     stable: list[str] = []
@@ -65,14 +70,20 @@ def test_transcriber_pipeline_with_real_audio_fixture() -> None:
     signal.alarm(30)
     try:
         transcriber.prepare()
-        audio, sample_rate = sf.read(_FIXTURE_PATH, dtype="float32")
-        audio = _resample(audio, sample_rate)
+
+        check_content = _FIXTURE_PATH.exists()
+        if check_content:
+            audio, sample_rate = sf.read(_FIXTURE_PATH, dtype="float32")
+            audio = _resample(audio, sample_rate)
+        else:
+            # Synthetic: 2 seconds of low-amplitude noise — exercises the
+            # pipeline without requiring the fixture.
+            audio = (np.random.randn(32000) * 0.01).astype(np.float32)
 
         transcriber.begin_session()
         for start in range(0, len(audio), 4096):
             chunk = audio[start : start + 4096]
             transcriber.accept_audio((chunk * 32768).astype("int16").reshape(-1, 1))
-            # Pace the feed enough to exercise the real queue/VAD path without drops.
             time.sleep(0.05)
         transcriber.end_session()
         transcriber.shutdown(timeout=None)
@@ -81,11 +92,12 @@ def test_transcriber_pipeline_with_real_audio_fixture() -> None:
         signal.alarm(0)
 
     assert errors == []
-    assert stable, "expected at least one stabilized realtime result"
-    assert batches, "expected a batch transcription result"
-
-    stable_text = " ".join(stable).lower()
-    batch_text = " ".join(batches).lower()
-    assert "secretary of state" in stable_text
-    assert "secretary of state" in batch_text
     assert config.CONDITION_ON_PREVIOUS_TEXT is False
+
+    if check_content:
+        assert stable, "expected at least one stabilized realtime result"
+        assert batches, "expected a batch transcription result"
+        stable_text = " ".join(stable).lower()
+        batch_text = " ".join(batches).lower()
+        assert "secretary of state" in stable_text
+        assert "secretary of state" in batch_text
