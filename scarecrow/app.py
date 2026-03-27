@@ -169,6 +169,7 @@ class ScarecrowApp(App[None]):
         self._disk_warn_shown: bool = False
         self._session_disk_warn_shown: bool = False
         self._last_divider_elapsed: int = -config.DIVIDER_INTERVAL
+        self._paragraph_buffer: list[str] = []
 
     def compose(self) -> ComposeResult:
         yield InfoBar(id="info-bar")
@@ -424,6 +425,18 @@ class ScarecrowApp(App[None]):
         ts = f"{h:02d}:{m:02d}:{s:02d}"
         return f"── {ts} · {path} ──"
 
+    def _write_paragraph_to_richlog(self, captions) -> None:
+        """Write or update the current paragraph in the RichLog."""
+        if not self._paragraph_buffer or captions is None:
+            return
+        joined = " ".join(self._paragraph_buffer)
+        # If we're extending an existing paragraph, remove the old line first
+        if len(self._paragraph_buffer) > 1 and len(captions.lines) > 0:
+            captions.lines.pop()
+            captions.write(joined)
+        else:
+            captions.write(joined)
+
     def _record_transcript(
         self,
         text: str,
@@ -438,15 +451,19 @@ class ScarecrowApp(App[None]):
             divider = self._transcript_divider(elapsed, self._session.transcript_path)
             self._last_divider_elapsed = elapsed
 
+        captions = None
         if include_ui:
-            try:
+            with contextlib.suppress(NoMatches):
                 captions = self.query_one("#captions", RichLog)
-            except NoMatches:
-                captions = None
-            if captions is not None:
-                if divider is not None:
-                    captions.write(f"[dim]{divider}[/dim]")
-                captions.write(text)
+
+        if divider is not None and captions is not None:
+            # Start a new paragraph after the divider
+            self._paragraph_buffer.clear()
+            captions.write(f"[dim]{divider}[/dim]")
+
+        self._paragraph_buffer.append(text)
+        if include_ui:
+            self._write_paragraph_to_richlog(captions)
 
         if self._session is not None:
             if divider is not None:
@@ -548,7 +565,9 @@ class ScarecrowApp(App[None]):
         s = self._elapsed % 60
         ts = f"{h:02d}:{m:02d}:{s:02d}"
         marker = f"── {ts} · Recording paused ──"
-        self.query_one("#captions", RichLog).write(f"[dim]{marker}[/dim]")
+        captions = self.query_one("#captions", RichLog)
+        self._paragraph_buffer.clear()
+        captions.write(f"[dim]{marker}[/dim]")
         if self._session is not None:
             self._session.append_sentence(f"\n{marker}")
 

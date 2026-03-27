@@ -1,5 +1,11 @@
 # History
 
+## 2026-03-27 (paragraph joining: space-joined batch results in transcript pane)
+
+- Consecutive batch results between dividers are now space-joined into a single paragraph in the RichLog UI, instead of each batch getting its own line. Particularly important for the 5-second parakeet batch interval.
+- Transcript file still writes one line per batch (unchanged).
+- Paragraph resets on dividers, pause markers, and resume.
+
 ## 2026-03-27 (parakeet integration fix: numpy array support)
 
 - Fixed parakeet-mlx integration: `transcribe()` only accepts file paths, not numpy arrays. Now uses `get_logmel()` + `model.generate()` to process numpy arrays directly from the recorder buffer.

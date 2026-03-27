@@ -119,12 +119,11 @@ async def test_append_transcript_no_divider_without_session() -> None:
         app._append_transcript("Second line.")
         await pilot.pause()
 
-        # With no session, dividers are skipped — lines should contain
-        # our text without interleaved divider lines
+        # With no session, dividers are skipped — consecutive batches
+        # are joined into a single paragraph line
         texts = [str(line) for line in captions.lines]
-        text_lines = [t for t in texts if "Just the text" in t or "Second line" in t]
-        # Should be exactly 2 text entries with no dividers between
-        assert len(text_lines) == 2
+        joined = [t for t in texts if "Just the text" in t and "Second line" in t]
+        assert len(joined) == 1
 
 
 # ---------------------------------------------------------------------------
