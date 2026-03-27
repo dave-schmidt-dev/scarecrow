@@ -97,6 +97,7 @@ def test_drain_buffer_sample_rate_is_44100(tmp_path: Path) -> None:
         recorder.stop()
 
 
+@patch("scarecrow.config.BACKEND", "whisper")
 def test_batch_passes_audio_directly_at_16khz() -> None:
     """Batch transcription passes 16kHz audio directly to Whisper."""
     from scarecrow.transcriber import Transcriber

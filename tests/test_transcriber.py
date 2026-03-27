@@ -39,6 +39,7 @@ def test_shutdown_releases_runtime_references() -> None:
     t._model_manager.release_models.assert_called_once()
 
 
+@patch("scarecrow.config.BACKEND", "whisper")
 def test_batch_transcription_error_emits_callback() -> None:
     """Batch transcription failures must surface through on_error."""
     errors: list[tuple[str, str]] = []
@@ -61,6 +62,7 @@ def test_batch_transcription_error_emits_callback() -> None:
     ]
 
 
+@patch("scarecrow.config.BACKEND", "whisper")
 def test_transcribe_batch_returns_text_and_emits_callback_once() -> None:
     """The normal batch path should return text and emit one callback."""
     results: list[tuple[str, int]] = []
@@ -85,6 +87,7 @@ def test_transcribe_batch_returns_text_and_emits_callback_once() -> None:
     assert results == [("hello batch", 30)]
 
 
+@patch("scarecrow.config.BACKEND", "whisper")
 def test_transcribe_batch_can_skip_callback_for_synchronous_flush() -> None:
     """The synchronous shutdown flush must be able to bypass the async callback."""
     results: list[tuple[str, int]] = []
@@ -145,6 +148,7 @@ def test_get_batch_model_thread_safety() -> None:
     assert results[0] is results[1], "Both threads must get the same model instance"
 
 
+@patch("scarecrow.config.BACKEND", "whisper")
 def test_transcribe_batch_passes_initial_prompt_to_model() -> None:
     """initial_prompt must be forwarded to model.transcribe when provided."""
     segment = MagicMock()
@@ -168,6 +172,7 @@ def test_transcribe_batch_passes_initial_prompt_to_model() -> None:
     assert call_kwargs.get("initial_prompt") == "Malcolm X"
 
 
+@patch("scarecrow.config.BACKEND", "whisper")
 def test_transcribe_batch_omits_initial_prompt_when_none() -> None:
     """initial_prompt must not be passed to model.transcribe when None."""
     segment = MagicMock()
@@ -187,6 +192,7 @@ def test_transcribe_batch_omits_initial_prompt_when_none() -> None:
     assert "initial_prompt" not in call_kwargs
 
 
+@patch("scarecrow.config.BACKEND", "whisper")
 def test_preload_batch_model_calls_get_batch_model() -> None:
     """preload_batch_model() calls get_batch_model() to warm cache."""
     t = Transcriber()
@@ -197,6 +203,7 @@ def test_preload_batch_model_calls_get_batch_model() -> None:
     t._model_manager.get_batch_model.assert_called_once()
 
 
+@patch("scarecrow.config.BACKEND", "whisper")
 def test_preload_batch_model_before_prepare_still_invokes_manager() -> None:
     """preload_batch_model() delegates to model_manager regardless of _ready state."""
     t = Transcriber()
@@ -208,6 +215,7 @@ def test_preload_batch_model_before_prepare_still_invokes_manager() -> None:
     t._model_manager.get_batch_model.assert_called_once()
 
 
+@patch("scarecrow.config.BACKEND", "whisper")
 def test_transcribe_batch_serializes_overlapping_calls() -> None:
     """Concurrent batch requests must not run the shared batch model in parallel."""
     active = 0

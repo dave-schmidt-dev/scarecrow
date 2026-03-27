@@ -1,5 +1,9 @@
 # History
 
+## 2026-03-27 (test independence: whisper tests patch BACKEND explicitly)
+
+- Added `@patch("scarecrow.config.BACKEND", "whisper")` to all whisper-specific tests so they pass regardless of the config.py setting. Tests are now backend-independent.
+
 ## 2026-03-27 (fix repeated text: disable audio overlap for parakeet)
 
 - Disabled 500ms audio overlap for parakeet backend (overlap_ms=0). The overlap was designed for Whisper's initial_prompt context continuity; parakeet doesn't use it, and the overlap caused repeated phrases at every 5-second batch boundary.
