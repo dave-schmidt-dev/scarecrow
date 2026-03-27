@@ -9,13 +9,14 @@ MODELS = [
     ("tiny.en", "~75 MB", "Fastest, least accurate"),
     ("base.en", "~140 MB", "Fast, slightly better accuracy"),
     ("small.en", "~460 MB", "Good balance of speed and accuracy"),
-    ("medium.en", "~1.5 GB", "High accuracy, slower — recommended"),
+    ("medium.en", "~1.5 GB", "High accuracy, slower"),
+    ("large-v3-turbo", "~1.6 GB", "Near large-v3 accuracy, much faster — recommended"),
     ("large-v3", "~3 GB", "Best accuracy, multilingual, slowest"),
 ]
 
 MODEL_NAMES = [m[0] for m in MODELS]
 
-DEFAULT_BATCH = "medium.en"
+DEFAULT_BATCH = "large-v3-turbo"
 
 
 def print_header():

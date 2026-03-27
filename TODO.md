@@ -6,7 +6,7 @@
 
 ## CPU usage
 - 10% baseline is acceptable
-- 30% spikes every 15s from batch transcription (medium.en on 15s audio) — expected
+- 30% spikes every 15s from batch transcription (large-v3-turbo on 15s audio) — expected
 - Investigate: can batch run at lower priority or be deferred to reduce spike?
 
 ## Accessibility

@@ -1,5 +1,11 @@
 # History
 
+## 2026-03-27 (model upgrade: medium.en → large-v3-turbo)
+
+- Switched default batch model from `medium.en` to `large-v3-turbo` (better accuracy, fewer decoder layers = faster inference despite larger encoder).
+- Added `large-v3-turbo` to setup.py model selection list with recommended tag.
+- Updated all docs (README, TODO, setup.py) to reflect the new default model.
+
 ## 2026-03-27 (docs refresh)
 
 - Added `/help` command to README feature list.

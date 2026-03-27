@@ -8,7 +8,7 @@ CHANNELS = 1
 SUBTYPE = "PCM_16"
 
 # Transcription models
-FINAL_MODEL = "medium.en"  # Accurate model for settled text (runs at sentence breaks)
+FINAL_MODEL = "large-v3-turbo"  # Accurate model for batch transcription
 LANGUAGE = "en"
 BEAM_SIZE = 5
 CONDITION_ON_PREVIOUS_TEXT = False

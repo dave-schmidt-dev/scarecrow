@@ -6,7 +6,7 @@
 
 Always-recording TUI for transcription and inline notes.
 
-Scarecrow uses Whisper medium.en for accurate batch transcription every 15 seconds. You can attach timestamped notes inline by typing prefix commands (`/task`) or plain text. Audio and transcripts are saved per-session.
+Scarecrow uses Whisper large-v3-turbo for accurate batch transcription every 15 seconds. You can attach timestamped notes inline by typing prefix commands (`/task`) or plain text. Audio and transcripts are saved per-session.
 
 ## Bug Tracking
 
@@ -160,11 +160,11 @@ On launch, Scarecrow prints:
 - Model cache locations (or whether they need downloading)
 - Where recordings and transcripts are saved
 
-The batch model (`medium.en`) is preloaded during the prepare phase before the TUI launches, so the first batch transcription fires immediately without a cold-load delay. Models run in offline mode (`HF_HUB_OFFLINE=1`) to avoid network stalls. Debug logs are written to `~/.cache/scarecrow/debug.log`.
+The batch model (`large-v3-turbo`) is preloaded during the prepare phase before the TUI launches, so the first batch transcription fires immediately without a cold-load delay. Models run in offline mode (`HF_HUB_OFFLINE=1`) to avoid network stalls. Debug logs are written to `~/.cache/scarecrow/debug.log`.
 
 ### Architecture
 
-Scarecrow uses a single-engine transcription model. A 16kHz audio stream is buffered and fed to Whisper `medium.en` every 15 seconds. No subprocesses — everything runs in a single process.
+Scarecrow uses a single-engine transcription model. A 16kHz audio stream is buffered and fed to Whisper `large-v3-turbo` every 15 seconds. No subprocesses — everything runs in a single process.
 
 Inline notes are typed in the notes pane and submitted with Enter. The tag is determined by an optional prefix at the start of the text: `/task` or `/t` for `[TASK]`, or no prefix for `[NOTE]`. Each note is written to the transcript pane and the transcript file with a wall-clock timestamp and tag prefix. Notes work in any app state (recording, paused, or idle).
 
@@ -253,7 +253,7 @@ scarecrow/
   recorder.py        # sounddevice audio capture + WAV writing
   runtime.py         # HF offline bootstrap, tqdm lock, Whisper model manager
   session.py         # timestamped session dirs + transcript files
-  transcriber.py     # batch-only faster-whisper transcription (medium.en)
+  transcriber.py     # batch-only faster-whisper transcription (large-v3-turbo)
   app.tcss           # TUI stylesheet
 assets/
   scarecrow-icon.svg # app icon
