@@ -187,6 +187,27 @@ def test_transcribe_batch_omits_initial_prompt_when_none() -> None:
     assert "initial_prompt" not in call_kwargs
 
 
+def test_preload_batch_model_calls_get_batch_model() -> None:
+    """preload_batch_model() calls get_batch_model() to warm cache."""
+    t = Transcriber()
+    t._model_manager = MagicMock()
+
+    t.preload_batch_model()
+
+    t._model_manager.get_batch_model.assert_called_once()
+
+
+def test_preload_batch_model_before_prepare_still_invokes_manager() -> None:
+    """preload_batch_model() delegates to model_manager regardless of _ready state."""
+    t = Transcriber()
+    t._ready = False
+    t._model_manager = MagicMock()
+
+    t.preload_batch_model()
+
+    t._model_manager.get_batch_model.assert_called_once()
+
+
 def test_transcribe_batch_serializes_overlapping_calls() -> None:
     """Concurrent batch requests must not run the shared batch model in parallel."""
     active = 0

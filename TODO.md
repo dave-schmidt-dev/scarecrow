@@ -14,11 +14,5 @@
 - Resume latency — verify stream.start() is fast enough
 - Batch timer behavior during pause — should print "Recording paused" markers
 
-## Startup performance
-- ~~HF Hub network stall: 30-60s delay on model load~~ Fixed: HF_HUB_OFFLINE=1
-- ~~tqdm crash inside Textual: killed all transcription silently~~ Fixed: pre-init tqdm lock before TUI
-- Debug log moved to ~/.cache/scarecrow/debug.log (was CWD-relative, lost when iTerm launches from ~)
-
 ## Setup script
-- ~~`scripts/setup.py` references old model cache path logic (dots vs dashes)~~ Fixed: `check_cached` now uses the model name directly
 - Needs testing end-to-end with a fresh clone

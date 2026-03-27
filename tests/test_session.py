@@ -138,3 +138,82 @@ def test_session_header_format(tmp_path: Path) -> None:
     assert re.match(pattern, first_line), (
         f"Header line {first_line!r} does not match expected format"
     )
+
+
+# ---------------------------------------------------------------------------
+# New tests: transcript file integrity (disk I/O)
+# ---------------------------------------------------------------------------
+
+
+def test_transcript_file_contains_all_appended_sentences(tmp_path: Path) -> None:
+    """All sentences appended to a session must appear in the file on disk."""
+    session = Session(base_dir=tmp_path)
+    sentences = [
+        "First sentence here.",
+        "Second sentence here.",
+        "Third sentence here.",
+    ]
+    for s in sentences:
+        session.append_sentence(s)
+    session.finalize()
+
+    content = session.transcript_path.read_text(encoding="utf-8")
+    for s in sentences:
+        assert s in content, f"Expected sentence {s!r} not found in transcript"
+
+
+def test_transcript_file_has_session_start_header(tmp_path: Path) -> None:
+    """The transcript file must start with a 'Session Start:' header line."""
+    session = Session(base_dir=tmp_path)
+    session.append_sentence("Some content.")
+    session.finalize()
+
+    lines = session.transcript_path.read_text(encoding="utf-8").splitlines()
+    assert lines[0].startswith("Session Start: "), (
+        f"First line must be a Session Start header; got: {lines[0]!r}"
+    )
+
+
+def test_transcript_file_has_session_end_header(tmp_path: Path) -> None:
+    """write_end_header writes a Session End footer."""
+    session = Session(base_dir=tmp_path)
+    session.append_sentence("Some content.")
+    session.write_end_header()
+    session.finalize()
+
+    content = session.transcript_path.read_text(encoding="utf-8")
+    assert "Session End: " in content, (
+        "Transcript file must contain a Session End header after write_end_header()"
+    )
+
+
+def test_transcript_session_end_header_format(tmp_path: Path) -> None:
+    """Session End header must match 'Session End: YYYY-MM-DD HH:MM:SS'."""
+    session = Session(base_dir=tmp_path)
+    session.write_end_header()
+    session.finalize()
+
+    lines = session.transcript_path.read_text(encoding="utf-8").splitlines()
+    end_lines = [ln for ln in lines if ln.startswith("Session End: ")]
+    assert end_lines, "No 'Session End:' line found in transcript"
+    pattern = r"^Session End: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$"
+    assert re.match(pattern, end_lines[0]), (
+        f"Session End line {end_lines[0]!r} does not match expected format"
+    )
+
+
+def test_transcript_content_order(tmp_path: Path) -> None:
+    """Sentences must appear in the file in the order they were appended."""
+    session = Session(base_dir=tmp_path)
+    session.append_sentence("Alpha.")
+    session.append_sentence("Beta.")
+    session.append_sentence("Gamma.")
+    session.finalize()
+
+    content = session.transcript_path.read_text(encoding="utf-8")
+    alpha_pos = content.index("Alpha.")
+    beta_pos = content.index("Beta.")
+    gamma_pos = content.index("Gamma.")
+    assert alpha_pos < beta_pos < gamma_pos, (
+        "Sentences must appear in the file in the order they were appended"
+    )

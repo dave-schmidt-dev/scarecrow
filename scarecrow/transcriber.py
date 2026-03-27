@@ -49,6 +49,10 @@ class Transcriber:
         self._model_manager.prepare()
         self._ready = True
 
+    def preload_batch_model(self) -> None:
+        """Load the batch model eagerly so the first batch has no delay."""
+        self._model_manager.get_batch_model()
+
     def shutdown(self, timeout: float | None = None) -> None:
         """Release runtime resources."""
         self._ready = False

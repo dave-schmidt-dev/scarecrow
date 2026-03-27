@@ -1506,3 +1506,257 @@ def test_info_bar_peak_level_renders() -> None:
     text = bar.render().plain
     bars = "▁▂▃▄▅▆▇█"
     assert any(ch in text for ch in bars)
+
+
+# ---------------------------------------------------------------------------
+# New tests: end-to-end recording session
+# ---------------------------------------------------------------------------
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_end_to_end_recording_session_text_appears_in_captions(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """Full loop: start → batch → transcription → UI shows text."""
+    mock_recorder = _mock_recorder()
+    mock_recorder_cls.return_value = mock_recorder
+
+    mock_session = MagicMock()
+    mock_session.transcript_path = Path("/tmp/e2e_session.txt")
+    mock_session_cls.return_value = mock_session
+
+    transcriber = _mock_transcriber()
+
+    async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        assert app.state is AppState.RECORDING
+
+        # Simulate a batch transcription result arriving from the transcriber
+        app._append_transcript("hello from the batch transcriber")
+        await pilot.pause()
+
+        captions = app.query_one("#captions", RichLog)
+        caption_text = " ".join(str(line) for line in captions.lines)
+        assert "hello from the batch transcriber" in caption_text
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_end_to_end_session_append_sentence_called(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """_append_transcript calls session.append_sentence."""
+    mock_recorder = _mock_recorder()
+    mock_recorder_cls.return_value = mock_recorder
+
+    mock_session = MagicMock()
+    mock_session.transcript_path = Path("/tmp/e2e_session2.txt")
+    mock_session_cls.return_value = mock_session
+
+    transcriber = _mock_transcriber()
+
+    async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        assert app.state is AppState.RECORDING
+
+        app._append_transcript("verified sentence text")
+        await pilot.pause()
+
+        # append_sentence is called once for the header (Session Start) and once for
+        # the divider and once for the actual text; just verify the text made it in.
+        calls = [str(c) for c in mock_session.append_sentence.call_args_list]
+        assert any("verified sentence text" in c for c in calls)
+
+
+# ---------------------------------------------------------------------------
+# New tests: batch window timing
+# ---------------------------------------------------------------------------
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_batch_transcription_triggered_at_interval(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """_on_batch_tick must call _batch_transcribe when RECORDING."""
+    mock_recorder = _mock_recorder()
+    mock_recorder.drain_buffer.return_value = np.zeros(16000, dtype=np.float32)
+    mock_recorder_cls.return_value = mock_recorder
+    mock_session_cls.return_value = MagicMock()
+
+    transcriber = _mock_transcriber()
+
+    async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        assert app.state is AppState.RECORDING
+
+        submit_calls: list[bool] = []
+        original_submit = app._submit_batch_transcription
+
+        def track_submit(audio, batch_elapsed):
+            submit_calls.append(True)
+            return original_submit(audio, batch_elapsed)
+
+        app._submit_batch_transcription = track_submit  # type: ignore[method-assign]
+
+        # Fire the batch tick manually — simulates BATCH_INTERVAL_SECONDS elapsed
+        app._on_batch_tick()
+        await pilot.pause()
+
+        assert len(submit_calls) == 1, (
+            "_submit_batch_transcription must be called once when batch tick fires"
+        )
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_batch_transcription_not_triggered_before_interval(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """_submit_batch_transcription must NOT be called before the batch tick fires."""
+    mock_recorder = _mock_recorder()
+    mock_recorder.drain_buffer.return_value = np.zeros(16000, dtype=np.float32)
+    mock_recorder_cls.return_value = mock_recorder
+    mock_session_cls.return_value = MagicMock()
+
+    transcriber = _mock_transcriber()
+
+    async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        assert app.state is AppState.RECORDING
+
+        submit_calls: list[bool] = []
+        original_submit = app._submit_batch_transcription
+
+        def track_submit(audio, batch_elapsed):
+            submit_calls.append(True)
+            return original_submit(audio, batch_elapsed)
+
+        app._submit_batch_transcription = track_submit  # type: ignore[method-assign]
+
+        # Do NOT fire the batch tick — just wait briefly
+        await pilot.pause(delay=0.1)
+
+        assert len(submit_calls) == 0, (
+            "_submit_batch_transcription must not be called before the batch interval"
+        )
+
+
+# ---------------------------------------------------------------------------
+# New tests: invalid state transitions are no-ops
+# ---------------------------------------------------------------------------
+
+
+async def test_action_pause_from_idle_is_noop() -> None:
+    """action_pause when IDLE must do nothing (no state change, no exception)."""
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+        assert app.state is AppState.IDLE
+
+        # action_pause from IDLE must not raise and must not change state
+        app.action_pause()
+        await pilot.pause()
+
+        assert app.state is AppState.IDLE
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_double_start_is_idempotent(mock_session_cls, mock_recorder_cls) -> None:
+    """Calling _start_recording twice must not open two sessions or recorders."""
+    mock_recorder_cls.return_value = _mock_recorder()
+    mock_session_cls.return_value = MagicMock()
+
+    async with _app(with_transcriber=True).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        assert app.state is AppState.RECORDING
+
+        first_session = app._session
+        first_recorder = app._audio_recorder
+
+        # Second call must be a no-op (state is RECORDING, not IDLE)
+        app._start_recording()
+        await pilot.pause()
+
+        assert app._session is first_session, (
+            "Double start must not replace the existing session"
+        )
+        assert app._audio_recorder is first_recorder, (
+            "Double start must not replace the existing recorder"
+        )
+        assert app.state is AppState.RECORDING
+
+
+# ---------------------------------------------------------------------------
+# New tests: rapid pause/resume
+# ---------------------------------------------------------------------------
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_rapid_pause_resume_no_exceptions(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """Rapid pause → resume → pause must not raise and must end in PAUSED."""
+    mock_recorder = _mock_recorder()
+    mock_recorder_cls.return_value = mock_recorder
+    mock_session_cls.return_value = MagicMock()
+
+    transcriber = _mock_transcriber()
+
+    async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        assert app.state is AppState.RECORDING
+
+        # Rapid state changes — must not raise
+        app.action_pause()  # → PAUSED
+        app.action_pause()  # → RECORDING
+        app.action_pause()  # → PAUSED
+        await pilot.pause()
+
+        assert app.state is AppState.PAUSED
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_rapid_pause_resume_state_sequence(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """Each pause/resume toggle must transition state correctly."""
+    mock_recorder = _mock_recorder()
+    mock_recorder_cls.return_value = mock_recorder
+    mock_session_cls.return_value = MagicMock()
+
+    transcriber = _mock_transcriber()
+
+    async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        assert app.state is AppState.RECORDING
+
+        app.action_pause()
+        await pilot.pause()
+        assert app.state is AppState.PAUSED
+
+        app.action_pause()
+        await pilot.pause()
+        assert app.state is AppState.RECORDING
+
+        app.action_pause()
+        await pilot.pause()
+        assert app.state is AppState.PAUSED

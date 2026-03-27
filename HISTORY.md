@@ -1,5 +1,17 @@
 # History
 
+## 2026-03-27 (cleanup: dead model, plan docs, dependency pinning, preload, docs)
+
+- Removed dead Silero VAD model (`silero_vad.onnx`) and `onnxruntime` dependency.
+- Removed completed PLAN docs (`PLAN-live-captioner.md`, `PLAN-context-injection.md`, `PLAN-notes-pane-rehaul.md`).
+- Pinned `faster-whisper>=0.9,<2.0` in `pyproject.toml` for version stability.
+- Added model preloading at startup: batch model loads during the prepare phase (before TUI launches), not on first batch.
+- Updated `.gitignore` to explicitly cover `.pytest_cache/` and `.ruff_cache/`.
+- Fixed hardcoded absolute path in README bug tracking link (`BUGS.md`).
+- Added Troubleshooting section to README (offline mode, mic permissions, venv repair, debug logs).
+- Simplified README setup instructions with a decision tree for launch method selection.
+- Updated README architecture file tree to match current repo state.
+
 ## 2026-03-27 (branding: scarecrow icon and startup banner)
 
 - Added SVG scarecrow icon (`assets/scarecrow-icon.svg`) — Wizard of Oz inspired, holding a microphone.

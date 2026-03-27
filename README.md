@@ -4,13 +4,13 @@
 
 # Scarecrow
 
-Always-recording TUI with transcription and inline notes.
+Always-recording TUI for transcription and inline notes.
 
 Scarecrow uses Whisper medium.en for accurate batch transcription every 15 seconds. You can attach timestamped notes inline by typing prefix commands (`/task`) or plain text. Audio and transcripts are saved per-session.
 
 ## Bug Tracking
 
-Scarecrow keeps a persistent bug ledger in [BUGS.md](/Users/dave/Documents/Projects/scarecrow/BUGS.md). Future fixes must follow these rules:
+Scarecrow keeps a persistent bug ledger in [BUGS.md](BUGS.md). Future fixes must follow these rules:
 
 - Append a `BUGS.md` entry whenever a bug is found, investigated, worked around, or fixed.
 - A bug is not considered squashed until a regression test exists for the exact failing logic path and that test passes.
@@ -32,6 +32,11 @@ python scripts/setup.py   # interactive model selection + alias setup
 ```
 
 The setup script walks you through choosing the batch transcription model.
+
+**Which launch method to use:**
+- **iTerm2 users (recommended):** Use the iTerm2 profile — it handles font sizing, auto-close, and calls the venv binary directly.
+- **Everyone else:** Add a shell alias pointing to `.venv/bin/scarecrow` (see Shell alias section below).
+- **Avoid `uv run` in aliases** — it can re-trigger the macOS `UF_HIDDEN` flag on the editable-install `.pth` file.
 
 ### Virtualenv health
 
@@ -152,7 +157,7 @@ On launch, Scarecrow prints:
 - Model cache locations (or whether they need downloading)
 - Where recordings and transcripts are saved
 
-Models load in offline mode (`HF_HUB_OFFLINE=1`) to avoid network stalls. Debug logs are written to `~/.cache/scarecrow/debug.log`.
+The batch model (`medium.en`) is preloaded during the prepare phase before the TUI launches, so the first batch transcription fires immediately without a cold-load delay. Models run in offline mode (`HF_HUB_OFFLINE=1`) to avoid network stalls. Debug logs are written to `~/.cache/scarecrow/debug.log`.
 
 ### Architecture
 
@@ -206,11 +211,39 @@ The hooks enforce these repo rules:
 - run `ruff`, `pytest`, and `vulture` on pre-commit
 - run the full `pytest` suite again on pre-push
 
+## Troubleshooting
+
+### Model download failures / offline mode
+
+Scarecrow runs with `HF_HUB_OFFLINE=1` to avoid network stalls on launch. This means the model must already be cached locally. If you see a model-not-found error:
+
+1. Run once without offline mode to download: `HF_HUB_OFFLINE=0 scarecrow` (or set the env var before launching).
+2. Or download manually to `~/.cache/huggingface/hub/`.
+
+### Microphone permission errors (macOS)
+
+If the mic fails to open, grant Terminal or iTerm2 microphone access:
+
+**System Settings > Privacy & Security > Microphone** — enable the terminal app you use.
+
+### Virtualenv repair
+
+If `import scarecrow` fails after running `uv sync` directly (e.g., the editable-install `.pth` file gets the `UF_HIDDEN` flag set):
+
+```bash
+python3 scripts/sync_env.py      # uv sync + repair + import validation
+python3 scripts/repair_venv.py   # repair/check only, no sync
+```
+
+### Debug logs
+
+Detailed error output is written to `~/.cache/scarecrow/debug.log`. Check this file if Scarecrow exits unexpectedly or transcription stops producing output.
+
 ## Architecture
 
 ```
 scarecrow/
-  __main__.py        # entry point, model loading, startup output
+  __main__.py        # entry point, model preloading, startup output
   app.py             # Textual TUI, batch transcription scheduling, notes pane
   config.py          # model names, audio settings, defaults
   env_health.py      # editable-install .pth repair (macOS UF_HIDDEN)
@@ -219,6 +252,8 @@ scarecrow/
   session.py         # timestamped session dirs + transcript files
   transcriber.py     # batch-only faster-whisper transcription (medium.en)
   app.tcss           # TUI stylesheet
+assets/
+  scarecrow-icon.svg # app icon
 bin/
   scarecrow          # wrapper script (sets PYTHONPATH, bypasses UF_HIDDEN)
 scripts/
@@ -233,8 +268,10 @@ tests/
   test_env_health.py     # editable-install repair tests
   test_integration.py    # real-model pipeline tests
   test_recorder.py       # audio recorder unit tests
-  test_session.py        # session/file management tests
   test_regressions.py    # regression tests for fixed bugs
+  test_repo_policy.py    # repo policy enforcement tests
+  test_session.py        # session/file management tests
+  test_setup.py          # setup script tests
   test_startup.py        # startup smoke tests (imports, .pth, HF offline, model load)
   test_transcriber.py    # batch transcription tests
 ```

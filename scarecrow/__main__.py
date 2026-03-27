@@ -85,9 +85,11 @@ def main() -> None:
         print(f"Failed to prepare batch transcriber: {exc}", file=sys.stderr)
         sys.exit(1)
 
+    print("  Loading batch model…", flush=True)
+    transcriber.preload_batch_model()
+
     t1 = time.monotonic()
     print(f"  Ready ({t1 - t0:.1f}s)", flush=True)
-    print(f"  Batch model ({batch}) loads on first batch run", flush=True)
     print("  Starting TUI…", flush=True)
     print(flush=True)
 

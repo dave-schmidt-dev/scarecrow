@@ -81,6 +81,28 @@ def test_main_finally_uses_app_cleanup_hook() -> None:
     fake_app.cleanup_after_exit.assert_called_once_with()
 
 
+def test_main_calls_preload_batch_model() -> None:
+    """main() must call transcriber.preload_batch_model() during startup."""
+    from scarecrow import __main__
+
+    fake_transcriber = MagicMock()
+    fake_transcriber.prepare.return_value = None
+    fake_transcriber.preload_batch_model.return_value = None
+    fake_app = MagicMock()
+    fake_app.run.side_effect = KeyboardInterrupt()
+    fake_app._shutdown_summary = ""
+
+    with (
+        patch("scarecrow.transcriber.Transcriber", return_value=fake_transcriber),
+        patch("scarecrow.app.ScarecrowApp", return_value=fake_app),
+        patch("scarecrow.__main__._wait_for_enter_or_timeout"),
+        patch("scarecrow.__main__._model_cache_path", return_value=None),
+    ):
+        __main__.main()
+
+    fake_transcriber.preload_batch_model.assert_called_once()
+
+
 def test_main_module_importable_from_outside_project(tmp_path: Path) -> None:
     """Importing scarecrow.__main__.main must succeed when cwd is NOT the project root.
 
