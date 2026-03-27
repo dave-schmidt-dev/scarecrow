@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/scarecrow-icon.svg" width="128" alt="Scarecrow">
+</p>
+
 # Scarecrow
 
 Always-recording TUI with transcription and inline notes.

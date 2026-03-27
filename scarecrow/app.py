@@ -176,9 +176,20 @@ class ScarecrowApp(App[None]):
         yield Input(placeholder="Type a note...", id="note-input")
         yield Footer()
 
+    _BANNER = (
+        "[dim]"
+        "        🎩\n"
+        "       (°_°)\n"
+        "    ──── | ────🎤\n"
+        "        | |\n"
+        "     Scarecrow v1.0[/dim]"
+    )
+
     def on_mount(self) -> None:
         self._tick_timer = self.set_interval(1, self._tick, pause=True)
         self._sync_info_bar()
+        with contextlib.suppress(NoMatches):
+            self.query_one("#captions", RichLog).write(self._BANNER)
         self.query_one("#note-input", Input).focus()
 
     def _preflight_check(self) -> bool:

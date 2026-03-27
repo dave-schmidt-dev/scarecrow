@@ -1,5 +1,11 @@
 # History
 
+## 2026-03-27 (branding: scarecrow icon and startup banner)
+
+- Added SVG scarecrow icon (`assets/scarecrow-icon.svg`) — Wizard of Oz inspired, holding a microphone.
+- Added ASCII art startup banner in the transcript pane on launch (scrolls away when recording begins).
+- Icon displayed in README header.
+
 ## 2026-03-27 (v1.0 release)
 
 - Removed development debug logging (meter sync, batch prompt).
