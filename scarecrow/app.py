@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import threading
+import time
 from concurrent.futures import (
     Future,
     ThreadPoolExecutor,
@@ -154,6 +155,9 @@ class ScarecrowApp(App[None]):
         self._awaiting_context: bool = True
         self._previous_batch_tail: str = ""
         self._note_counts: dict[str, int] = {"CONTEXT": 0, "TASK": 0, "NOTE": 0}
+        self._recording_start_time: float | None = None
+        self._disk_warn_shown: bool = False
+        self._session_disk_warn_shown: bool = False
 
     def compose(self) -> ComposeResult:
         yield InfoBar(id="info-bar")
@@ -222,8 +226,10 @@ class ScarecrowApp(App[None]):
         return True
 
     def _tick(self) -> None:
-        self._elapsed += 1
+        if self._recording_start_time is not None:
+            self._elapsed = int(time.monotonic() - self._recording_start_time)
         self._batch_countdown = max(0, self._batch_countdown - 1)
+        self._check_recorder_warnings()
         self._sync_info_bar()
 
     def _sync_info_bar(self) -> None:
@@ -253,6 +259,39 @@ class ScarecrowApp(App[None]):
         self._status_message = message
         self._status_is_error = error
         self._sync_info_bar()
+
+    def _warn_transcript(self, message: str) -> None:
+        """Write a WARNING line to both the RichLog and session transcript."""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        styled_line = (
+            f"[bold yellow][WARNING][/bold yellow]"
+            f" [dim]{timestamp}[/dim] \u2014 {message}"
+        )
+        file_line = f"[WARNING] {timestamp} -- {message}"
+        with contextlib.suppress(NoMatches):
+            self.query_one("#captions", RichLog).write(styled_line)
+        if self._session is not None:
+            self._session.append_sentence(file_line)
+
+    def _check_recorder_warnings(self) -> None:
+        """Poll recorder and session for warnings; write to transcript once."""
+        if self._audio_recorder is not None:
+            warning = self._audio_recorder._last_warning
+            if warning:
+                self._audio_recorder._last_warning = None
+                self._warn_transcript(warning)
+
+            if self._audio_recorder._disk_write_failed and not self._disk_warn_shown:
+                self._disk_warn_shown = True
+                self._warn_transcript("Audio file write failed \u2014 disk may be full")
+
+        if (
+            self._session is not None
+            and self._session.write_failed
+            and not self._session_disk_warn_shown
+        ):
+            self._session_disk_warn_shown = True
+            self._warn_transcript("Transcript write failed \u2014 disk may be full")
 
     def _show_help(self) -> None:
         """Show inline help in the transcript pane."""
@@ -524,6 +563,7 @@ class ScarecrowApp(App[None]):
             BATCH_INTERVAL_SECONDS,
             self._on_batch_tick,
         )
+        self._recording_start_time = time.monotonic()
         self._elapsed = 0
         self._batch_window_start = 0
         self._batch_countdown = BATCH_INTERVAL_SECONDS

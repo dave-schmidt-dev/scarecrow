@@ -1,7 +1,10 @@
 """Session management — timestamped directories and transcript files."""
 
+import logging
 from datetime import datetime
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 
 class Session:
@@ -18,6 +21,7 @@ class Session:
 
         self._transcript_file = None
         self._finalized = False
+        self._write_failed: bool = False
         header_timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
         self.append_sentence(f"Session Start: {header_timestamp}")
 
@@ -36,6 +40,11 @@ class Session:
         """Returns path to transcript.txt in session dir."""
         return self._session_dir / "transcript.txt"
 
+    @property
+    def write_failed(self) -> bool:
+        """True if a transcript write has failed (e.g. disk full)."""
+        return self._write_failed
+
     def append_sentence(self, text: str) -> None:
         """Appends a line to transcript.txt, flushes immediately."""
         if self._finalized:
@@ -43,8 +52,12 @@ class Session:
         if self._transcript_file is None:
             self._transcript_file = self.transcript_path.open("a", encoding="utf-8")
 
-        self._transcript_file.write(text + "\n")
-        self._transcript_file.flush()
+        try:
+            self._transcript_file.write(text + "\n")
+            self._transcript_file.flush()
+        except OSError:
+            log.exception("Failed to write to transcript file")
+            self._write_failed = True
 
     def write_end_header(self) -> None:
         """Write session end timestamp to transcript."""

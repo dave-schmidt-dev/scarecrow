@@ -52,23 +52,59 @@ class AudioRecorder:
         self._held_peak: float = 0.0
         self._peak_decay: float = 0.15  # decay per read
 
+        # Disk-write and status warning state (polled by app.py)
+        self._disk_write_failed: bool = False
+        self._last_warning: str | None = None
+        self._last_status_warning: str = ""
+
     def _callback(
         self,
         indata: np.ndarray,
         _frames: int,
         _time,
-        _status,
+        status,
     ) -> None:
         """PortAudio callback — runs on a dedicated audio thread."""
+        if status:
+            status_str = str(status).lower()
+            if "input overflow" in status_str:
+                warning_str = "Audio input overflow"
+            else:
+                warning_str = f"Audio device error: {status}"
+            if warning_str != self._last_status_warning:
+                self._last_status_warning = warning_str
+                self._last_warning = warning_str
+                logging.getLogger(__name__).warning("sounddevice status: %s", status)
+
         with self._lock:
             if not self._recording or self._sound_file is None:
                 return
             if self._paused:
                 silence = np.zeros_like(indata)
-                self._sound_file.write(silence)
+                try:
+                    self._sound_file.write(silence)
+                except OSError:
+                    if not self._disk_write_failed:
+                        self._disk_write_failed = True
+                        self._last_warning = (
+                            "Audio file write failed \u2014 disk may be full"
+                        )
+                        logging.getLogger(__name__).exception(
+                            "Failed to write silence to audio file"
+                        )
                 self._peak_level = 0.0
             else:
-                self._sound_file.write(indata)
+                try:
+                    self._sound_file.write(indata)
+                except OSError:
+                    if not self._disk_write_failed:
+                        self._disk_write_failed = True
+                        self._last_warning = (
+                            "Audio file write failed \u2014 disk may be full"
+                        )
+                        logging.getLogger(__name__).exception(
+                            "Failed to write audio to file"
+                        )
                 # Track peak level for audio meter
                 peak = float(np.abs(indata.astype(np.int32)).max()) / 32768.0
                 self._peak_level = peak

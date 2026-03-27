@@ -1,5 +1,13 @@
 # History
 
+## 2026-03-27 (resilience hardening)
+
+- Disk-full handling: audio writes and transcript writes now catch OSError, surface `[WARNING]` in transcript, and continue without crashing.
+- Sounddevice status monitoring: callback now checks the `status` parameter for input overflow/underflow/device errors, surfaces warnings in transcript with `[WARNING]` tag.
+- Wall-clock elapsed timer: replaced tick-counting (`_elapsed += 1`) with `time.monotonic()` delta so sleep/wake doesn't cause timer drift.
+- Warning infrastructure: added `_warn_transcript()` helper and `_check_recorder_warnings()` polling in the 1-second tick, using `[WARNING]` tag format recognizable by future summarizers.
+- Min-height CSS: transcript pane now has `min-height: 3` to prevent collapse on small terminals.
+
 ## 2026-03-27 (UX and accessibility fixes)
 
 - Added `/help` command (also `/h` and `?`) showing inline command reference and keybindings.
