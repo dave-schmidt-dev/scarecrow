@@ -1,5 +1,10 @@
 # History
 
+## 2026-03-27 (v1.0 release)
+
+- Removed development debug logging (meter sync, batch prompt).
+- Tagged v1.0 — MVP complete: batch transcription, notes pane, context injection, audio meter.
+
 ## 2026-03-27 (polish: /task consolidation, notation counts, audio meter, session timestamps)
 
 - Merged `/action` + `/followup` into `/task` (shorthand `/t`). Simpler taxonomy: `/context` for background, `/task` for action items, plain text for notes.

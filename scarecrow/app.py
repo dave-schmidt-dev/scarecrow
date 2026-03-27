@@ -224,13 +224,9 @@ class ScarecrowApp(App[None]):
         bar.batch_countdown = self._batch_countdown
         bar.status_message = self._status_message
         bar.status_is_error = self._status_is_error
-        raw_peak = self._audio_recorder.peak_level if self._audio_recorder else 0.0
-        log.debug(
-            "Sync peak: raw=%.3f recorder=%s",
-            raw_peak,
-            self._audio_recorder is not None,
+        bar.peak_level = (
+            self._audio_recorder.peak_level if self._audio_recorder else 0.0
         )
-        bar.peak_level = raw_peak
 
     def watch_state(self, _new_state: AppState) -> None:
         self._sync_info_bar()
@@ -312,8 +308,6 @@ class ScarecrowApp(App[None]):
             return False
 
         prompt = self._build_initial_prompt()
-        if prompt:
-            log.debug("Batch prompt: %s", prompt[:200])
         future = self._ensure_batch_executor().submit(
             self._transcriber.transcribe_batch,
             audio,
