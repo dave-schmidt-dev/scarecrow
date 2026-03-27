@@ -1,5 +1,11 @@
 # History
 
+## 2026-03-27 (fix repeated text: disable audio overlap for parakeet)
+
+- Disabled 500ms audio overlap for parakeet backend (overlap_ms=0). The overlap was designed for Whisper's initial_prompt context continuity; parakeet doesn't use it, and the overlap caused repeated phrases at every 5-second batch boundary.
+- Reverted paragraph buffer approach (RichLog doesn't support in-place line updates). Each batch gets its own line — acceptable with 30-second divider throttling.
+- Made overlap_ms configurable on AudioRecorder (keyword argument, default 500ms for whisper).
+
 ## 2026-03-27 (paragraph joining: space-joined batch results in transcript pane)
 
 - Consecutive batch results between dividers are now space-joined into a single paragraph in the RichLog UI, instead of each batch getting its own line. Particularly important for the 5-second parakeet batch interval.

@@ -28,6 +28,8 @@ class AudioRecorder:
         sample_rate: int = 16000,
         channels: int = config.CHANNELS,
         on_audio: Callable[[np.ndarray], None] | None = None,
+        *,
+        overlap_ms: int = 500,
     ) -> None:
         self._output_path = output_path
         self._sample_rate = sample_rate
@@ -45,7 +47,7 @@ class AudioRecorder:
         self._audio_chunks: list[np.ndarray] = []
         self._buffer_lock = threading.Lock()
         self._overlap_tail: np.ndarray | None = None
-        self._overlap_samples = sample_rate // 2  # 500ms overlap
+        self._overlap_samples = int(sample_rate * overlap_ms / 1000)
 
         # Peak level for audio meter (updated in callback)
         self._peak_level: float = 0.0
