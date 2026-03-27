@@ -100,11 +100,14 @@ class InfoBar(Static):
         text.append(f"{h:02d}:{m:02d}:{s:02d}", style="bold")
         text.append("  ")
 
-        text.append(f"{self.word_count}", style="bold")
-        text.append(" words", style="dim")
-        text.append("  ")
+        # Drop word count and batch countdown on narrow terminals
+        width = self.size.width if self.size.width > 0 else 120
+        if width >= 60:
+            text.append(f"{self.word_count}", style="bold")
+            text.append(" words", style="dim")
+            text.append("  ")
 
-        if self.state in (AppState.RECORDING, AppState.PAUSED):
+        if self.state in (AppState.RECORDING, AppState.PAUSED) and width >= 50:
             text.append("batch ", style="dim")
             text.append(f"{self.batch_countdown}s", style="bold")
 
@@ -359,9 +362,17 @@ class ScarecrowApp(App[None]):
             self._post_to_ui(self._show_error, f"{source}: {message}")
 
     def _reap_batch_futures(self) -> None:
-        self._batch_futures = {
-            future for future in self._batch_futures if not future.done()
-        }
+        alive: set[Future[str | None]] = set()
+        for future in self._batch_futures:
+            if not future.done():
+                alive.add(future)
+                continue
+            try:
+                future.result(timeout=0)
+            except Exception as exc:
+                log.error("Batch worker failed: %s", exc)
+                self._warn_transcript(f"Batch transcription failed: {exc}")
+        self._batch_futures = alive
 
     def _ensure_batch_executor(self) -> ThreadPoolExecutor:
         if self._batch_executor is None:

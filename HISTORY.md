@@ -1,5 +1,10 @@
 # History
 
+## 2026-03-27 (batch monitoring + narrow terminal support)
+
+- Batch executor health monitoring: `_reap_batch_futures()` now checks completed futures for exceptions and surfaces failures as `[WARNING]` in the transcript instead of silently discarding them.
+- Narrow terminal support: InfoBar drops word count below 60 columns and batch countdown below 50 columns to prevent wrapping.
+
 ## 2026-03-27 (resilience hardening)
 
 - Disk-full handling: audio writes and transcript writes now catch OSError, surface `[WARNING]` in transcript, and continue without crashing.
