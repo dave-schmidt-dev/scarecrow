@@ -80,8 +80,13 @@ class Transcriber:
 
     def _transcribe_parakeet(self, audio: np.ndarray) -> str:
         """Run Parakeet TDT model on audio. Returns text with punctuation."""
+        import mlx.core as mx
+        from parakeet_mlx.audio import get_logmel
+
         model = self._model_manager.get_parakeet_model()
-        result = model.transcribe(audio)
+        audio_mx = mx.array(audio)
+        mel = get_logmel(audio_mx, model.preprocessor_config)
+        result = model.generate(mel)[0]
         return result.text.strip() if result.text else ""
 
     def transcribe_batch(

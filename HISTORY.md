@@ -1,5 +1,16 @@
 # History
 
+## 2026-03-27 (parakeet integration fix: numpy array support)
+
+- Fixed parakeet-mlx integration: `transcribe()` only accepts file paths, not numpy arrays. Now uses `get_logmel()` + `model.generate()` to process numpy arrays directly from the recorder buffer.
+- Updated parakeet backend tests to mock at the correct level.
+
+## 2026-03-27 (bugfixes: model download + recordings path)
+
+- Fixed recordings directory using a relative path (`Path("recordings")`) — output landed in different directories depending on the working directory at launch. Now absolute: `~/recordings/`.
+- Fixed `model_cache_path` to handle full HF repo IDs (e.g. `deepdml/faster-whisper-large-v3-turbo-ct2`) in addition to short model names.
+- Fixed first-run model download failing due to `HF_HUB_OFFLINE=1` — `_create_model` now temporarily lifts offline mode when the model isn't cached yet.
+
 ## 2026-03-27 (feature branch: parakeet-mlx backend)
 
 - Added parakeet-mlx as alternative transcription backend alongside faster-whisper.

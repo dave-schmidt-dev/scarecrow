@@ -47,22 +47,17 @@ def _mock_recorder():
 
 @patch("scarecrow.config.BACKEND", "parakeet")
 def test_transcribe_batch_parakeet_calls_model() -> None:
-    """When BACKEND is parakeet, transcribe_batch calls model.transcribe with audio."""
-    mock_model = MagicMock()
-    mock_result = MagicMock()
-    mock_result.text = "Hello world."
-    mock_model.transcribe.return_value = mock_result
-
+    """When BACKEND is parakeet, transcribe_batch routes to _transcribe_parakeet."""
     mock_manager = MagicMock()
-    mock_manager.get_parakeet_model.return_value = mock_model
 
     t = Transcriber(model_manager=mock_manager)
     t._ready = True
 
     audio = np.zeros(16000, dtype=np.float32)
-    result = t.transcribe_batch(audio, 0)
-
-    mock_model.transcribe.assert_called_once_with(audio)
+    patcher = patch.object(t, "_transcribe_parakeet", return_value="Hello world.")
+    with patcher as mock_tp:
+        result = t.transcribe_batch(audio, 0, emit_callback=False)
+        mock_tp.assert_called_once()
     assert result == "Hello world."
 
 
@@ -73,23 +68,21 @@ def test_transcribe_batch_parakeet_calls_model() -> None:
 
 @patch("scarecrow.config.BACKEND", "parakeet")
 def test_transcribe_batch_parakeet_ignores_initial_prompt() -> None:
-    """When BACKEND is parakeet, initial_prompt is not forwarded to model.transcribe."""
-    mock_model = MagicMock()
-    mock_result = MagicMock()
-    mock_result.text = "Hello world."
-    mock_model.transcribe.return_value = mock_result
-
+    """When BACKEND is parakeet, initial_prompt is accepted but not forwarded."""
     mock_manager = MagicMock()
-    mock_manager.get_parakeet_model.return_value = mock_model
 
     t = Transcriber(model_manager=mock_manager)
     t._ready = True
 
     audio = np.zeros(16000, dtype=np.float32)
-    result = t.transcribe_batch(audio, 0, initial_prompt="some context")
-
-    # Should be called with audio only — no initial_prompt kwarg
-    mock_model.transcribe.assert_called_once_with(audio)
+    patcher = patch.object(t, "_transcribe_parakeet", return_value="Hello world.")
+    with patcher as mock_tp:
+        result = t.transcribe_batch(
+            audio, 0, initial_prompt="some context", emit_callback=False
+        )
+        # _transcribe_parakeet called with audio only, no prompt
+        args, _kwargs = mock_tp.call_args
+        assert len(args) == 1
     assert result == "Hello world."
 
 
@@ -102,19 +95,15 @@ def test_transcribe_batch_parakeet_ignores_initial_prompt() -> None:
 def test_transcribe_batch_parakeet_preserves_punctuation() -> None:
     """Parakeet results must be returned with punctuation and capitalization intact."""
     original_text = "Hello, World! This is a test."
-
-    mock_model = MagicMock()
-    mock_result = MagicMock()
-    mock_result.text = original_text
-    mock_model.transcribe.return_value = mock_result
-
     mock_manager = MagicMock()
-    mock_manager.get_parakeet_model.return_value = mock_model
 
     t = Transcriber(model_manager=mock_manager)
     t._ready = True
 
-    result = t.transcribe_batch(np.zeros(16000, dtype=np.float32), 0)
+    with patch.object(t, "_transcribe_parakeet", return_value=original_text):
+        result = t.transcribe_batch(
+            np.zeros(16000, dtype=np.float32), 0, emit_callback=False
+        )
 
     assert result == original_text
 
@@ -126,14 +115,10 @@ def test_transcribe_batch_parakeet_preserves_punctuation() -> None:
 
 @patch("scarecrow.config.BACKEND", "parakeet")
 def test_transcribe_batch_parakeet_error_emits_callback() -> None:
-    """A RuntimeError from model.transcribe must trigger on_error and return None."""
+    """A RuntimeError in parakeet path must trigger on_error and return None."""
     errors: list[tuple[str, str]] = []
 
-    mock_model = MagicMock()
-    mock_model.transcribe.side_effect = RuntimeError("GPU exploded")
-
     mock_manager = MagicMock()
-    mock_manager.get_parakeet_model.return_value = mock_model
 
     t = Transcriber(
         TranscriberBindings(
@@ -143,7 +128,10 @@ def test_transcribe_batch_parakeet_error_emits_callback() -> None:
     )
     t._ready = True
 
-    result = t.transcribe_batch(np.zeros(16000, dtype=np.float32), 0)
+    with patch.object(
+        t, "_transcribe_parakeet", side_effect=RuntimeError("GPU exploded")
+    ):
+        result = t.transcribe_batch(np.zeros(16000, dtype=np.float32), 0)
 
     assert result is None
     assert errors == [
