@@ -1,5 +1,12 @@
 # History
 
+## 2026-03-27 (polish: /task consolidation, notation counts, audio meter)
+
+- Merged `/action` + `/followup` into `/task` (shorthand `/t`). Simpler taxonomy: `/context` for background, `/task` for action items, plain text for notes.
+- Context display line now shows entry counts: "Context: 3 · Tasks: 2 · Notes: 1" instead of raw context text.
+- Added audio level meter (▁▂▃▄▅▆▇█) in InfoBar during recording — confirms mic is active at a glance.
+- Added debug logging of the batch prompt sent to Whisper for context verification.
+
 ## 2026-03-27 (context injection: startup prompt, /context, /clear, rolling tail)
 
 - App now launches in IDLE with focus on the notes input, showing a context prompt instead of auto-starting.

@@ -164,6 +164,7 @@ def test_info_bar_renders_word_count() -> None:
     bar._reactive_elapsed = 0
     bar._reactive_word_count = 42
     bar._reactive_batch_countdown = BATCH_INTERVAL_SECONDS
+    bar._reactive_peak_level = 0.0
 
     text = bar.render().plain
     assert "42" in text
@@ -189,6 +190,7 @@ def test_info_bar_renders_batch_countdown_when_recording() -> None:
     bar._reactive_elapsed = 0
     bar._reactive_word_count = 0
     bar._reactive_batch_countdown = 17
+    bar._reactive_peak_level = 0.0
 
     text = bar.render().plain
     assert "17s" in text
@@ -214,6 +216,7 @@ def test_info_bar_renders_recording_state_label() -> None:
     bar._reactive_elapsed = 0
     bar._reactive_word_count = 0
     bar._reactive_batch_countdown = BATCH_INTERVAL_SECONDS
+    bar._reactive_peak_level = 0.0
 
     text = bar.render().plain
     assert "REC" in text
@@ -1007,7 +1010,7 @@ async def test_note_submission_includes_tag_prefix() -> None:
         await pilot.pause()
 
         input_widget = app.query_one("#note-input", Input)
-        input_widget.value = "/action follow up on this"
+        input_widget.value = "/task follow up on this"
 
         captions = app.query_one("#captions", RichLog)
         initial_lines = len(captions.lines)
@@ -1016,7 +1019,7 @@ async def test_note_submission_includes_tag_prefix() -> None:
         await pilot.pause()
 
         all_text = " ".join(str(line) for line in captions.lines[initial_lines:])
-        assert "ACTION" in all_text
+        assert "TASK" in all_text
 
 
 async def test_note_submission_increments_word_count() -> None:
@@ -1090,13 +1093,13 @@ async def test_note_submission_writes_to_session(tmp_path: Path) -> None:
 
         app._session = real_session
         input_widget = app.query_one("#note-input", Input)
-        input_widget.value = "/action save this note"
+        input_widget.value = "/task save this note"
 
         app._submit_note()
         await pilot.pause()
 
     content = real_session.transcript_path.read_text(encoding="utf-8")
-    assert "[ACTION]" in content
+    assert "[TASK]" in content
     assert "save this note" in content
 
 
@@ -1279,6 +1282,7 @@ async def test_context_display_shown_when_context_present(
 
         display = app.query_one("#context-display", Static)
         assert display.display is True
+        assert "Context: 1" in str(display.render())
 
 
 @patch("scarecrow.app.AudioRecorder")
@@ -1405,3 +1409,100 @@ async def test_notes_label_reverts_after_recording_starts(
         assert pre_recording_text != post_recording_text
         # New label should include "Notes"
         assert "Notes" in post_recording_text
+
+
+# ---------------------------------------------------------------------------
+# Note count tracking
+# ---------------------------------------------------------------------------
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_note_counts_increment(mock_session_cls, mock_recorder_cls) -> None:
+    """_note_counts must track counts per type after each submission."""
+    mock_recorder_cls.return_value = _mock_recorder()
+    mock_session_cls.return_value = MagicMock()
+
+    async with _app(with_transcriber=True).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        # Start recording so _handle_add_context works
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        assert app.state is AppState.RECORDING
+
+        input_widget = app.query_one("#note-input", Input)
+
+        # Submit a plain note
+        input_widget.value = "plain note here"
+        app._submit_note()
+        await pilot.pause()
+
+        # Submit a /task note
+        input_widget.value = "/task follow up on this"
+        app._submit_note()
+        await pilot.pause()
+
+        # Submit a /context entry
+        input_widget.value = "/context Malcolm X"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert app._note_counts["NOTE"] == 1
+        assert app._note_counts["TASK"] == 1
+        assert app._note_counts["CONTEXT"] >= 1
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_context_display_shows_all_counts(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """#context-display must show counts for Context, Tasks, and Notes."""
+    from textual.widgets import Static
+
+    mock_recorder_cls.return_value = _mock_recorder()
+    mock_session_cls.return_value = MagicMock()
+
+    async with _app(with_transcriber=True).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        # Start recording
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        assert app.state is AppState.RECORDING
+
+        input_widget = app.query_one("#note-input", Input)
+
+        # Add a context entry
+        input_widget.value = "/context Malcolm X"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        # Add a task note
+        input_widget.value = "/task follow up"
+        app._submit_note()
+        await pilot.pause()
+
+        # Add a plain note
+        input_widget.value = "plain note"
+        app._submit_note()
+        await pilot.pause()
+
+        display = app.query_one("#context-display", Static)
+        display_text = str(display.render())
+        assert "Context: 1" in display_text
+        assert "Tasks: 1" in display_text
+        assert "Notes: 1" in display_text
+
+
+def test_info_bar_peak_level_renders() -> None:
+    """InfoBar in RECORDING state must render an audio level bar character."""
+    bar = InfoBar()
+    bar._reactive_state = AppState.RECORDING
+    bar._reactive_elapsed = 0
+    bar._reactive_word_count = 0
+    bar._reactive_batch_countdown = BATCH_INTERVAL_SECONDS
+    bar._reactive_peak_level = 0.5
+
+    text = bar.render().plain
+    bars = "▁▂▃▄▅▆▇█"
+    assert any(ch in text for ch in bars)

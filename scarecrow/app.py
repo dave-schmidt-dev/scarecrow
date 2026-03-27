@@ -58,6 +58,7 @@ class InfoBar(Static):
     batch_countdown: reactive[int] = reactive(BATCH_INTERVAL_SECONDS)
     status_message: reactive[str] = reactive("")
     status_is_error: reactive[bool] = reactive(False)
+    peak_level: reactive[float] = reactive(0.0)
 
     def render(self) -> Text:
         label, style, icon = _STATE_STYLE[self.state]
@@ -65,6 +66,11 @@ class InfoBar(Static):
         text.append(f" {label} ", style=style)
         if icon:
             text.append(f" {icon}")
+        if self._reactive_state is AppState.RECORDING:
+            bars = "▁▂▃▄▅▆▇█"
+            level = min(self._reactive_peak_level, 1.0)
+            idx = int(level * (len(bars) - 1))
+            text.append(f" {bars[idx]}")
         text.append("  ")
 
         h = self.elapsed // 3600
@@ -127,6 +133,7 @@ class ScarecrowApp(App[None]):
         self._context_entries: list[str] = []
         self._awaiting_context: bool = True
         self._previous_batch_tail: str = ""
+        self._note_counts: dict[str, int] = {"CONTEXT": 0, "TASK": 0, "NOTE": 0}
 
     def compose(self) -> ComposeResult:
         yield InfoBar(id="info-bar")
@@ -201,6 +208,9 @@ class ScarecrowApp(App[None]):
         bar.batch_countdown = self._batch_countdown
         bar.status_message = self._status_message
         bar.status_is_error = self._status_is_error
+        bar.peak_level = (
+            self._audio_recorder.peak_level if self._audio_recorder else 0.0
+        )
 
     def watch_state(self, _new_state: AppState) -> None:
         self._sync_info_bar()
@@ -282,6 +292,8 @@ class ScarecrowApp(App[None]):
             return False
 
         prompt = self._build_initial_prompt()
+        if prompt:
+            log.debug("Batch prompt: %s", prompt[:200])
         future = self._ensure_batch_executor().submit(
             self._transcriber.transcribe_batch,
             audio,
@@ -621,10 +633,8 @@ class ScarecrowApp(App[None]):
                 self._reactive_state = AppState.IDLE
 
     _NOTE_PREFIXES: ClassVar[dict[str, str]] = {
-        "/action": "ACTION",
-        "/followup": "FOLLOW-UP",
-        "/a": "ACTION",
-        "/f": "FOLLOW-UP",
+        "/task": "TASK",
+        "/t": "TASK",
     }
 
     def _submit_note(self) -> None:
@@ -667,8 +677,10 @@ class ScarecrowApp(App[None]):
         if self._session is not None:
             self._session.append_sentence(file_line)
 
+        self._note_counts[tag] = self._note_counts.get(tag, 0) + 1
         self._word_count += len(raw.split())
         self._sync_info_bar()
+        self._update_context_display()
         input_widget.value = ""
 
     def _handle_context_start(self, raw: str) -> None:
@@ -679,9 +691,7 @@ class ScarecrowApp(App[None]):
         with contextlib.suppress(NoMatches):
             label = self.query_one("#notes-label", Static)
             label.update(
-                "Notes  [dim]"
-                "(/action  /followup  /context  /clear · Enter to submit)"
-                "[/dim]"
+                "Notes  [dim](/task  /context  /clear · Enter to submit)[/dim]"
             )
 
         # Clear the input
@@ -696,6 +706,7 @@ class ScarecrowApp(App[None]):
         # Write context if provided
         if text:
             self._context_entries.append(text)
+            self._note_counts["CONTEXT"] += 1
             timestamp = datetime.now().strftime("%H:%M:%S")
             file_line = f"[CONTEXT] {timestamp} -- {text}"
             styled_line = (
@@ -723,6 +734,7 @@ class ScarecrowApp(App[None]):
             return
 
         self._context_entries.append(text)
+        self._note_counts["CONTEXT"] += 1
         timestamp = datetime.now().strftime("%H:%M:%S")
         file_line = f"[CONTEXT] {timestamp} -- {text}"
         styled_line = (
@@ -739,6 +751,7 @@ class ScarecrowApp(App[None]):
 
     def _handle_clear_context(self) -> None:
         self._context_entries.clear()
+        self._note_counts["CONTEXT"] = 0
         self._previous_batch_tail = ""
         self._update_context_display()
         self._set_status("Context cleared")
@@ -750,8 +763,17 @@ class ScarecrowApp(App[None]):
             display = self.query_one("#context-display", Static)
         except NoMatches:
             return
-        if self._context_entries:
-            display.update(f"Context: {', '.join(self._context_entries)}")
+        parts = []
+        for label, key in [
+            ("Context", "CONTEXT"),
+            ("Tasks", "TASK"),
+            ("Notes", "NOTE"),
+        ]:
+            count = self._note_counts.get(key, 0)
+            if count > 0:
+                parts.append(f"{label}: {count}")
+        if parts:
+            display.update(" · ".join(parts))
             display.display = True
         else:
             display.update("")
