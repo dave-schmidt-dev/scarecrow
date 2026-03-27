@@ -1,5 +1,11 @@
 # History
 
+## 2026-03-27 (docs refresh)
+
+- Added `/help` command to README feature list.
+- Fixed stale comment in `_submit_note` referencing removed `/action`, `/followup` prefixes.
+- Refreshed TODO.md: removed resolved pause/resume items, added screen reader accessibility tracking note.
+
 ## 2026-03-27 (batch monitoring + narrow terminal support)
 
 - Batch executor health monitoring: `_reap_batch_futures()` now checks completed futures for exceptions and surfaces failures as `[WARNING]` in the transcript instead of silently discarding them.

@@ -758,7 +758,7 @@ class ScarecrowApp(App[None]):
         if not raw:
             return
 
-        # Parse optional prefix: /action, /followup, /a, /f
+        # Parse optional prefix: /task, /t
         tag = "NOTE"
         for prefix, prefix_tag in self._NOTE_PREFIXES.items():
             if raw.lower().startswith(prefix + " "):

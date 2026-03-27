@@ -9,10 +9,9 @@
 - 30% spikes every 15s from batch transcription (medium.en on 15s audio) — expected
 - Investigate: can batch run at lower priority or be deferred to reduce spike?
 
-## Pause/resume
-- Mic release on pause (stream.stop) — verify system mic indicator turns off
-- Resume latency — verify stream.start() is fast enough
-- Batch timer behavior during pause — should print "Recording paused" markers
+## Accessibility
+- Screen reader support blocked on Textual framework (planned but not yet shipped)
+- Monitor Textual releases for accessibility API; integrate when available
 
 ## Setup script
 - Needs testing end-to-end with a fresh clone

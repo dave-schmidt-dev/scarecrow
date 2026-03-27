@@ -104,6 +104,9 @@ When Scarecrow launches, the notes input shows a context prompt. Type one or mor
 - `/context <terms>` — append terms to Whisper's `initial_prompt`; written to transcript as `[CONTEXT]`
 - `/clear` — wipe all context entries and the rolling tail; hides the context display
 
+**Help:**
+- `/help`, `/h`, or `?` — show available commands and keybindings inline in the transcript pane
+
 ### TUI layout
 
 The TUI shows:
