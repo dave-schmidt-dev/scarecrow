@@ -30,16 +30,9 @@ def explain_architecture():
     print("HOW SCARECROW WORKS")
     print("-" * 40)
     print()
-    print("Scarecrow uses two transcription engines:")
-    print()
-    print("  1. LIVE captions (Apple Speech)")
-    print("     Streaming on-device speech recognition.")
-    print("     No configuration needed — uses macOS built-in models.")
-    print()
-    print("  2. BATCH transcript (Whisper)")
-    print("     Accurate transcription every 30 seconds.")
-    print("     You choose the model below.")
-    print(f"     Default: {DEFAULT_BATCH}")
+    print("Scarecrow uses Whisper for batch transcription every 15 seconds.")
+    print("You choose the model below.")
+    print(f"Default: {DEFAULT_BATCH}")
     print()
 
 
@@ -115,7 +108,6 @@ def main():
     batch_model = choose_model(DEFAULT_BATCH)
 
     print()
-    print("  Live:        Apple Speech (on-device, no config needed)")
     print(f"  Batch model: {batch_model}")
 
     cached = check_cached(batch_model)

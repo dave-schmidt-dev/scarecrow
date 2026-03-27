@@ -87,6 +87,10 @@ class InfoBar(Static):
                 color = "red"
             text.append(" ")
             text.append(bars[idx], style=color)
+            if scaled < 0.15:
+                text.append(" quiet", style="dim")
+            elif scaled >= 0.75:
+                text.append(" LOUD", style=f"bold {color}")
         text.append("  ")
 
         h = self.elapsed // 3600
@@ -169,7 +173,7 @@ class ScarecrowApp(App[None]):
         )
         yield Static("", id="context-display")
         yield Static(
-            "Enter context (proper nouns, topics) or press Enter to start recording",
+            "Context (e.g. Alice, React, Q4 planning) or Enter to start",
             id="notes-label",
             classes="pane-label",
         )
@@ -249,6 +253,29 @@ class ScarecrowApp(App[None]):
         self._status_message = message
         self._status_is_error = error
         self._sync_info_bar()
+
+    def _show_help(self) -> None:
+        """Show inline help in the transcript pane."""
+        with contextlib.suppress(NoMatches):
+            self.query_one("#note-input", Input).value = ""
+        help_text = (
+            "[bold]Commands:[/bold]\n"
+            "  /task, /t [dim]<text>[/dim]   "
+            "Add a task note\n"
+            "  /context [dim]<terms>[/dim]   "
+            "Add context terms for accuracy\n"
+            "  /clear              "
+            "Clear context & reset\n"
+            "  /help, /h, ?        "
+            "Show this message\n"
+            "\n"
+            "[bold]Keybindings:[/bold]\n"
+            "  Ctrl+P              Pause / resume\n"
+            "  Ctrl+Q              Quit\n"
+            "  Enter               Submit note"
+        )
+        with contextlib.suppress(NoMatches):
+            self.query_one("#captions", RichLog).write(help_text)
 
     def _show_error(self, message: str) -> None:
         self._set_status(message, error=True)
@@ -820,6 +847,9 @@ class ScarecrowApp(App[None]):
             return
         raw = event.input.value.strip()
         lower = raw.lower()
+        if lower in ("/help", "/h", "?"):
+            self._show_help()
+            return
         if lower == "/clear":
             self._handle_clear_context()
             return

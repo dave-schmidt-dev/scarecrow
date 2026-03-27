@@ -1,5 +1,12 @@
 # History
 
+## 2026-03-27 (UX and accessibility fixes)
+
+- Added `/help` command (also `/h` and `?`) showing inline command reference and keybindings.
+- Audio meter now shows text labels ("quiet" / "LOUD") alongside color for colorblind accessibility.
+- Context prompt includes examples: "e.g. Alice, React, Q4 planning".
+- Fixed stale `scripts/setup.py` referencing removed Apple Speech live captions and 30s batch interval.
+
 ## 2026-03-27 (test parallelization)
 
 - Parallelized test suite runner: independent test files run concurrently (Phase 1), behavioral nodes run in parallel batches of 8 (Phase 2). Wall time reduced from ~60s to ~20s on M5 Max.
