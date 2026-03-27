@@ -24,6 +24,22 @@ Screen {
     text-style: bold;
 }
 
+/* ── Context display (below transcript, above notes label) ── */
+
+#context-display {
+    height: 1;
+    margin: 0 1;
+    padding: 0 1;
+    color: $text-muted;
+    display: none;
+}
+
+/* ── Notes input ── */
+
+#note-input {
+    margin: 0 1;
+}
+
 /* ── Transcript (batch output, main area) ── */
 
 #captions {
@@ -35,17 +51,3 @@ Screen {
     overflow-x: hidden;
 }
 
-/* ── Live pane (real-time captions) ── */
-
-#live-pane {
-    height: 8;
-    margin: 0 1;
-    padding: 0 1;
-    color: $text;
-    border: solid $primary-darken-3;
-    overflow-x: hidden;
-}
-
-#live-content {
-    width: 100%;
-}

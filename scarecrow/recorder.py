@@ -44,6 +44,8 @@ class AudioRecorder:
         # In-memory buffer for batch transcription
         self._audio_chunks: list[np.ndarray] = []
         self._buffer_lock = threading.Lock()
+        self._overlap_tail: np.ndarray | None = None
+        self._overlap_samples = sample_rate // 2  # 500ms overlap
 
         # Peak level for audio meter (updated in callback)
         self._peak_level: float = 0.0
@@ -106,6 +108,7 @@ class AudioRecorder:
 
         with self._buffer_lock:
             self._audio_chunks.clear()
+            self._overlap_tail = None
 
         self._stream.start()
 
@@ -114,6 +117,9 @@ class AudioRecorder:
 
         Audio is returned as float32 normalized to [-1, 1] at 16kHz
         — ready for Whisper with no resampling needed.
+
+        A 500ms overlap from the previous drain is prepended so
+        Whisper has context at chunk boundaries (avoids dropped words).
         """
         with self._buffer_lock:
             if not self._audio_chunks:
@@ -122,8 +128,17 @@ class AudioRecorder:
             self._audio_chunks.clear()
 
         combined = np.concatenate(chunks, axis=0).squeeze()
-        # Convert int16 → float32 normalized for Whisper
-        return combined.astype(np.float32) / 32768.0
+        audio = combined.astype(np.float32) / 32768.0
+
+        if self._overlap_tail is not None:
+            audio = np.concatenate([self._overlap_tail, audio])
+
+        if len(audio) > self._overlap_samples:
+            self._overlap_tail = audio[-self._overlap_samples :]
+        else:
+            self._overlap_tail = audio.copy()
+
+        return audio
 
     def pause(self) -> None:
         with self._lock:

@@ -389,12 +389,12 @@ Scarecrow keeps a running bug ledger in this file. Append to it every time a bug
 - Notes: verified 2026-03-25.
 
 ## [BUG-20260325-live-pane-scroll-resets-at-boundary]
-- Status: open
+- Status: won't fix
 - Found: 2026-03-25
 - Area: app
 - Symptom: live pane scrolls correctly for ~9 stable lines, then on the 10th committed line the pane clears and resets to show only the latest caption — scrolling stops and history is lost from view.
 - Root cause: unknown. Suspected: Textual's `VerticalScroll` + `Static` widget does not correctly recompute virtual height once the `Static` content exceeds the container's visible area (pane is `height: 8` in CSS). At the overflow boundary, `content.update(text)` or `scroll_end` may reset the scroll position and virtual size rather than extending them. The 9-line threshold matches the pane height (8 visible rows + 1 overflow row).
 - Workaround: none.
-- Fix: pending.
-- Regression test: pending.
-- Notes: `_live_stable` is accumulating correctly (confirmed by `LIVE_HISTORY_LIMIT = 50`). The bug is in how Textual renders the growing `Static` widget inside `VerticalScroll`, not in the captioner or stable-list logic. Investigate whether replacing `Static` + `VerticalScroll` with `RichLog` (which has its own scroll management) resolves it, or whether a `height: auto` / layout tweak on `#live-content` is sufficient.
+- Fix: won't fix — live pane removed in UI rehaul (2026-03-27). The live pane and Apple Speech engine were replaced with a notes input pane in Phase 6 of the notes-pane rehaul.
+- Regression test: n/a (component removed)
+- Notes: moot as of 2026-03-27.

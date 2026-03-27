@@ -12,7 +12,6 @@ FINAL_MODEL = "medium.en"  # Accurate model for settled text (runs at sentence b
 LANGUAGE = "en"
 BEAM_SIZE = 5
 CONDITION_ON_PREVIOUS_TEXT = False
-LIVE_HISTORY_LIMIT = 50
 
 # Storage
 DEFAULT_RECORDINGS_DIR = Path("recordings")

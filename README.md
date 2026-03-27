@@ -1,8 +1,8 @@
 # Scarecrow
 
-Always-recording TUI with live captions and transcription.
+Always-recording TUI with transcription and inline notes.
 
-Scarecrow uses Apple's on-device speech recognition for real-time captions and Whisper medium.en for accurate batch transcription every 30 seconds. Audio and transcripts are saved per-session.
+Scarecrow uses Whisper medium.en for accurate batch transcription every 15 seconds. You can attach timestamped notes inline by typing prefix commands (`/action`, `/followup`) or plain text. Audio and transcripts are saved per-session.
 
 ## Bug Tracking
 
@@ -75,32 +75,57 @@ Avoid `uv run` in the alias — it can re-trigger the macOS `UF_HIDDEN` flag on 
 ## Usage
 
 ```bash
-sc          # start recording (auto-starts on launch)
+sc          # launch Scarecrow (starts in IDLE; press Enter to begin recording)
 ```
 
+**Startup flow:**
+
+When Scarecrow launches, the notes input shows a context prompt. Type one or more terms (proper nouns, speaker names, topic keywords) and press Enter to seed Whisper's `initial_prompt` before the first batch. Press Enter with no text to start recording immediately with no context.
+
 **Keybindings** inside the TUI:
-- `p` — pause / resume (releases microphone while paused)
-- `q` — quit
+- `Ctrl+P` — pause / resume (releases microphone while paused)
+- `Ctrl+Q` — quit
+- `Enter` — submit note (or, at startup, start recording)
+
+**Note prefix commands** (type at the start of your note, then press Enter):
+- `/action` or `/a` — submit note tagged `[ACTION]`
+- `/followup` or `/f` — submit note tagged `[FOLLOW-UP]`
+- no prefix — submit note tagged `[NOTE]` (default)
+
+**Context commands** (available after recording starts):
+- `/context <terms>` — append terms to Whisper's `initial_prompt`; written to transcript as `[CONTEXT]`
+- `/clear` — wipe all context entries and the rolling tail; hides the context display
 
 ### TUI layout
 
 The TUI shows:
 - **Info bar** — recording state (`REC` / `PAUSED`), mic indicator, elapsed time, word count, batch countdown
-- **Transcript pane** — batch transcription output with timestamped dividers (upper, scrollable)
-- **Live pane** — real-time captions from Apple Speech (lower, bordered; text promotes to stable scrolling lines at natural pauses, current partial updates in-place at bottom)
+- **Transcript pane** — batch transcription output with timestamped dividers (scrollable); every session starts with a `Session: YYYY-MM-DD HH:MM:SS` header line
+- **Context display** — shown between the transcript pane and notes input when context is active; lists all accumulated context terms
+- **Notes pane** — text input for inline annotations; prefix commands (`/action`, `/followup`, `/a`, `/f`) select the note tag; plain text defaults to `[NOTE]`; notes are written to the transcript pane and transcript file with a wall-clock timestamp
 - **Footer** — keybindings
+
+### Context injection
+
+Scarecrow feeds a rolling context string into every Whisper batch call as `initial_prompt`. This improves accuracy for domain-specific vocabulary (proper nouns, product names, technical terms).
+
+The prompt is built from two parts:
+1. **Context entries** — accumulated from the startup prompt and any `/context` commands during the session, joined by `, `
+2. **Previous-batch tail** — the last 35 words of the most recent batch output, appended after the context entries, so Whisper has word-continuity across chunk boundaries
+
+Use `/clear` to wipe both the context entries and the tail if transcription quality degrades (e.g., after a topic change).
 
 ### Pause behavior
 
 - Microphone is released (system mic indicator turns off)
 - Buffered audio is transcribed immediately before pausing
-- "Recording paused" markers are written to the transcript pane and file every 30s
+- "Recording paused" markers are written to the transcript pane and file every 15s
 - Elapsed timer continues running (tracks total session time)
 - On resume, batch countdown resets for clean intervals
 
 ### Shutdown output
 
-On quit (`q`), Scarecrow prints session metrics to the terminal:
+On quit (`Ctrl+Q`), Scarecrow prints session metrics to the terminal:
 - Recording duration
 - Word count
 - Session directory path
@@ -112,7 +137,7 @@ On a clean quit, Scarecrow routes shutdown through `app.cleanup_after_exit()` to
 - wait for any in-flight batch transcription to finish and capture its text directly from the future
 - drain and transcribe the final buffered audio window
 - abandon the batch executor if a worker times out, ignore late batch callbacks, and continue shutdown
-- shut down the live captioner and batch executor (5-second timeout)
+- shut down the batch executor (5-second timeout)
 - flush and close the session transcript file
 
 Ctrl+C uses the same cleanup path, so the final buffered batch is flushed before the session closes.
@@ -126,14 +151,13 @@ On launch, Scarecrow prints:
 
 Models load in offline mode (`HF_HUB_OFFLINE=1`) to avoid network stalls. Debug logs are written to `~/.cache/scarecrow/debug.log`.
 
-### Two-engine architecture
+### Architecture
 
-| Role | Engine | Behaviour |
-|------|--------|-----------|
-| **Live** (lower pane) | Apple Speech (on-device, streaming) | Word-by-word captions as you speak, session rotation every 55s |
-| **Batch** (upper pane) | Whisper `medium.en` | Runs every 30s on buffered audio, produces accurate transcript |
+Scarecrow uses a single-engine transcription model. A 16kHz audio stream is buffered and fed to Whisper `medium.en` every 15 seconds. No subprocesses — everything runs in a single process.
 
-A single 16kHz audio stream feeds both engines. Apple's `SFSpeechRecognizer` provides on-device streaming captions in the live pane with no network access required. Batch transcription with `medium.en` runs independently every 30 seconds. No subprocesses — everything runs in a single process.
+Inline notes are typed in the notes pane and submitted with Enter. The tag is determined by an optional prefix at the start of the text: `/action` or `/a` for `[ACTION]`, `/followup` or `/f` for `[FOLLOW-UP]`, or no prefix for `[NOTE]`. Each note is written to the transcript pane and the transcript file with a wall-clock timestamp and tag prefix. Notes work in any app state (recording, paused, or idle).
+
+Transcript dividers show the start time of each audio batch window (not the time Whisper finishes processing). A 500ms audio overlap is kept between consecutive batch windows to reduce word drops at chunk boundaries.
 
 The batch model is configured in `scarecrow/config.py` or via `scripts/setup.py`.
 
@@ -184,10 +208,9 @@ The hooks enforce these repo rules:
 ```
 scarecrow/
   __main__.py        # entry point, model loading, startup output
-  app.py             # Textual TUI, batch transcription scheduling
+  app.py             # Textual TUI, batch transcription scheduling, notes pane
   config.py          # model names, audio settings, defaults
   env_health.py      # editable-install .pth repair (macOS UF_HIDDEN)
-  live_captioner.py  # Apple SFSpeechRecognizer streaming live captions
   recorder.py        # sounddevice audio capture + WAV writing
   runtime.py         # HF offline bootstrap, tqdm lock, Whisper model manager
   session.py         # timestamped session dirs + transcript files
@@ -206,7 +229,6 @@ tests/
   test_behavioral.py     # behavioral contract tests
   test_env_health.py     # editable-install repair tests
   test_integration.py    # real-model pipeline tests
-  test_live_captioner.py # LiveCaptioner lifecycle and error tests
   test_recorder.py       # audio recorder unit tests
   test_session.py        # session/file management tests
   test_regressions.py    # regression tests for fixed bugs

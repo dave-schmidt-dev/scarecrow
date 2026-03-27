@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 from concurrent.futures import (
@@ -11,19 +12,18 @@ from concurrent.futures import (
 from concurrent.futures import (
     TimeoutError as FuturesTimeoutError,
 )
+from datetime import datetime
 from enum import Enum, auto
 from typing import TYPE_CHECKING, ClassVar
 
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import VerticalScroll
 from textual.css.query import NoMatches
 from textual.reactive import reactive
-from textual.widgets import Footer, RichLog, Static
+from textual.widgets import Footer, Input, RichLog, Static
 
 from scarecrow import config
-from scarecrow.live_captioner import CaptionerBindings, LiveCaptioner
 from scarecrow.recorder import AudioRecorder
 from scarecrow.session import Session
 from scarecrow.transcriber import TranscriberBindings
@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-BATCH_INTERVAL_SECONDS = 30
+BATCH_INTERVAL_SECONDS = 15
 
 
 class AppState(Enum):
@@ -99,8 +99,8 @@ class ScarecrowApp(App[None]):
     ENABLE_COMMAND_PALETTE = False
 
     BINDINGS: ClassVar[list[Binding]] = [
-        Binding("p", "pause", "Pause/Resume", show=True),
-        Binding("q", "quit", "Quit", show=True),
+        Binding("ctrl+p", "pause", "Pause/Resume", show=True),
+        Binding("ctrl+q", "quit", "Quit", show=True),
     ]
 
     state: reactive[AppState] = reactive(AppState.IDLE)
@@ -111,22 +111,22 @@ class ScarecrowApp(App[None]):
     def __init__(
         self,
         transcriber: Transcriber | None = None,
-        live_captioner: LiveCaptioner | None = None,
     ) -> None:
         super().__init__()
         self._session: Session | None = None
         self._audio_recorder: AudioRecorder | None = None
         self._transcriber: Transcriber | None = transcriber
-        self._live_captioner: LiveCaptioner | None = live_captioner
-        self._live_stable: list[str] = []
-        self._live_partial: str = ""
         self._status_message: str = ""
         self._status_is_error = False
         self._shutdown_summary = ""
         self._batch_executor: ThreadPoolExecutor | None = None
         self._batch_futures: set[Future[str | None]] = set()
+        self._batch_window_start: int = 0
         self._shutdown_lock = threading.RLock()
         self._ignore_batch_results = False
+        self._context_entries: list[str] = []
+        self._awaiting_context: bool = True
+        self._previous_batch_tail: str = ""
 
     def compose(self) -> ComposeResult:
         yield InfoBar(id="info-bar")
@@ -144,22 +144,19 @@ class ScarecrowApp(App[None]):
             wrap=True,
             min_width=0,
         )
+        yield Static("", id="context-display")
         yield Static(
-            "Live  [dim](Apple Speech)[/dim]",
+            "Enter context (proper nouns, topics) or press Enter to start recording",
+            id="notes-label",
             classes="pane-label",
         )
-        with VerticalScroll(id="live-pane"):
-            yield Static(id="live-content")
+        yield Input(placeholder="Type a note...", id="note-input")
         yield Footer()
 
     def on_mount(self) -> None:
         self._tick_timer = self.set_interval(1, self._tick, pause=True)
         self._sync_info_bar()
-        self.set_timer(0.1, self._auto_start)
-
-    def _auto_start(self) -> None:
-        if self._preflight_check():
-            self._start_recording()
+        self.query_one("#note-input", Input).focus()
 
     def _preflight_check(self) -> bool:
         import sounddevice as sd
@@ -245,22 +242,6 @@ class ScarecrowApp(App[None]):
                     on_error=self._on_transcriber_error,
                 )
             )
-        if self._live_captioner is not None:
-            self._live_captioner.bind(
-                CaptionerBindings(
-                    on_realtime_update=self._on_realtime_update,
-                    on_realtime_stabilized=self._on_realtime_stabilized,
-                    on_error=self._on_transcriber_error,
-                )
-            )
-
-    def _on_realtime_update(self, text: str) -> None:
-        if text:
-            self._set_live_partial(text)
-
-    def _on_realtime_stabilized(self, text: str) -> None:
-        if text:
-            self._append_live(text)
 
     def _on_batch_result(self, text: str, batch_elapsed: int) -> None:
         if self._ignore_batch_results:
@@ -273,56 +254,6 @@ class ScarecrowApp(App[None]):
             self._post_to_ui(lambda: self._set_status(message, error=True))
         else:
             self._post_to_ui(self._show_error, f"{source}: {message}")
-
-    def _render_live(self) -> None:
-        if not self.is_mounted:
-            return
-        try:
-            content = self.query_one("#live-content", Static)
-            pane = self.query_one("#live-pane", VerticalScroll)
-        except NoMatches:
-            return
-
-        text = Text()
-        visible_lines = self._live_stable[-config.LIVE_HISTORY_LIMIT :]
-        for index, line in enumerate(visible_lines):
-            if index:
-                text.append("\n")
-            text.append(line)
-        if self._live_partial:
-            if visible_lines:
-                text.append("\n")
-            text.append(self._live_partial, style="dim")
-        content.update(text if text.plain else "Listening…")
-        self.call_after_refresh(pane.scroll_end, animate=False)
-
-    def _set_live_partial(self, text: str) -> None:
-        self._live_partial = text
-        if self.state is AppState.RECORDING:
-            self._set_status("Listening…")
-        self._render_live()
-
-    def _append_live(self, text: str) -> None:
-        self._live_stable.append(text)
-        if len(self._live_stable) > config.LIVE_HISTORY_LIMIT:
-            self._live_stable = self._live_stable[-config.LIVE_HISTORY_LIMIT :]
-        self._live_partial = ""
-        if self.state is AppState.RECORDING:
-            self._set_status("Listening…")
-        self._render_live()
-
-    def _update_live_message(self, text: str) -> None:
-        self._live_stable = [text]
-        self._live_partial = ""
-        self._render_live()
-
-    def _update_live(self, text: str) -> None:
-        """Backward-compatible full live pane update helper."""
-        self._update_live_message(text)
-
-    def _update_live_partial(self, text: str) -> None:
-        """Backward-compatible partial update helper."""
-        self._set_live_partial(text)
 
     def _reap_batch_futures(self) -> None:
         self._batch_futures = {
@@ -350,10 +281,12 @@ class ScarecrowApp(App[None]):
             self._set_status("Batch busy; carrying audio into the next window.")
             return False
 
+        prompt = self._build_initial_prompt()
         future = self._ensure_batch_executor().submit(
             self._transcriber.transcribe_batch,
             audio,
             batch_elapsed,
+            initial_prompt=prompt,
         )
         self._batch_futures.add(future)
         return True
@@ -407,10 +340,11 @@ class ScarecrowApp(App[None]):
         if audio is None or len(audio) == 0:
             return
 
-        batch_elapsed = self._elapsed
+        batch_elapsed = self._batch_window_start
         text = self._transcriber.transcribe_batch(
             audio,
             batch_elapsed,
+            initial_prompt=self._build_initial_prompt(),
             emit_callback=False,
         )
         if text:
@@ -460,11 +394,25 @@ class ScarecrowApp(App[None]):
         if audio is None or len(audio) == 0:
             return
 
-        batch_elapsed = self._elapsed
+        batch_elapsed = self._batch_window_start
+        self._batch_window_start = self._elapsed
         self._submit_batch_transcription(audio, batch_elapsed)
+
+    def _build_initial_prompt(self) -> str | None:
+        parts = []
+        if self._context_entries:
+            parts.append(", ".join(self._context_entries))
+        if self._previous_batch_tail:
+            parts.append(self._previous_batch_tail)
+        return ". ".join(parts) if parts else None
+
+    def _update_tail(self, text: str) -> None:
+        words = text.split()
+        self._previous_batch_tail = " ".join(words[-35:])
 
     def _append_transcript(self, text: str, batch_elapsed: int | None = None) -> None:
         self._record_transcript(text, batch_elapsed)
+        self._update_tail(text)
 
     def _write_pause_marker(self) -> None:
         h = self._elapsed // 3600
@@ -493,8 +441,6 @@ class ScarecrowApp(App[None]):
 
         try:
             self._audio_recorder.start()
-            if self._live_captioner is not None:
-                self._live_captioner.begin_session()
         except Exception as exc:
             log.exception("Failed to start recording session")
             try:
@@ -514,20 +460,13 @@ class ScarecrowApp(App[None]):
             BATCH_INTERVAL_SECONDS,
             self._on_batch_tick,
         )
-        self._captioner_timer = self.set_interval(0.05, self._tick_captioner)
         self._elapsed = 0
+        self._batch_window_start = 0
         self._batch_countdown = BATCH_INTERVAL_SECONDS
         self._word_count = 0
-        self._live_stable = []
-        self._live_partial = ""
         self.state = AppState.RECORDING
         self._tick_timer.resume()
         self._set_status("Listening…")
-        self._update_live("Listening…")
-
-    def _tick_captioner(self) -> None:
-        if self._live_captioner is not None:
-            self._live_captioner.tick()
 
     def _on_batch_tick(self) -> None:
         self._batch_countdown = BATCH_INTERVAL_SECONDS
@@ -544,7 +483,6 @@ class ScarecrowApp(App[None]):
             if self._audio_recorder is not None:
                 self._audio_recorder.pause()
             self._set_status("Paused")
-            self._set_live_partial("Paused")
             self._write_pause_marker()
             return
 
@@ -554,14 +492,11 @@ class ScarecrowApp(App[None]):
                 self._audio_recorder.resume()
             self._batch_countdown = BATCH_INTERVAL_SECONDS
             self._set_status("Listening…")
-            self._live_partial = ""
-            self._render_live()
             self._sync_info_bar()
 
     def action_quit(self) -> None:
         self._shutdown_summary = self._collect_shutdown_metrics()
         self._set_status("Shutting down…")
-        self._update_live("Shutting down…")
         self.set_timer(0.3, self._deferred_quit)
 
     def _collect_shutdown_metrics(self) -> str:
@@ -613,12 +548,7 @@ class ScarecrowApp(App[None]):
             has_active_transcriber = self._transcriber is not None and (
                 self._transcriber.is_ready or self._transcriber.has_active_worker
             )
-            has_active_captioner = (
-                self._live_captioner is not None and self._live_captioner.is_ready
-            )
-            needs_cleanup = (
-                has_open_resources or has_active_transcriber or has_active_captioner
-            )
+            needs_cleanup = has_open_resources or has_active_transcriber
             if not needs_cleanup:
                 return
 
@@ -626,14 +556,6 @@ class ScarecrowApp(App[None]):
                 self._tick_timer.pause()
             if hasattr(self, "_batch_timer"):
                 self._batch_timer.pause()
-            if hasattr(self, "_captioner_timer"):
-                self._captioner_timer.pause()
-
-            if self._live_captioner is not None:
-                try:
-                    self._live_captioner.end_session()
-                except Exception:
-                    log.exception("Failed to end live captioner session")
 
             if self._audio_recorder is not None:
                 try:
@@ -683,14 +605,6 @@ class ScarecrowApp(App[None]):
                     if include_ui:
                         self._show_error(f"Could not shut down transcriber: {exc}")
 
-            if self._live_captioner is not None and self._live_captioner.is_ready:
-                try:
-                    self._live_captioner.shutdown(timeout=5)
-                except Exception as exc:
-                    log.exception("Failed to shut down live captioner")
-                    if include_ui:
-                        self._show_error(f"Could not shut down live captioner: {exc}")
-
             if self._session is not None:
                 try:
                     self._session.finalize()
@@ -706,13 +620,160 @@ class ScarecrowApp(App[None]):
             except Exception:
                 self._reactive_state = AppState.IDLE
 
+    _NOTE_PREFIXES: ClassVar[dict[str, str]] = {
+        "/action": "ACTION",
+        "/followup": "FOLLOW-UP",
+        "/a": "ACTION",
+        "/f": "FOLLOW-UP",
+    }
+
+    def _submit_note(self) -> None:
+        """Read the note input, write to RichLog and transcript, then clear input."""
+        try:
+            input_widget = self.query_one("#note-input", Input)
+        except NoMatches:
+            return
+        raw = input_widget.value.strip()
+        if not raw:
+            return
+
+        # Parse optional prefix: /action, /followup, /a, /f
+        tag = "NOTE"
+        for prefix, prefix_tag in self._NOTE_PREFIXES.items():
+            if raw.lower().startswith(prefix + " "):
+                tag = prefix_tag
+                raw = raw[len(prefix) + 1 :].strip()
+                break
+            if raw.lower() == prefix:
+                tag = prefix_tag
+                raw = ""
+                break
+
+        if not raw:
+            input_widget.value = ""
+            return
+
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        file_line = f"[{tag}] {timestamp} -- {raw}"
+        styled_line = (
+            f"[bold cyan][{tag}][/bold cyan] [dim]{timestamp}[/dim] \u2014 {raw}"
+        )
+
+        try:
+            self.query_one("#captions", RichLog).write(styled_line)
+        except NoMatches:
+            log.error("Note pane unavailable: %s", file_line)
+
+        if self._session is not None:
+            self._session.append_sentence(file_line)
+
+        self._word_count += len(raw.split())
+        self._sync_info_bar()
+        input_widget.value = ""
+
+    def _handle_context_start(self, raw: str) -> None:
+        text = raw.strip()
+        self._awaiting_context = False
+
+        # Restore notes label
+        with contextlib.suppress(NoMatches):
+            label = self.query_one("#notes-label", Static)
+            label.update(
+                "Notes  [dim]"
+                "(/action  /followup  /context  /clear · Enter to submit)"
+                "[/dim]"
+            )
+
+        # Clear the input
+        with contextlib.suppress(NoMatches):
+            self.query_one("#note-input", Input).value = ""
+
+        # Start recording
+        if not self._preflight_check():
+            return
+        self._start_recording()
+
+        # Write context if provided
+        if text:
+            self._context_entries.append(text)
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            file_line = f"[CONTEXT] {timestamp} -- {text}"
+            styled_line = (
+                f"[bold magenta][CONTEXT][/bold magenta]"
+                f" [dim]{timestamp}[/dim] \u2014 {text}"
+            )
+            with contextlib.suppress(NoMatches):
+                self.query_one("#captions", RichLog).write(styled_line)
+            if self._session is not None:
+                self._session.append_sentence(file_line)
+            self._update_context_display()
+
+    def _handle_add_context(self, raw: str) -> None:
+        # Strip the /context prefix
+        for prefix in ("/context ", "/context"):
+            if raw.lower().startswith(prefix):
+                text = raw[len(prefix) :].strip()
+                break
+        else:
+            text = ""
+
+        if not text:
+            with contextlib.suppress(NoMatches):
+                self.query_one("#note-input", Input).value = ""
+            return
+
+        self._context_entries.append(text)
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        file_line = f"[CONTEXT] {timestamp} -- {text}"
+        styled_line = (
+            f"[bold magenta][CONTEXT][/bold magenta]"
+            f" [dim]{timestamp}[/dim] \u2014 {text}"
+        )
+        with contextlib.suppress(NoMatches):
+            self.query_one("#captions", RichLog).write(styled_line)
+        if self._session is not None:
+            self._session.append_sentence(file_line)
+        self._update_context_display()
+        with contextlib.suppress(NoMatches):
+            self.query_one("#note-input", Input).value = ""
+
+    def _handle_clear_context(self) -> None:
+        self._context_entries.clear()
+        self._previous_batch_tail = ""
+        self._update_context_display()
+        self._set_status("Context cleared")
+        with contextlib.suppress(NoMatches):
+            self.query_one("#note-input", Input).value = ""
+
+    def _update_context_display(self) -> None:
+        try:
+            display = self.query_one("#context-display", Static)
+        except NoMatches:
+            return
+        if self._context_entries:
+            display.update(f"Context: {', '.join(self._context_entries)}")
+            display.display = True
+        else:
+            display.update("")
+            display.display = False
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id != "note-input":
+            return
+        if self._awaiting_context:
+            self._handle_context_start(event.input.value)
+            return
+        raw = event.input.value.strip()
+        lower = raw.lower()
+        if lower == "/clear":
+            self._handle_clear_context()
+            return
+        if lower.startswith("/context ") or lower == "/context":
+            self._handle_add_context(raw)
+            return
+        self._submit_note()
+
     def on_unmount(self) -> None:
         if self._batch_executor is not None:
             self._batch_executor.shutdown(wait=True, cancel_futures=False)
             self._batch_executor = None
-
-    def update_live_preview(self, text: str) -> None:
-        self._set_live_partial(text)
-
-    def append_caption(self, text: str) -> None:
-        self.query_one("#captions", RichLog).write(text)

@@ -11,12 +11,15 @@ class Session:
         if base_dir is None:
             base_dir = Path("recordings")
 
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        now = datetime.now()
+        timestamp = now.strftime("%Y-%m-%d_%H-%M-%S")
         self._session_dir = base_dir / timestamp
         self._session_dir.mkdir(parents=True, exist_ok=True)
 
         self._transcript_file = None
         self._finalized = False
+        header_timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
+        self.append_sentence(f"Session: {header_timestamp}")
 
     @property
     def session_dir(self) -> Path:

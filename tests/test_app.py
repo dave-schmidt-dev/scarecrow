@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 from unittest.mock import MagicMock, patch
 
-from textual.widgets import RichLog, Static
+from textual.widgets import RichLog
 
 from scarecrow.app import AppState, InfoBar, ScarecrowApp
 
@@ -22,21 +22,10 @@ def _mock_transcriber():
     return mock
 
 
-def _mock_captioner():
-    """Return a mock LiveCaptioner that doesn't load models."""
-    mock = MagicMock()
-    mock.is_ready = True
-    mock.begin_session.return_value = None
-    mock.end_session.return_value = None
-    mock.shutdown.return_value = None
-    return mock
-
-
 def _app(with_transcriber: bool = False) -> ScarecrowApp:
     if with_transcriber:
         app = ScarecrowApp(
             transcriber=_mock_transcriber(),
-            live_captioner=_mock_captioner(),
         )
         app._preflight_check = lambda: True  # type: ignore[method-assign]
         return app
@@ -52,11 +41,6 @@ def _mock_recorder():
     mock.start.return_value = None
     mock.stop.return_value = MagicMock()
     return mock
-
-
-def _live_text(app: ScarecrowApp) -> str:
-    widget = app.query_one("#live-content", Static)
-    return widget.render().plain
 
 
 # ---------------------------------------------------------------------------
@@ -101,7 +85,8 @@ async def test_info_bar_shows_recording(mock_session_cls, mock_recorder_cls) -> 
     mock_session_cls.return_value = MagicMock()
 
     async with _app(with_transcriber=True).run_test() as pilot:
-        await pilot.pause(delay=0.5)
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
         bar = app.query_one(InfoBar)
         assert bar.state is AppState.RECORDING
@@ -115,8 +100,9 @@ async def test_word_count_increments(mock_session_cls, mock_recorder_cls) -> Non
     mock_session_cls.return_value = MagicMock()
 
     async with _app(with_transcriber=True).run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.pause(delay=0.5)
         app._append_transcript("hello world test")
         await pilot.pause()
         assert app._word_count == 3
@@ -129,12 +115,13 @@ async def test_word_count_increments(mock_session_cls, mock_recorder_cls) -> Non
 
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
-async def test_auto_starts_recording(mock_session_cls, mock_recorder_cls) -> None:
+async def test_enter_starts_recording(mock_session_cls, mock_recorder_cls) -> None:
     mock_recorder_cls.return_value = _mock_recorder()
     mock_session_cls.return_value = MagicMock()
 
     async with _app(with_transcriber=True).run_test() as pilot:
-        await pilot.pause(delay=0.5)
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
         assert pilot.app.state is AppState.RECORDING  # type: ignore[attr-defined]
 
 
@@ -147,8 +134,9 @@ async def test_press_p_during_recording_pauses(
     mock_session_cls.return_value = MagicMock()
 
     async with _app(with_transcriber=True).run_test() as pilot:
-        await pilot.pause(delay=0.5)
-        await pilot.press("p")
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        await pilot.press("ctrl+p")
         await pilot.pause()
         assert pilot.app.state is AppState.PAUSED  # type: ignore[attr-defined]
 
@@ -162,9 +150,10 @@ async def test_press_p_during_paused_resumes(
     mock_session_cls.return_value = MagicMock()
 
     async with _app(with_transcriber=True).run_test() as pilot:
-        await pilot.pause(delay=0.5)
-        await pilot.press("p")
-        await pilot.press("p")
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        await pilot.press("ctrl+p")
+        await pilot.press("ctrl+p")
         await pilot.pause()
         assert pilot.app.state is AppState.RECORDING  # type: ignore[attr-defined]
 
@@ -182,6 +171,7 @@ async def test_timer_starts_on_auto_record(mock_session_cls, mock_recorder_cls) 
 
     async with _app(with_transcriber=True).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.press("enter")
         await pilot.pause(delay=2)
         assert app._elapsed >= 1
 
@@ -197,8 +187,9 @@ async def test_timer_keeps_running_when_paused(
 
     async with _app(with_transcriber=True).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.press("enter")
         await pilot.pause(delay=1)
-        await pilot.press("p")
+        await pilot.press("ctrl+p")
         elapsed_at_pause = app._elapsed
         await pilot.pause(delay=2)
         assert app._elapsed > elapsed_at_pause
@@ -212,41 +203,8 @@ async def test_timer_keeps_running_when_paused(
 async def test_press_q_exits() -> None:
     app = _app()
     async with app.run_test() as pilot:
-        await pilot.press("q")
+        await pilot.press("ctrl+q")
     assert app.return_value is None
-
-
-# ---------------------------------------------------------------------------
-# Public API — update_live_preview / append_caption
-# ---------------------------------------------------------------------------
-
-
-async def test_update_live_preview() -> None:
-    async with _app().run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        app.update_live_preview("partial text...")
-        await pilot.pause()
-        assert "partial text..." in _live_text(app)
-
-
-async def test_append_caption_adds_to_transcript() -> None:
-    async with _app().run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        app.append_caption("Settled sentence.")
-        await pilot.pause()
-        captions = app.query_one("#captions", RichLog)
-        assert len(captions.lines) >= 1
-
-
-async def test_live_not_cleared_on_caption() -> None:
-    """Regression: live pane must NOT clear when transcript updates."""
-    async with _app().run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        app.update_live_preview("still streaming...")
-        await pilot.pause()
-        app.append_caption("Finalized sentence.")
-        await pilot.pause()
-        assert "still streaming..." in _live_text(app)
 
 
 @patch("scarecrow.app.AudioRecorder")
@@ -280,11 +238,23 @@ async def test_transcriber_error_surfaces_in_ui(
 
 
 async def test_pane_labels_show_model_names() -> None:
-    """Regression: pane labels must include model names."""
+    """Regression: transcript pane label must include model name."""
     async with _app().run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
         labels = [w.render() for w in app.query(".pane-label")]
         label_text = " ".join(str(lbl) for lbl in labels)
-        assert "Apple Speech" in label_text
         assert "Transcript" in label_text
-        assert "Live" in label_text
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_app_launches_in_idle_no_autostart(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """App must remain in IDLE after mount even when a transcriber is ready."""
+    mock_recorder_cls.return_value = _mock_recorder()
+    mock_session_cls.return_value = MagicMock()
+
+    async with _app(with_transcriber=True).run_test() as pilot:
+        await pilot.pause(delay=0.3)
+        assert pilot.app.state is AppState.IDLE  # type: ignore[attr-defined]

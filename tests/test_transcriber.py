@@ -145,6 +145,48 @@ def test_get_batch_model_thread_safety() -> None:
     assert results[0] is results[1], "Both threads must get the same model instance"
 
 
+def test_transcribe_batch_passes_initial_prompt_to_model() -> None:
+    """initial_prompt must be forwarded to model.transcribe when provided."""
+    segment = MagicMock()
+    segment.text = "Malcolm X was a civil rights leader"
+
+    model = MagicMock()
+    model.transcribe.return_value = ([segment], None)
+
+    t = Transcriber()
+    t._ready = True
+    t._model_manager = MagicMock()
+    t._model_manager.get_batch_model.return_value = model
+
+    t.transcribe_batch(
+        np.zeros(16000, dtype=np.float32),
+        batch_elapsed=30,
+        initial_prompt="Malcolm X",
+    )
+
+    _, call_kwargs = model.transcribe.call_args
+    assert call_kwargs.get("initial_prompt") == "Malcolm X"
+
+
+def test_transcribe_batch_omits_initial_prompt_when_none() -> None:
+    """initial_prompt must not be passed to model.transcribe when None."""
+    segment = MagicMock()
+    segment.text = "hello"
+
+    model = MagicMock()
+    model.transcribe.return_value = ([segment], None)
+
+    t = Transcriber()
+    t._ready = True
+    t._model_manager = MagicMock()
+    t._model_manager.get_batch_model.return_value = model
+
+    t.transcribe_batch(np.zeros(16000, dtype=np.float32), batch_elapsed=30)
+
+    _, call_kwargs = model.transcribe.call_args
+    assert "initial_prompt" not in call_kwargs
+
+
 def test_transcribe_batch_serializes_overlapping_calls() -> None:
     """Concurrent batch requests must not run the shared batch model in parallel."""
     active = 0

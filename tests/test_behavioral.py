@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
-from textual.widgets import RichLog, Static
+from textual.widgets import Input, RichLog
 
 from scarecrow.app import (
     BATCH_INTERVAL_SECONDS,
@@ -38,22 +38,6 @@ def _mock_transcriber():
     return mock
 
 
-def _mock_captioner():
-    """Return a mock LiveCaptioner."""
-    mock = MagicMock()
-    mock.is_ready = True
-    mock.has_active_worker = False
-    mock.begin_session.return_value = None
-    mock.end_session.return_value = None
-
-    def _shutdown(timeout=5):
-        mock.is_ready = False
-        return None
-
-    mock.shutdown.side_effect = _shutdown
-    return mock
-
-
 def _mock_recorder():
     """Return a mock AudioRecorder that doesn't touch hardware."""
     mock = MagicMock()
@@ -69,16 +53,10 @@ def _app(with_transcriber: bool = False) -> ScarecrowApp:
     if with_transcriber:
         app = ScarecrowApp(
             transcriber=_mock_transcriber(),
-            live_captioner=_mock_captioner(),
         )
         app._preflight_check = lambda: True  # type: ignore[method-assign]
         return app
     return ScarecrowApp()
-
-
-def _live_text(app: ScarecrowApp) -> str:
-    widget = app.query_one("#live-content", Static)
-    return widget.render().plain
 
 
 # ---------------------------------------------------------------------------
@@ -93,16 +71,6 @@ async def test_captions_richlog_has_wrap_and_min_width() -> None:
         captions = app.query_one("#captions", RichLog)
         assert captions.wrap is True
         assert captions.min_width == 0
-
-
-async def test_live_pane_present() -> None:
-    """Live pane should render as a single scrollable widget with content."""
-    async with _app().run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        live_pane = app.query_one("#live-pane")
-        live_content = app.query_one("#live-content", Static)
-        assert live_pane is not None
-        assert live_content is not None
 
 
 # ---------------------------------------------------------------------------
@@ -273,12 +241,7 @@ def test_info_bar_renders_paused_state_label() -> None:
 async def test_shutdown_writes_shutting_down_message(
     mock_session_cls, mock_recorder_cls
 ) -> None:
-    """action_quit must pass 'Shutting down' to _update_live.
-
-    _update_live clears and rewrites the live pane each call, so the final
-    state only shows the last message. We verify the sequence by tracking
-    all calls to _update_live instead of reading the widget after-the-fact.
-    """
+    """action_quit must set status to 'Shutting down' before the deferred exit fires."""
     mock_recorder_cls.return_value = _mock_recorder()
     mock_session = MagicMock()
     mock_session.session_dir = Path("/tmp/test-session")
@@ -291,13 +254,13 @@ async def test_shutdown_writes_shutting_down_message(
         await pilot.pause(delay=0.5)
 
         messages: list[str] = []
-        original_update_live = app._update_live
+        original_set_status = app._set_status
 
-        def track_live(text: str) -> None:
+        def track_status(text: str, **kwargs) -> None:
             messages.append(text)
-            original_update_live(text)
+            original_set_status(text, **kwargs)
 
-        app._update_live = track_live  # type: ignore[method-assign]
+        app._set_status = track_status  # type: ignore[method-assign]
 
         # Suppress the deferred quit so the app doesn't close under us
         with patch.object(app, "_deferred_quit"):
@@ -305,7 +268,7 @@ async def test_shutdown_writes_shutting_down_message(
             await pilot.pause(delay=0.1)
 
         assert any("Shutting down" in m for m in messages), (
-            f"Expected 'Shutting down' in live pane messages; got: {messages}"
+            f"Expected 'Shutting down' in status messages; got: {messages}"
         )
 
 
@@ -321,7 +284,8 @@ async def test_stop_recording_transitions_to_idle(
 
     async with _app(with_transcriber=True).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.pause(delay=0.5)
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
         assert app.state is AppState.RECORDING
 
         app._stop_recording()
@@ -343,7 +307,8 @@ async def test_stop_recording_finalizes_session(
 
     async with _app(with_transcriber=True).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.pause(delay=0.5)
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
 
         app._stop_recording()
         await pilot.pause()
@@ -491,21 +456,6 @@ async def test_action_quit_does_not_call_exit_immediately() -> None:
         )
 
 
-async def test_action_quit_writes_shutting_down_to_live_pane() -> None:
-    """action_quit must immediately write 'Shutting down' to live pane
-    (before the deferred exit fires), confirming the deferred pattern."""
-    async with _app().run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.pause()
-
-        # Suppress the deferred exit so we can inspect state
-        with patch.object(app, "_deferred_quit"):
-            app.action_quit()
-            await pilot.pause()
-
-        assert "Shutting down" in _live_text(app)
-
-
 async def test_deferred_quit_calls_stop_recording_then_exit() -> None:
     """_deferred_quit must call _stop_recording and then exit()."""
     async with _app().run_test() as pilot:
@@ -536,100 +486,6 @@ async def test_deferred_quit_calls_stop_recording_then_exit() -> None:
         assert len(exit_called) == 1, "_deferred_quit must call exit"
 
 
-# ---------------------------------------------------------------------------
-# Live pane: behavioral contracts
-# ---------------------------------------------------------------------------
-
-
-async def test_live_partial_shows_in_richlog() -> None:
-    """Partial (in-progress) transcription must appear in the live pane."""
-    async with _app().run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.pause()
-
-        app._update_live_partial("streaming words...")
-        await pilot.pause()
-
-        assert "streaming words..." in _live_text(app)
-
-
-async def test_stabilized_text_goes_to_richlog() -> None:
-    """Stabilized (final) text must be written to the live pane."""
-    async with _app().run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.pause()
-
-        app._append_live("final sentence one")
-        app._append_live("final sentence two")
-        await pilot.pause()
-
-        lines_text = _live_text(app)
-        assert "final sentence one" in lines_text
-        assert "final sentence two" in lines_text
-
-
-async def test_history_preserved_across_partial_updates() -> None:
-    """Stabilized history must survive partial update clear+replay cycles."""
-    async with _app().run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.pause()
-
-        # Add stabilized history
-        app._append_live("history line one")
-        app._append_live("history line two")
-        await pilot.pause()
-
-        # Partial update clears+replays but history should still be present
-        app._update_live_partial("in progress...")
-        await pilot.pause()
-
-        lines_text = _live_text(app)
-        assert "history line one" in lines_text
-        assert "history line two" in lines_text
-        assert "in progress..." in lines_text
-
-
-async def test_stabilized_replaces_partial() -> None:
-    """When stabilized text arrives, it replaces the partial (not appended after)."""
-    async with _app().run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.pause()
-
-        app._update_live_partial("in progress...")
-        await pilot.pause()
-
-        app._append_live("finalized text")
-        await pilot.pause()
-
-        lines_text = _live_text(app)
-        assert "finalized text" in lines_text
-        # Partial should be gone — replaced by stabilized
-        assert "in progress..." not in lines_text
-
-
-async def test_realtime_callbacks_update_live_pane_directly() -> None:
-    """Regression: captioner callbacks must update the UI without call_from_thread.
-
-    These callbacks fire on the app's main thread (via tick() → NSRunLoop),
-    so Textual raises RuntimeError if call_from_thread is used. The fix calls
-    _set_live_partial / _append_live directly.
-    """
-    async with _app().run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.pause()
-
-        app._on_realtime_update("hello world")
-        await pilot.pause()
-
-        assert "hello world" in _live_text(app)
-
-        app._on_realtime_stabilized("final sentence")
-        await pilot.pause()
-
-        assert "final sentence" in _live_text(app)
-        assert "hello world" not in _live_text(app)  # partial cleared by stabilized
-
-
 async def test_shutdown_summary_contains_metrics() -> None:
     """_shutdown_summary must contain duration and word count for terminal output."""
     async with _app().run_test() as pilot:
@@ -648,58 +504,27 @@ async def test_shutdown_summary_contains_metrics() -> None:
 
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
-async def test_pause_preserves_live_history(
+async def test_start_recording_unwinds_recorder_when_recorder_start_fails(
     mock_session_cls, mock_recorder_cls
 ) -> None:
-    """Pausing must not wipe accumulated live transcription lines."""
-    mock_recorder_cls.return_value = _mock_recorder()
-    mock_session_cls.return_value = MagicMock()
-
-    async with _app(with_transcriber=True).run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.pause(delay=0.5)
-
-        app._append_live("first utterance")
-        app._append_live("second utterance")
-        await pilot.pause()
-
-        await pilot.press("p")
-        await pilot.pause()
-
-        text = _live_text(app)
-        assert "first utterance" in text
-        assert "second utterance" in text
-
-
-@patch("scarecrow.app.AudioRecorder")
-@patch("scarecrow.app.Session")
-async def test_start_recording_unwinds_recorder_when_transcriber_begin_fails(
-    mock_session_cls, mock_recorder_cls
-) -> None:
-    """Startup failure after mic acquisition must unwind recorder and session."""
+    """Startup failure in AudioRecorder.start() must unwind recorder and session."""
     mock_recorder = _mock_recorder()
+    mock_recorder.start.side_effect = RuntimeError("mic unavailable")
     mock_session = MagicMock()
     mock_recorder_cls.return_value = mock_recorder
     mock_session_cls.return_value = mock_session
 
-    captioner = _mock_captioner()
-    captioner.begin_session.side_effect = RuntimeError("boom")
+    app = ScarecrowApp(transcriber=_mock_transcriber())
+    async with app.run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        app._start_recording()
+        await pilot.pause()
 
-    with patch.object(ScarecrowApp, "_auto_start"):
-        app = ScarecrowApp(
-            transcriber=_mock_transcriber(),
-            live_captioner=captioner,
-        )
-        async with app.run_test() as pilot:
-            app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-            app._start_recording()
-            await pilot.pause()
-
-            mock_recorder.stop.assert_called_once()
-            mock_session.finalize.assert_called_once()
-            assert app._audio_recorder is None
-            assert app._session is None
-            assert app.state is AppState.IDLE
+        mock_recorder.stop.assert_called_once()
+        mock_session.finalize.assert_called_once()
+        assert app._audio_recorder is None
+        assert app._session is None
+        assert app.state is AppState.IDLE
 
 
 @patch("scarecrow.app.AudioRecorder")
@@ -720,7 +545,7 @@ async def test_stop_recording_flushes_final_batch_before_finalize(
 
     transcriber = _mock_transcriber()
 
-    def fake_final_batch(audio, elapsed, *, emit_callback=False):
+    def fake_final_batch(audio, elapsed, *, emit_callback=False, initial_prompt=None):
         calls.append("final-batch")
         assert emit_callback is False
         return "transcribed text"
@@ -765,7 +590,7 @@ async def test_stop_recording_waits_for_inflight_batch_before_finalize(
     mock_session.finalize.side_effect = lambda: calls.append("session-finalize")
     mock_session_cls.return_value = mock_session
 
-    def slow_batch(_audio, _elapsed):
+    def slow_batch(_audio, _elapsed, **kwargs):
         calls.append("batch-start")
         release.wait(timeout=1)
         calls.append("batch-end")
@@ -859,16 +684,15 @@ async def test_flush_final_batch_writes_to_transcript_file(tmp_path: Path) -> No
     transcriber = _mock_transcriber()
     transcriber.transcribe_batch.return_value = "final transcribed text"
 
-    with patch.object(ScarecrowApp, "_auto_start"):
-        async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
-            app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-            await pilot.pause(delay=0.2)
-            app._session = real_session
-            app._audio_recorder = mock_recorder
-            app.state = AppState.RECORDING
+    async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause(delay=0.2)
+        app._session = real_session
+        app._audio_recorder = mock_recorder
+        app.state = AppState.RECORDING
 
-            app._stop_recording()
-            await pilot.pause()
+        app._stop_recording()
+        await pilot.pause()
 
     content = real_session.transcript_path.read_text(encoding="utf-8")
     assert "final transcribed text" in content
@@ -885,22 +709,21 @@ async def test_flush_final_batch_disables_async_callback_path(tmp_path: Path) ->
 
     transcriber = _mock_transcriber()
 
-    def fake_batch(_audio, _elapsed, *, emit_callback=True):
+    def fake_batch(_audio, _elapsed, *, emit_callback=True, initial_prompt=None):
         assert emit_callback is False
         return "one final line"
 
     transcriber.transcribe_batch.side_effect = fake_batch
 
-    with patch.object(ScarecrowApp, "_auto_start"):
-        async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
-            app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-            await pilot.pause(delay=0.2)
-            app._session = real_session
-            app._audio_recorder = mock_recorder
-            app.state = AppState.RECORDING
+    async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause(delay=0.2)
+        app._session = real_session
+        app._audio_recorder = mock_recorder
+        app.state = AppState.RECORDING
 
-            app._stop_recording()
-            await pilot.pause()
+        app._stop_recording()
+        await pilot.pause()
 
     content = real_session.transcript_path.read_text(encoding="utf-8")
     assert content.count("one final line") == 1
@@ -1041,7 +864,7 @@ def test_wait_for_batch_workers_captures_completed_text(tmp_path: Path) -> None:
 
     transcriber = _mock_transcriber()
 
-    def slow_batch(_audio, _elapsed):
+    def slow_batch(_audio, _elapsed, **kwargs):
         return "inflight batch text"
 
     transcriber.transcribe_batch.side_effect = slow_batch
@@ -1135,3 +958,450 @@ async def test_on_unmount_noop_when_executor_already_cleaned() -> None:
         await pilot.pause()
         app._batch_executor = None
         app.on_unmount()  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: Note submission logic
+# ---------------------------------------------------------------------------
+
+
+async def test_note_submission_writes_to_richlog() -> None:
+    """_submit_note must write the note text to the #captions RichLog."""
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        input_widget = app.query_one("#note-input", Input)
+        input_widget.value = "test note text"
+
+        captions = app.query_one("#captions", RichLog)
+        initial_lines = len(captions.lines)
+
+        app._submit_note()
+        await pilot.pause()
+
+        assert len(captions.lines) > initial_lines
+        all_text = " ".join(str(line) for line in captions.lines[initial_lines:])
+        assert "test note text" in all_text
+
+
+async def test_note_submission_clears_input() -> None:
+    """_submit_note must clear the Input widget value after submission."""
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        input_widget = app.query_one("#note-input", Input)
+        input_widget.value = "clear me"
+
+        app._submit_note()
+        await pilot.pause()
+
+        assert input_widget.value == ""
+
+
+async def test_note_submission_includes_tag_prefix() -> None:
+    """_submit_note must include the tag in the RichLog output."""
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        input_widget = app.query_one("#note-input", Input)
+        input_widget.value = "/action follow up on this"
+
+        captions = app.query_one("#captions", RichLog)
+        initial_lines = len(captions.lines)
+
+        app._submit_note()
+        await pilot.pause()
+
+        all_text = " ".join(str(line) for line in captions.lines[initial_lines:])
+        assert "ACTION" in all_text
+
+
+async def test_note_submission_increments_word_count() -> None:
+    """_submit_note must increment _word_count by the number of words in the note."""
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        app._word_count = 0
+        input_widget = app.query_one("#note-input", Input)
+        input_widget.value = "hello world"
+
+        app._submit_note()
+        await pilot.pause()
+
+        assert app._word_count == 2
+
+
+async def test_empty_note_submission_is_noop() -> None:
+    """_submit_note with empty or whitespace input must not write to RichLog."""
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        # Use a longer delay to ensure any startup messages are already in the
+        # RichLog before we snapshot initial_lines.
+        await pilot.pause(delay=0.2)
+
+        input_widget = app.query_one("#note-input", Input)
+        input_widget.value = "   "
+
+        captions = app.query_one("#captions", RichLog)
+        initial_lines = len(captions.lines)
+        initial_word_count = app._word_count
+
+        app._submit_note()
+        await pilot.pause()
+
+        assert len(captions.lines) == initial_lines
+        assert app._word_count == initial_word_count
+
+
+async def test_note_submission_when_idle() -> None:
+    """_submit_note without a session must still write to RichLog (UI-only)."""
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        app._session = None
+        input_widget = app.query_one("#note-input", Input)
+        input_widget.value = "no session note"
+
+        captions = app.query_one("#captions", RichLog)
+        initial_lines = len(captions.lines)
+
+        app._submit_note()
+        await pilot.pause()
+
+        assert len(captions.lines) > initial_lines
+        all_text = " ".join(str(line) for line in captions.lines[initial_lines:])
+        assert "no session note" in all_text
+
+
+async def test_note_submission_writes_to_session(tmp_path: Path) -> None:
+    """_submit_note must write the note line to the transcript file via session."""
+    from scarecrow.session import Session
+
+    real_session = Session(base_dir=tmp_path)
+
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        app._session = real_session
+        input_widget = app.query_one("#note-input", Input)
+        input_widget.value = "/action save this note"
+
+        app._submit_note()
+        await pilot.pause()
+
+    content = real_session.transcript_path.read_text(encoding="utf-8")
+    assert "[ACTION]" in content
+    assert "save this note" in content
+
+
+async def test_enter_submits_note() -> None:
+    """Pressing Enter in the note Input must submit the note to RichLog."""
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        # Bypass the context-collection phase so Enter routes to _submit_note
+        app._awaiting_context = False
+
+        input_widget = app.query_one("#note-input", Input)
+        await pilot.click("#note-input")
+        await pilot.pause()
+
+        input_widget.value = "enter key note"
+
+        captions = app.query_one("#captions", RichLog)
+        initial_lines = len(captions.lines)
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert len(captions.lines) > initial_lines
+        all_text = " ".join(str(line) for line in captions.lines[initial_lines:])
+        assert "enter key note" in all_text
+
+
+# ---------------------------------------------------------------------------
+# Context injection
+# ---------------------------------------------------------------------------
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_context_start_empty_starts_recording(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """Pressing Enter with an empty input starts recording when transcriber is ready."""
+    mock_recorder_cls.return_value = _mock_recorder()
+    mock_session_cls.return_value = MagicMock()
+
+    async with _app(with_transcriber=True).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        assert app.state is AppState.RECORDING
+
+
+async def test_context_start_empty_stays_idle_without_transcriber() -> None:
+    """Pressing Enter with no transcriber stays IDLE and shows an error."""
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.press("enter")
+        await pilot.pause(delay=0.2)
+        assert app.state is AppState.IDLE
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_context_start_with_text_writes_context_block(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """Pressing Enter with context text writes a [CONTEXT] block to RichLog."""
+    mock_recorder_cls.return_value = _mock_recorder()
+    mock_session_cls.return_value = MagicMock()
+
+    async with _app(with_transcriber=True).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        input_widget = app.query_one("#note-input", Input)
+        input_widget.value = "Malcolm X"
+
+        captions = app.query_one("#captions", RichLog)
+        initial_lines = len(captions.lines)
+
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+
+        new_text = " ".join(str(line) for line in captions.lines[initial_lines:])
+        assert "CONTEXT" in new_text
+        assert "Malcolm X" in new_text
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_context_start_stores_entries(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """Context text provided at launch must be stored in _context_entries."""
+    mock_recorder_cls.return_value = _mock_recorder()
+    mock_session_cls.return_value = MagicMock()
+
+    async with _app(with_transcriber=True).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        input_widget = app.query_one("#note-input", Input)
+        input_widget.value = "Malcolm X"
+
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+
+        assert app._context_entries == ["Malcolm X"]
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_context_command_appends_entries(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """/context command during recording appends a new entry."""
+    mock_recorder_cls.return_value = _mock_recorder()
+    mock_session_cls.return_value = MagicMock()
+
+    async with _app(with_transcriber=True).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        # Start recording first
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        assert app.state is AppState.RECORDING
+
+        # Send /context command
+        input_widget = app.query_one("#note-input", Input)
+        input_widget.value = "/context Yakub"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert "Yakub" in app._context_entries
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_clear_command_wipes_entries(mock_session_cls, mock_recorder_cls) -> None:
+    """/clear command empties _context_entries and _previous_batch_tail."""
+    mock_recorder_cls.return_value = _mock_recorder()
+    mock_session_cls.return_value = MagicMock()
+
+    async with _app(with_transcriber=True).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        # Start with some context
+        input_widget = app.query_one("#note-input", Input)
+        input_widget.value = "Malcolm X"
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        assert app._context_entries == ["Malcolm X"]
+
+        # Now clear
+        input_widget.value = "/clear"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert app._context_entries == []
+        assert app._previous_batch_tail == ""
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_context_display_shown_when_context_present(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """#context-display widget must be visible after context is added."""
+    from textual.widgets import Static
+
+    mock_recorder_cls.return_value = _mock_recorder()
+    mock_session_cls.return_value = MagicMock()
+
+    async with _app(with_transcriber=True).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        input_widget = app.query_one("#note-input", Input)
+        input_widget.value = "Malcolm X"
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+
+        display = app.query_one("#context-display", Static)
+        assert display.display is True
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_context_display_hidden_after_clear(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """#context-display widget must be hidden after /clear."""
+    from textual.widgets import Static
+
+    mock_recorder_cls.return_value = _mock_recorder()
+    mock_session_cls.return_value = MagicMock()
+
+    async with _app(with_transcriber=True).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        input_widget = app.query_one("#note-input", Input)
+        input_widget.value = "Malcolm X"
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+
+        input_widget.value = "/clear"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        display = app.query_one("#context-display", Static)
+        assert display.display is False
+
+
+async def test_build_initial_prompt_context_only() -> None:
+    """_build_initial_prompt with only entries returns joined entries string."""
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        app._context_entries = ["Malcolm X", "Nation of Islam"]
+        app._previous_batch_tail = ""
+
+        result = app._build_initial_prompt()
+        assert result == "Malcolm X, Nation of Islam"
+
+
+async def test_build_initial_prompt_with_tail() -> None:
+    """_build_initial_prompt combines entries and tail with '. ' separator."""
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        app._context_entries = ["Malcolm X"]
+        app._previous_batch_tail = "he spoke about civil rights"
+
+        result = app._build_initial_prompt()
+        assert result == "Malcolm X. he spoke about civil rights"
+
+
+async def test_build_initial_prompt_empty_returns_none() -> None:
+    """_build_initial_prompt returns None when both entries and tail are empty."""
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        app._context_entries = []
+        app._previous_batch_tail = ""
+
+        result = app._build_initial_prompt()
+        assert result is None
+
+
+async def test_update_tail_stores_last_35_words() -> None:
+    """_update_tail keeps only the last 35 words of the provided text."""
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        # Build a 50-word string
+        words = [f"word{i}" for i in range(50)]
+        long_text = " ".join(words)
+
+        app._update_tail(long_text)
+
+        tail_words = app._previous_batch_tail.split()
+        assert len(tail_words) == 35
+        assert tail_words == words[-35:]
+
+
+async def test_notes_label_shows_context_prompt_before_recording() -> None:
+    """The notes label must show the context prompt before recording starts."""
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        from textual.widgets import Static
+
+        label = app.query_one("#notes-label", Static)
+        label_text = str(label.render()).lower()
+        assert "context" in label_text
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_notes_label_reverts_after_recording_starts(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """After recording starts the notes label must revert to the notes prompt."""
+    mock_recorder_cls.return_value = _mock_recorder()
+    mock_session_cls.return_value = MagicMock()
+
+    async with _app(with_transcriber=True).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        from textual.widgets import Static
+
+        # Capture the pre-recording label text
+        label = app.query_one("#notes-label", Static)
+        pre_recording_text = str(label.render())
+
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+
+        post_recording_text = str(label.render())
+        # Label must have changed from the context prompt to the notes prompt
+        assert pre_recording_text != post_recording_text
+        # New label should include "Notes"
+        assert "Notes" in post_recording_text

@@ -49,7 +49,6 @@ run_collected_nodes tests/test_behavioral.py
 run_pytest "$@" tests/test_env_health.py
 run_pytest "$@" tests/test_integration.py
 run_pytest "$@" tests/test_recorder.py
-run_pytest "$@" tests/test_live_captioner.py
 run_pytest "$@" tests/test_regressions.py
 run_pytest "$@" tests/test_repo_policy.py
 run_pytest "$@" tests/test_session.py

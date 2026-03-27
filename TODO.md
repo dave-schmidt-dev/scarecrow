@@ -1,24 +1,12 @@
 # Open Issues
 
-## Live pane behavior
-- ~~Text clears after 1-3 sentences~~ Fixed: single RichLog with stable lines + in-place partial
-- ~~Partial text rendered outside bordered area~~ Fixed: removed two-widget split
-- ~~Repeated words from overlapping 5s windows~~ Fixed: Apple Speech streaming (no overlap)
-- ~~No scrolling during continuous speech~~ Fixed: Apple Speech emits word-by-word partials
-- ~~Flicker on live pane updates~~ Fixed: batch_update() wraps clear+rewrite
-- ~~Text tracking doesn't follow spoken words tightly~~ Fixed: Apple Speech latency < 300ms
-- ~~No output at all in live pane~~ Fixed: `_on_realtime_update`/`_on_realtime_stabilized` now call UI methods directly; `call_from_thread` is rejected by Textual when called from app's own thread
-- ~~Live pane stops updating mid-session~~ Fixed: natural `isFinal` sets `_needs_restart` flag; `tick()` starts new session after NSRunLoop pump returns (inline restart caused Speech framework reentrancy)
-- ~~Live pane fills entire pane then clears on sentence boundary~~ Fixed: incremental commit every 10 uncommitted words flushes chunk to stable; 4-word tail kept as partial
-- Live pane scroll resets at ~9-line boundary — BUG-20260325-live-pane-scroll-resets-at-boundary (open)
-
 ## Transcript accuracy
 - condition_on_previous_text=False on batch path (True caused inference slowdowns)
 - Monitor: "surge" → "search" type errors on clean podcast audio — may need domain-specific prompts
 
 ## CPU usage
 - 10% baseline is acceptable
-- 30% spikes every 30s from batch transcription (medium.en on 30s audio) — expected
+- 30% spikes every 15s from batch transcription (medium.en on 15s audio) — expected
 - Investigate: can batch run at lower priority or be deferred to reduce spike?
 
 ## Pause/resume

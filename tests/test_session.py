@@ -46,31 +46,34 @@ def test_transcript_path(tmp_path: Path) -> None:
 
 
 def test_append_sentence_creates_file(tmp_path: Path) -> None:
-    """append_sentence creates transcript.txt if it doesn't exist."""
+    """append_sentence creates transcript.txt; header write at init creates it."""
     session = Session(base_dir=tmp_path)
-    assert not session.transcript_path.exists()
+    # File is created at init time when the session header is written
+    assert session.transcript_path.exists()
     session.append_sentence("Hello world")
     assert session.transcript_path.exists()
     session.finalize()
 
 
 def test_append_sentence_content(tmp_path: Path) -> None:
-    """append_sentence writes the text followed by a newline."""
+    """append_sentence writes the text followed by a newline, after the header."""
     session = Session(base_dir=tmp_path)
     session.append_sentence("Hello world")
-    content = session.transcript_path.read_text(encoding="utf-8")
-    assert content == "Hello world\n"
+    lines = session.transcript_path.read_text(encoding="utf-8").splitlines()
+    # First line is the session header; second line is the appended sentence
+    assert lines[1] == "Hello world"
     session.finalize()
 
 
 def test_multiple_appends_one_per_line(tmp_path: Path) -> None:
-    """Multiple appends produce one sentence per line."""
+    """Multiple appends produce one sentence per line, after the header."""
     session = Session(base_dir=tmp_path)
     sentences = ["First sentence.", "Second sentence.", "Third sentence."]
     for s in sentences:
         session.append_sentence(s)
     lines = session.transcript_path.read_text(encoding="utf-8").splitlines()
-    assert lines == sentences
+    # First line is the session header; remaining lines are the appended sentences
+    assert lines[1:] == sentences
     session.finalize()
 
 
@@ -115,3 +118,23 @@ def test_unique_directories_for_different_sessions(tmp_path: Path) -> None:
     assert session1.session_dir != session2.session_dir
     session1.finalize()
     session2.finalize()
+
+
+def test_session_header_is_first_line(tmp_path: Path) -> None:
+    """The first line of the transcript starts with 'Session: '."""
+    session = Session(base_dir=tmp_path)
+    session.finalize()
+    lines = session.transcript_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) >= 1
+    assert lines[0].startswith("Session: ")
+
+
+def test_session_header_format(tmp_path: Path) -> None:
+    """The session header matches 'Session: YYYY-MM-DD HH:MM:SS'."""
+    session = Session(base_dir=tmp_path)
+    session.finalize()
+    first_line = session.transcript_path.read_text(encoding="utf-8").splitlines()[0]
+    pattern = r"^Session: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$"
+    assert re.match(pattern, first_line), (
+        f"Header line {first_line!r} does not match expected format"
+    )

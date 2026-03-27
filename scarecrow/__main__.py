@@ -52,15 +52,13 @@ def main() -> None:
 
     from scarecrow import config
     from scarecrow.app import ScarecrowApp
-    from scarecrow.live_captioner import LiveCaptioner
     from scarecrow.transcriber import Transcriber
 
     print(flush=True)
     print("  Scarecrow", flush=True)
     print("  " + "─" * 40, flush=True)
     batch = config.FINAL_MODEL
-    print("  Live:         Apple Speech (on-device, streaming)", flush=True)
-    print(f"  Batch model:  {batch} (accurate, every 30s)", flush=True)
+    print(f"  Batch model:  {batch} (accurate, every 15s)", flush=True)
 
     cache = _model_cache_path(batch)
     if cache is not None:
@@ -80,13 +78,6 @@ def main() -> None:
     print("  Preparing…", flush=True)
     t0 = time.monotonic()
 
-    captioner = LiveCaptioner()
-    try:
-        captioner.prepare()
-    except Exception as exc:
-        print(f"Failed to prepare live captioner: {exc}", file=sys.stderr)
-        sys.exit(1)
-
     transcriber = Transcriber()
     try:
         transcriber.prepare()
@@ -100,7 +91,7 @@ def main() -> None:
     print("  Starting TUI…", flush=True)
     print(flush=True)
 
-    app = ScarecrowApp(transcriber=transcriber, live_captioner=captioner)
+    app = ScarecrowApp(transcriber=transcriber)
     try:
         app.run()
     except KeyboardInterrupt:

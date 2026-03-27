@@ -58,6 +58,7 @@ class Transcriber:
         self,
         audio: np.ndarray,
         batch_elapsed: int,
+        initial_prompt: str | None = None,
         *,
         emit_callback: bool = True,
     ) -> str | None:
@@ -70,12 +71,16 @@ class Transcriber:
         try:
             with self._batch_lock:
                 model = self._model_manager.get_batch_model()
+                extra_kwargs = {}
+                if initial_prompt is not None:
+                    extra_kwargs["initial_prompt"] = initial_prompt
                 segments, _ = model.transcribe(
                     audio,
                     language=config.LANGUAGE,
                     beam_size=config.BEAM_SIZE,
                     vad_filter=True,
                     condition_on_previous_text=config.CONDITION_ON_PREVIOUS_TEXT,
+                    **extra_kwargs,
                 )
             text = " ".join(seg.text.strip() for seg in segments).strip()
         except Exception:

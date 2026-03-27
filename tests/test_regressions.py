@@ -258,26 +258,6 @@ def test_drain_buffer_clears_completely(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Bug: live pane used multiple disjoint widgets causing empty space
-# and text rendering outside the bordered area. Single pane is required.
-# ---------------------------------------------------------------------------
-
-
-async def test_live_pane_is_single_scrollable_container() -> None:
-    """Live pane must render as one scrollable pane with a single content widget."""
-    from textual.widgets import Static
-
-    from scarecrow.app import ScarecrowApp
-
-    async with ScarecrowApp().run_test() as pilot:
-        app = pilot.app
-        live_pane = app.query_one("#live-pane")
-        live_content = app.query_one("#live-content", Static)
-        assert live_pane is not None
-        assert live_content is not None
-
-
-# ---------------------------------------------------------------------------
 # Bug: shutdown metrics not visible — TUI exits too fast.
 # Metrics must be saved to app._shutdown_summary for __main__.py to print.
 # ---------------------------------------------------------------------------

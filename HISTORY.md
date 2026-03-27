@@ -1,5 +1,38 @@
 # History
 
+## 2026-03-27 (context injection: startup prompt, /context, /clear, rolling tail)
+
+- App now launches in IDLE with focus on the notes input, showing a context prompt instead of auto-starting.
+- Pressing Enter (empty) starts recording immediately; pressing Enter with text seeds Whisper's `initial_prompt` with the provided terms before the first batch.
+- Added `/context <terms>` command: appends terms to the context list, writes a `[CONTEXT]` entry to the transcript, and updates the context display.
+- Added `/clear` command: wipes all context entries and the previous-batch tail, hides the context display.
+- Added `#context-display` widget between the transcript pane and notes input; shown/hidden depending on whether context is active.
+- Every batch call passes `initial_prompt` built from: context entries (joined by `, `) + last 35 words of the previous batch output (rolling tail for word continuity across chunk boundaries).
+- `_flush_final_batch` also passes `initial_prompt` so the final drain benefits from the same context.
+- Session transcript files now begin with a `Session: YYYY-MM-DD HH:MM:SS` header line written at session-creation time.
+- Removed `_auto_start` method (no longer called from anywhere); removed stale `patch.object(ScarecrowApp, "_auto_start")` calls from `tests/test_behavioral.py`.
+- Updated README: startup flow, `/context`, `/clear`, context display, session header, rolling tail.
+
+## 2026-03-27 (UI rehaul: live pane → notes pane)
+
+- Removed `live_captioner.py` and all Apple Speech / SFSpeechRecognizer / pyobjc integration entirely.
+- Removed the live pane widget (`#live-pane`, `#live-content`) and all associated app state (`_live_stable`, `_live_partial`, captioner timer, captioner callbacks).
+- Replaced the live pane with a notes input pane: shortcut hints and an `Input` widget (`#note-input`).
+- Added note submission logic: each note is written to the transcript pane (RichLog) and the transcript file with a wall-clock timestamp and tag prefix.
+- Moved pause/quit bindings from `p`/`q` to `Ctrl+P`/`Ctrl+Q` so they do not conflict with text input in the notes pane.
+- Dropped `BATCH_INTERVAL_SECONDS` from 30s to 15s for more frequent transcript updates.
+- Deleted `tests/test_live_captioner.py` and removed all live-pane-specific tests from the suite.
+- Deleted manual test helper scripts `scripts/test_live_captioner.py` and `scripts/test_apple_speech.py`.
+- Closed BUG-20260325-live-pane-scroll-resets-at-boundary as won't fix (component removed).
+- Updated README to reflect single-engine architecture, new TUI layout, and new keybindings.
+
+### Post-rehaul refinements (2026-03-27)
+
+- **Prefix commands replaced F1/F2/F3:** Note tags are now selected by typing a prefix in the input — `/action` or `/a` for `[ACTION]`, `/followup` or `/f` for `[FOLLOW-UP]`. Plain text (no prefix) defaults to `[NOTE]`. F1/F2/F3 bindings removed.
+- **Timestamp fix:** Transcript dividers now show the start of the audio batch window (`_batch_window_start`) rather than the time Whisper finishes processing, so divider timestamps accurately reflect when the audio was captured.
+- **500ms audio overlap between batch chunks:** Each batch window retains the last 500ms of audio from the previous window to reduce word drops at chunk boundaries.
+- **Batch window start tracking:** Added `_batch_window_start` to record the wall-clock time at which each batch window opens, used for accurate divider timestamps.
+
 ## 2026-03-25 (live captioner debugging: four bugs fixed, one open)
 
 - Fixed: live pane showed no output at all — `_on_realtime_update` and `_on_realtime_stabilized` were routing through `_post_to_ui` / `call_from_thread`, which Textual rejects with `RuntimeError` when called from the app's own thread (recognition callbacks fire on the main thread via `tick()` → `NSRunLoop.runUntilDate_`). Fixed by calling `_set_live_partial` / `_append_live` directly.
