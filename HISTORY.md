@@ -1,5 +1,10 @@
 # History
 
+## 2026-03-27 (docs update: open bugs and TODO refresh)
+
+- Added BUG-20260327-parakeet-batch-newlines to BUGS.md: RichLog.write() creates newlines per batch, causing noisy transcript pane at 5-second intervals.
+- Refreshed TODO.md with parakeet branch status, GPU findings, and known limitations.
+
 ## 2026-03-27 (test independence: whisper tests patch BACKEND explicitly)
 
 - Added `@patch("scarecrow.config.BACKEND", "whisper")` to all whisper-specific tests so they pass regardless of the config.py setting. Tests are now backend-independent.

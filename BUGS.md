@@ -398,3 +398,14 @@ Scarecrow keeps a running bug ledger in this file. Append to it every time a bug
 - Fix: won't fix — live pane removed in UI rehaul (2026-03-27). The live pane and Apple Speech engine were replaced with a notes input pane in Phase 6 of the notes-pane rehaul.
 - Regression test: n/a (component removed)
 - Notes: moot as of 2026-03-27.
+
+## [BUG-20260327-parakeet-batch-newlines]
+- Status: open
+- Found: 2026-03-27
+- Area: app, transcript pane
+- Symptom: With the parakeet backend (5-second batch windows), each batch result appears on its own line in the transcript pane, creating excessive vertical noise. User expects consecutive batches to be space-joined into flowing paragraphs between dividers.
+- Root cause: Textual's `RichLog.write()` always appends a new line. There is no API to update or append to the last written line. An attempted workaround using `captions.lines.pop()` modified the internal data structure but did not trigger a re-render.
+- Workaround: none. Each batch is a separate line.
+- Fix: pending. Options under consideration: (1) replace RichLog with a Static widget that can be updated in-place, (2) subclass RichLog to support line replacement, (3) accumulate text in a buffer and use `clear()` + rewrite on each batch (expensive for long sessions).
+- Regression test: pending
+- Notes: less noticeable on the whisper backend (15s batches) where each line contains more text. The 30-second divider throttling reduces but does not eliminate the issue.
