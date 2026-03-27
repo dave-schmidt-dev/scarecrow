@@ -1,8 +1,9 @@
 # Open Issues
 
 ## Transcript accuracy
-- condition_on_previous_text=False on batch path (True caused inference slowdowns)
+- condition_on_previous_text=False on whisper batch path (True caused inference slowdowns)
 - Monitor: "surge" → "search" type errors on clean podcast audio — may need domain-specific prompts
+- Parakeet backend does not support initial_prompt context injection — A/B test whether its higher baseline accuracy compensates
 
 ## CPU usage
 - 10% baseline is acceptable

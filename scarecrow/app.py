@@ -34,7 +34,14 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-BATCH_INTERVAL_SECONDS = 15
+
+def _get_batch_interval() -> int:
+    if config.BACKEND == "parakeet":
+        return config.BATCH_INTERVAL_PARAKEET
+    return config.BATCH_INTERVAL_WHISPER
+
+
+BATCH_INTERVAL_SECONDS = _get_batch_interval()
 
 
 class AppState(Enum):
@@ -161,12 +168,17 @@ class ScarecrowApp(App[None]):
         self._recording_start_time: float | None = None
         self._disk_warn_shown: bool = False
         self._session_disk_warn_shown: bool = False
+        self._last_divider_elapsed: int = -config.DIVIDER_INTERVAL
 
     def compose(self) -> ComposeResult:
         yield InfoBar(id="info-bar")
+        if config.BACKEND == "parakeet":
+            model_label = config.PARAKEET_MODEL.split("/")[-1]
+        else:
+            model_label = config.FINAL_MODEL
         yield Static(
             (
-                f"Transcript  [dim]({config.FINAL_MODEL} · "
+                f"Transcript  [dim]({model_label} · "
                 f"every {BATCH_INTERVAL_SECONDS}s)[/dim]"
             ),
             classes="pane-label",
@@ -420,9 +432,11 @@ class ScarecrowApp(App[None]):
         include_ui: bool = True,
     ) -> None:
         elapsed = batch_elapsed if batch_elapsed is not None else self._elapsed
+        show_divider = (elapsed - self._last_divider_elapsed) >= config.DIVIDER_INTERVAL
         divider = None
-        if self._session is not None:
+        if show_divider and self._session is not None:
             divider = self._transcript_divider(elapsed, self._session.transcript_path)
+            self._last_divider_elapsed = elapsed
 
         if include_ui:
             try:
@@ -613,6 +627,7 @@ class ScarecrowApp(App[None]):
             if self._audio_recorder is not None:
                 self._audio_recorder.resume()
             self._batch_countdown = BATCH_INTERVAL_SECONDS
+            self._last_divider_elapsed = -config.DIVIDER_INTERVAL
             self._set_status("Listening…")
             self._sync_info_bar()
 

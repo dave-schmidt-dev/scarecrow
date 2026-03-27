@@ -50,13 +50,39 @@ class Transcriber:
         self._ready = True
 
     def preload_batch_model(self) -> None:
-        """Load the batch model eagerly so the first batch has no delay."""
-        self._model_manager.get_batch_model()
+        """Load the active backend's model eagerly."""
+        if config.BACKEND == "parakeet":
+            self._model_manager.get_parakeet_model()
+        else:
+            self._model_manager.get_batch_model()
 
     def shutdown(self, timeout: float | None = None) -> None:
         """Release runtime resources."""
         self._ready = False
         self._model_manager.release_models()
+
+    def _transcribe_whisper(self, audio: np.ndarray, initial_prompt: str | None) -> str:
+        """Run faster-whisper on audio. Returns joined segment text."""
+        with self._batch_lock:
+            model = self._model_manager.get_batch_model()
+            extra_kwargs = {}
+            if initial_prompt is not None:
+                extra_kwargs["initial_prompt"] = initial_prompt
+            segments, _ = model.transcribe(
+                audio,
+                language=config.LANGUAGE,
+                beam_size=config.BEAM_SIZE,
+                vad_filter=True,
+                condition_on_previous_text=config.CONDITION_ON_PREVIOUS_TEXT,
+                **extra_kwargs,
+            )
+        return " ".join(seg.text.strip() for seg in segments).strip()
+
+    def _transcribe_parakeet(self, audio: np.ndarray) -> str:
+        """Run Parakeet TDT model on audio. Returns text with punctuation."""
+        model = self._model_manager.get_parakeet_model()
+        result = model.transcribe(audio)
+        return result.text.strip() if result.text else ""
 
     def transcribe_batch(
         self,
@@ -66,27 +92,17 @@ class Transcriber:
         *,
         emit_callback: bool = True,
     ) -> str | None:
-        """Run the accurate batch model on a drained recorder buffer.
+        """Run the active backend model on a drained recorder buffer.
 
         Returns the transcribed text, empty string if nothing was recognized,
         or None on error. The normal executor-driven path still emits the
         callback so the UI updates via call_from_thread.
         """
         try:
-            with self._batch_lock:
-                model = self._model_manager.get_batch_model()
-                extra_kwargs = {}
-                if initial_prompt is not None:
-                    extra_kwargs["initial_prompt"] = initial_prompt
-                segments, _ = model.transcribe(
-                    audio,
-                    language=config.LANGUAGE,
-                    beam_size=config.BEAM_SIZE,
-                    vad_filter=True,
-                    condition_on_previous_text=config.CONDITION_ON_PREVIOUS_TEXT,
-                    **extra_kwargs,
-                )
-            text = " ".join(seg.text.strip() for seg in segments).strip()
+            if config.BACKEND == "parakeet":
+                text = self._transcribe_parakeet(audio)
+            else:
+                text = self._transcribe_whisper(audio, initial_prompt)
         except Exception:
             log.exception("Batch transcription failed")
             self._emit_error(

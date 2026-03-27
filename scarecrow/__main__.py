@@ -57,17 +57,27 @@ def main() -> None:
     print(flush=True)
     print("  Scarecrow", flush=True)
     print("  " + "─" * 40, flush=True)
-    batch = config.FINAL_MODEL
-    print(f"  Batch model:  {batch} (accurate, every 15s)", flush=True)
 
-    cache = _model_cache_path(batch)
-    if cache is not None:
-        print(f"  Batch cache:  {cache}", flush=True)
-    else:
+    backend = config.BACKEND
+    if backend == "parakeet":
+        print("  Backend:      parakeet-mlx (Apple Silicon GPU)", flush=True)
+        print(f"  Model:        {config.PARAKEET_MODEL}", flush=True)
         print(
-            "  Batch cache:  not cached — will download on first run",
+            f"  Batch interval: {config.BATCH_INTERVAL_PARAKEET}s",
             flush=True,
         )
+    else:
+        print("  Backend:      faster-whisper (CPU)", flush=True)
+        batch = config.FINAL_MODEL
+        print(f"  Batch model:  {batch} (accurate, every 15s)", flush=True)
+        cache = _model_cache_path(batch)
+        if cache is not None:
+            print(f"  Batch cache:  {cache}", flush=True)
+        else:
+            print(
+                "  Batch cache:  not cached — will download on first run",
+                flush=True,
+            )
 
     recordings_dir = config.DEFAULT_RECORDINGS_DIR.resolve()
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -85,7 +95,12 @@ def main() -> None:
         print(f"Failed to prepare batch transcriber: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    print("  Loading batch model…", flush=True)
+    loading_msg = (
+        "  Loading Parakeet model…"
+        if backend == "parakeet"
+        else "  Loading batch model…"
+    )
+    print(loading_msg, flush=True)
     transcriber.preload_batch_model()
 
     t1 = time.monotonic()

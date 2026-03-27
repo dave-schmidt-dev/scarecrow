@@ -82,6 +82,37 @@ def write_config(batch_model: str):
     config_path.write_text(text)
 
 
+def write_backend(backend: str):
+    """Update config.py with selected backend."""
+    config_path = Path(__file__).resolve().parent.parent / "scarecrow" / "config.py"
+    text = config_path.read_text()
+    text = re.sub(
+        r'^(BACKEND\s*=\s*")[^"]*(")',
+        lambda match: f"{match.group(1)}{backend}{match.group(2)}",
+        text,
+        flags=re.MULTILINE,
+    )
+    config_path.write_text(text)
+
+
+def choose_backend() -> str:
+    """Prompt user to choose a transcription backend."""
+    print("BACKEND SELECTION")
+    print("-" * 40)
+    print("  1. whisper    faster-whisper (CPU, any platform) [default]")
+    print("  2. parakeet   parakeet-mlx (Apple Silicon GPU, macOS 13/15+)")
+    print()
+    while True:
+        choice = input("  Backend [1]: ").strip()
+        if not choice or choice == "1":
+            return "whisper"
+        if choice == "2":
+            return "parakeet"
+        if choice in ("whisper", "parakeet"):
+            return choice
+        print("    Please enter 1 or 2.")
+
+
 def setup_alias():
     """Show alias setup instructions."""
     project_dir = Path(__file__).resolve().parent.parent
@@ -99,33 +130,46 @@ def setup_alias():
 def main():
     print_header()
     explain_architecture()
-    print_models()
 
-    print("MODEL SELECTION")
-    print("-" * 40)
-    print("  Enter a number (1-5) or press Enter for the default.")
+    backend = choose_backend()
     print()
 
-    batch_model = choose_model(DEFAULT_BATCH)
-
-    print()
-    print(f"  Batch model: {batch_model}")
-
-    cached = check_cached(batch_model)
-    status = "cached" if cached else "will download on first run"
-    print(f"  Batch ({batch_model}): {status}")
-
-    if batch_model != DEFAULT_BATCH:
+    if backend == "parakeet":
+        print("  Backend: parakeet-mlx (Apple Silicon GPU)")
+        print("  Model:   mlx-community/parakeet-tdt-0.6b-v3")
+        print("  Batch interval: 5s")
         print()
-        confirm = input("  Write to config.py? [Y/n]: ").strip().lower()
-        if confirm in ("", "y", "yes"):
-            write_config(batch_model)
-            print("  Config updated.")
-        else:
-            print("  Skipped — config unchanged.")
+        write_backend(backend)
+        print("  Config updated.")
     else:
+        write_backend(backend)
+        print_models()
+
+        print("MODEL SELECTION")
+        print("-" * 40)
+        print("  Enter a number (1-5) or press Enter for the default.")
         print()
-        print("  Using default — no config changes needed.")
+
+        batch_model = choose_model(DEFAULT_BATCH)
+
+        print()
+        print(f"  Batch model: {batch_model}")
+
+        cached = check_cached(batch_model)
+        status = "cached" if cached else "will download on first run"
+        print(f"  Batch ({batch_model}): {status}")
+
+        if batch_model != DEFAULT_BATCH:
+            print()
+            confirm = input("  Write to config.py? [Y/n]: ").strip().lower()
+            if confirm in ("", "y", "yes"):
+                write_config(batch_model)
+                print("  Config updated.")
+            else:
+                print("  Skipped — config unchanged.")
+        else:
+            print()
+            print("  Using default — no config changes needed.")
 
     print()
     setup_alias()

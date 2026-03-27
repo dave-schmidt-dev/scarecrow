@@ -24,9 +24,17 @@ def configure_runtime_environment() -> None:
 
 
 def model_cache_path(model_name: str) -> Path | None:
-    """Return the HuggingFace cache path for a model, or None if not cached."""
+    """Return the HuggingFace cache path for a model, or None if not cached.
+
+    Handles both short names (e.g. "medium.en" → Systran/faster-whisper-medium.en)
+    and full repo IDs (e.g. "deepdml/faster-whisper-large-v3-turbo-ct2").
+    """
     cache_dir = Path.home() / ".cache" / "huggingface" / "hub"
-    path = cache_dir / f"models--Systran--faster-whisper-{model_name}"
+    if "/" in model_name:
+        # Full repo ID: org/repo → models--org--repo
+        path = cache_dir / f"models--{model_name.replace('/', '--')}"
+    else:
+        path = cache_dir / f"models--Systran--faster-whisper-{model_name}"
     return path if path.exists() else None
 
 
@@ -40,6 +48,7 @@ class ModelManager:
 
     def __init__(self) -> None:
         self._batch_model: WhisperModel | None = None
+        self._parakeet_model = None
         self._lock = threading.Lock()
 
     def prepare(self) -> None:
@@ -61,15 +70,37 @@ class ModelManager:
                 self._batch_model = self._create_model(config.FINAL_MODEL)
             return self._batch_model
 
+    def get_parakeet_model(self):
+        """Return the Parakeet model, loading on first use."""
+        with self._lock:
+            if self._parakeet_model is None:
+                from parakeet_mlx import from_pretrained
+
+                self._parakeet_model = from_pretrained(config.PARAKEET_MODEL)
+            return self._parakeet_model
+
     def release_models(self) -> None:
         """Drop model references so process shutdown can reclaim memory."""
         with self._lock:
             self._batch_model = None
+            self._parakeet_model = None
 
     @staticmethod
     def _create_model(model_name: str) -> WhisperModel:
-        return WhisperModel(
-            model_name,
-            device="cpu",
-            compute_type="int8",
-        )
+        # Temporarily allow network access if model isn't cached yet
+        need_download = model_cache_path(model_name) is None
+        old_offline = os.environ.get("HF_HUB_OFFLINE")
+        if need_download:
+            os.environ.pop("HF_HUB_OFFLINE", None)
+        try:
+            return WhisperModel(
+                model_name,
+                device="cpu",
+                compute_type="int8",
+            )
+        finally:
+            if need_download:
+                if old_offline is not None:
+                    os.environ["HF_HUB_OFFLINE"] = old_offline
+                else:
+                    os.environ.pop("HF_HUB_OFFLINE", None)

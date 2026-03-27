@@ -1,5 +1,18 @@
 # History
 
+## 2026-03-27 (feature branch: parakeet-mlx backend)
+
+- Added parakeet-mlx as alternative transcription backend alongside faster-whisper.
+- Backend selection via `config.BACKEND` (`"whisper"` or `"parakeet"`) and `scripts/setup.py`.
+- Parakeet runs on Apple Silicon GPU via MLX: ~0.5s inference, ~2x better accuracy (1.9% vs 3.0% WER).
+- Dynamic batch interval: 5s for parakeet, 15s for whisper.
+- Divider throttling: transcript dividers appear every 30s regardless of batch interval, reset on pause/resume.
+- `parakeet-mlx` is an optional dependency (`pip install -e ".[parakeet]"`).
+- Startup output shows active backend, model, and batch interval.
+- Setup script (`scripts/setup.py`) now includes backend selection step.
+- Added 8 new tests in `tests/test_parakeet_backend.py`.
+- Note: Parakeet does not support `initial_prompt` context injection — context entries are still collected but not passed to the model.
+
 ## 2026-03-27 (model upgrade: medium.en → large-v3-turbo)
 
 - Switched default batch model from `medium.en` to `large-v3-turbo` (better accuracy, fewer decoder layers = faster inference despite larger encoder).

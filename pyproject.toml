@@ -15,6 +15,9 @@ dependencies = [
 [project.scripts]
 scarecrow = "scarecrow.__main__:main"
 
+[project.optional-dependencies]
+parakeet = ["parakeet-mlx>=0.1"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

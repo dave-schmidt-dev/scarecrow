@@ -6,7 +6,11 @@
 
 Always-recording TUI for transcription and inline notes.
 
-Scarecrow uses Whisper large-v3-turbo for accurate batch transcription every 15 seconds. You can attach timestamped notes inline by typing prefix commands (`/task`) or plain text. Audio and transcripts are saved per-session.
+Scarecrow uses faster-whisper or parakeet-mlx for accurate batch transcription. You can attach timestamped notes inline by typing prefix commands (`/task`) or plain text. Audio and transcripts are saved per-session.
+
+**Backends:**
+- **whisper** (default) — faster-whisper large-v3-turbo on CPU, 15-second batch windows
+- **parakeet** — parakeet-mlx (Parakeet TDT 0.6B v3) on Apple Silicon GPU, 5-second batch windows, ~2x better accuracy, native punctuation and capitalization
 
 ## Bug Tracking
 
@@ -164,7 +168,7 @@ The batch model (`large-v3-turbo`) is preloaded during the prepare phase before 
 
 ### Architecture
 
-Scarecrow uses a single-engine transcription model. A 16kHz audio stream is buffered and fed to Whisper `large-v3-turbo` every 15 seconds. No subprocesses — everything runs in a single process.
+Scarecrow uses a single transcription backend at a time. A 16kHz audio stream is buffered and fed to the active model at the configured batch interval (15s for whisper, 5s for parakeet). No subprocesses — everything runs in a single process. Backend is selected via `BACKEND` in `scarecrow/config.py` or `scripts/setup.py`.
 
 Inline notes are typed in the notes pane and submitted with Enter. The tag is determined by an optional prefix at the start of the text: `/task` or `/t` for `[TASK]`, or no prefix for `[NOTE]`. Each note is written to the transcript pane and the transcript file with a wall-clock timestamp and tag prefix. Notes work in any app state (recording, paused, or idle).
 
