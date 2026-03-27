@@ -58,7 +58,7 @@ class InfoBar(Static):
     batch_countdown: reactive[int] = reactive(BATCH_INTERVAL_SECONDS)
     status_message: reactive[str] = reactive("")
     status_is_error: reactive[bool] = reactive(False)
-    peak_level: reactive[float] = reactive(0.0)
+    peak_level: reactive[float] = reactive(0.0, always_update=True)
 
     def render(self) -> Text:
         label, style, icon = _STATE_STYLE[self.state]
@@ -66,11 +66,27 @@ class InfoBar(Static):
         text.append(f" {label} ", style=style)
         if icon:
             text.append(f" {icon}")
-        if self._reactive_state is AppState.RECORDING:
-            bars = "▁▂▃▄▅▆▇█"
-            level = min(self._reactive_peak_level, 1.0)
-            idx = int(level * (len(bars) - 1))
-            text.append(f" {bars[idx]}")
+        if self.state is AppState.RECORDING:
+            import math
+
+            bars = " ▁▂▃▄▅▆▇█"
+            raw = self.peak_level
+            # Log scale: map ~0.005-0.3 range to 0-1
+            if raw < 0.003:
+                scaled = 0.0
+            else:
+                db = 20 * math.log10(max(raw, 1e-6))
+                # -46dB (silence) to -10dB (loud speech) → 0.0 to 1.0
+                scaled = max(0.0, min(1.0, (db + 46) / 36))
+            idx = int(scaled * (len(bars) - 1))
+            if scaled < 0.4:
+                color = "green"
+            elif scaled < 0.75:
+                color = "yellow"
+            else:
+                color = "red"
+            text.append(" ")
+            text.append(bars[idx], style=color)
         text.append("  ")
 
         h = self.elapsed // 3600
@@ -208,9 +224,13 @@ class ScarecrowApp(App[None]):
         bar.batch_countdown = self._batch_countdown
         bar.status_message = self._status_message
         bar.status_is_error = self._status_is_error
-        bar.peak_level = (
-            self._audio_recorder.peak_level if self._audio_recorder else 0.0
+        raw_peak = self._audio_recorder.peak_level if self._audio_recorder else 0.0
+        log.debug(
+            "Sync peak: raw=%.3f recorder=%s",
+            raw_peak,
+            self._audio_recorder is not None,
         )
+        bar.peak_level = raw_peak
 
     def watch_state(self, _new_state: AppState) -> None:
         self._sync_info_bar()
@@ -480,6 +500,13 @@ class ScarecrowApp(App[None]):
         self._tick_timer.resume()
         self._set_status("Listening…")
 
+        # Show session header in transcript pane
+        with contextlib.suppress(NoMatches):
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.query_one("#captions", RichLog).write(
+                f"[dim]Session Start: {ts}[/dim]"
+            )
+
     def _on_batch_tick(self) -> None:
         self._batch_countdown = BATCH_INTERVAL_SECONDS
         self._sync_info_bar()
@@ -619,6 +646,7 @@ class ScarecrowApp(App[None]):
 
             if self._session is not None:
                 try:
+                    self._session.write_end_header()
                     self._session.finalize()
                 except Exception as exc:
                     log.exception("Failed to finalize session")

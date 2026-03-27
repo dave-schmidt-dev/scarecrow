@@ -1,10 +1,13 @@
 # History
 
-## 2026-03-27 (polish: /task consolidation, notation counts, audio meter)
+## 2026-03-27 (polish: /task consolidation, notation counts, audio meter, session timestamps)
 
 - Merged `/action` + `/followup` into `/task` (shorthand `/t`). Simpler taxonomy: `/context` for background, `/task` for action items, plain text for notes.
 - Context display line now shows entry counts: "Context: 3 · Tasks: 2 · Notes: 1" instead of raw context text.
 - Added audio level meter (▁▂▃▄▅▆▇█) in InfoBar during recording — confirms mic is active at a glance.
+- Meter uses log scale: -46dB to -10dB mapped to bar characters. Color coded: green = quiet, yellow = normal, red = loud.
+- Peak hold with decay: peak value decays by 0.15 per read so the indicator doesn't freeze at transient peaks.
+- Session timestamps: transcript files now open with `Session Start: YYYY-MM-DD HH:MM:SS` and close with `Session End: YYYY-MM-DD HH:MM:SS`. Session start timestamp is also shown in the RichLog UI pane at launch.
 - Added debug logging of the batch prompt sent to Whisper for context verification.
 
 ## 2026-03-27 (context injection: startup prompt, /context, /clear, rolling tail)

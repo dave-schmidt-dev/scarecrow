@@ -121,20 +121,20 @@ def test_unique_directories_for_different_sessions(tmp_path: Path) -> None:
 
 
 def test_session_header_is_first_line(tmp_path: Path) -> None:
-    """The first line of the transcript starts with 'Session: '."""
+    """The first line of the transcript starts with 'Session Start: '."""
     session = Session(base_dir=tmp_path)
     session.finalize()
     lines = session.transcript_path.read_text(encoding="utf-8").splitlines()
     assert len(lines) >= 1
-    assert lines[0].startswith("Session: ")
+    assert lines[0].startswith("Session Start: ")
 
 
 def test_session_header_format(tmp_path: Path) -> None:
-    """The session header matches 'Session: YYYY-MM-DD HH:MM:SS'."""
+    """The session header matches 'Session Start: YYYY-MM-DD HH:MM:SS'."""
     session = Session(base_dir=tmp_path)
     session.finalize()
     first_line = session.transcript_path.read_text(encoding="utf-8").splitlines()[0]
-    pattern = r"^Session: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$"
+    pattern = r"^Session Start: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$"
     assert re.match(pattern, first_line), (
         f"Header line {first_line!r} does not match expected format"
     )

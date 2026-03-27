@@ -19,7 +19,7 @@ class Session:
         self._transcript_file = None
         self._finalized = False
         header_timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
-        self.append_sentence(f"Session: {header_timestamp}")
+        self.append_sentence(f"Session Start: {header_timestamp}")
 
     @property
     def session_dir(self) -> Path:
@@ -45,6 +45,11 @@ class Session:
 
         self._transcript_file.write(text + "\n")
         self._transcript_file.flush()
+
+    def write_end_header(self) -> None:
+        """Write session end timestamp to transcript."""
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.append_sentence(f"Session End: {ts}")
 
     def finalize(self) -> None:
         """Closes any open file handles."""

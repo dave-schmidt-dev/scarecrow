@@ -2,7 +2,7 @@
 
 Always-recording TUI with transcription and inline notes.
 
-Scarecrow uses Whisper medium.en for accurate batch transcription every 15 seconds. You can attach timestamped notes inline by typing prefix commands (`/action`, `/followup`) or plain text. Audio and transcripts are saved per-session.
+Scarecrow uses Whisper medium.en for accurate batch transcription every 15 seconds. You can attach timestamped notes inline by typing prefix commands (`/task`) or plain text. Audio and transcripts are saved per-session.
 
 ## Bug Tracking
 
@@ -87,9 +87,8 @@ When Scarecrow launches, the notes input shows a context prompt. Type one or mor
 - `Ctrl+Q` — quit
 - `Enter` — submit note (or, at startup, start recording)
 
-**Note prefix commands** (type at the start of your note, then press Enter):
-- `/action` or `/a` — submit note tagged `[ACTION]`
-- `/followup` or `/f` — submit note tagged `[FOLLOW-UP]`
+**Note and task commands** (type at the start of your note, then press Enter):
+- `/task` or `/t` — submit note tagged `[TASK]`
 - no prefix — submit note tagged `[NOTE]` (default)
 
 **Context commands** (available after recording starts):
@@ -99,10 +98,10 @@ When Scarecrow launches, the notes input shows a context prompt. Type one or mor
 ### TUI layout
 
 The TUI shows:
-- **Info bar** — recording state (`REC` / `PAUSED`), mic indicator, elapsed time, word count, batch countdown
-- **Transcript pane** — batch transcription output with timestamped dividers (scrollable); every session starts with a `Session: YYYY-MM-DD HH:MM:SS` header line
-- **Context display** — shown between the transcript pane and notes input when context is active; lists all accumulated context terms
-- **Notes pane** — text input for inline annotations; prefix commands (`/action`, `/followup`, `/a`, `/f`) select the note tag; plain text defaults to `[NOTE]`; notes are written to the transcript pane and transcript file with a wall-clock timestamp
+- **Info bar** — recording state (`REC` / `PAUSED`), mic indicator, elapsed time, word count, batch countdown, and an audio level meter (▁▂▃▄▅▆▇█) with color coding (green = quiet, yellow = normal, red = loud) using a log scale with peak-hold decay
+- **Transcript pane** — batch transcription output with timestamped dividers (scrollable); every session begins with a `Session Start: YYYY-MM-DD HH:MM:SS` line and ends with a `Session End: YYYY-MM-DD HH:MM:SS` line
+- **Context display** — shown between the transcript pane and notes input when context is active; shows entry counts: "Context: 3 · Tasks: 2 · Notes: 1"
+- **Notes pane** — text input for inline annotations; `/task` or `/t` prefix tags as `[TASK]`; plain text defaults to `[NOTE]`; notes are written to the transcript pane and transcript file with a wall-clock timestamp
 - **Footer** — keybindings
 
 ### Context injection
@@ -155,7 +154,7 @@ Models load in offline mode (`HF_HUB_OFFLINE=1`) to avoid network stalls. Debug 
 
 Scarecrow uses a single-engine transcription model. A 16kHz audio stream is buffered and fed to Whisper `medium.en` every 15 seconds. No subprocesses — everything runs in a single process.
 
-Inline notes are typed in the notes pane and submitted with Enter. The tag is determined by an optional prefix at the start of the text: `/action` or `/a` for `[ACTION]`, `/followup` or `/f` for `[FOLLOW-UP]`, or no prefix for `[NOTE]`. Each note is written to the transcript pane and the transcript file with a wall-clock timestamp and tag prefix. Notes work in any app state (recording, paused, or idle).
+Inline notes are typed in the notes pane and submitted with Enter. The tag is determined by an optional prefix at the start of the text: `/task` or `/t` for `[TASK]`, or no prefix for `[NOTE]`. Each note is written to the transcript pane and the transcript file with a wall-clock timestamp and tag prefix. Notes work in any app state (recording, paused, or idle).
 
 Transcript dividers show the start time of each audio batch window (not the time Whisper finishes processing). A 500ms audio overlap is kept between consecutive batch windows to reduce word drops at chunk boundaries.
 
@@ -169,7 +168,7 @@ Each recording session creates a timestamped directory:
 recordings/
   2026-03-24_07-48-36/
     audio.wav          # full recording (16kHz PCM16)
-    transcript.txt     # batch transcription with timestamped dividers
+    transcript.txt     # batch transcription with timestamped dividers; opens with "Session Start:" and closes with "Session End:"
 ```
 
 Audio is saved as uncompressed WAV (~1.8 MB/min at 16kHz mono) rather than MP3 (~120 KB/min). WAV writes raw PCM samples directly in the audio callback with zero CPU overhead — no encoder running in the hot path. Given that transcription models already demand significant CPU, this keeps the recording layer as lightweight as possible.

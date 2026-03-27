@@ -49,6 +49,8 @@ class AudioRecorder:
 
         # Peak level for audio meter (updated in callback)
         self._peak_level: float = 0.0
+        self._held_peak: float = 0.0
+        self._peak_decay: float = 0.15  # decay per read
 
     def _callback(
         self,
@@ -70,6 +72,8 @@ class AudioRecorder:
                 # Track peak level for audio meter
                 peak = float(np.abs(indata.astype(np.int32)).max()) / 32768.0
                 self._peak_level = peak
+                if peak > self._held_peak:
+                    self._held_peak = peak
                 # Buffer for batch transcription
                 with self._buffer_lock:
                     self._audio_chunks.append(indata.copy())
@@ -185,6 +189,8 @@ class AudioRecorder:
 
     @property
     def peak_level(self) -> float:
-        """Current peak audio level, 0.0 to 1.0."""
+        """Held peak audio level, 0.0 to 1.0. Decays on each read."""
         with self._lock:
-            return self._peak_level
+            level = self._held_peak
+            self._held_peak = max(0.0, self._held_peak - self._peak_decay)
+            return level
