@@ -1,5 +1,9 @@
 # History
 
+## 2026-03-27 (test parallelization)
+
+- Parallelized test suite runner: independent test files run concurrently (Phase 1), behavioral nodes run in parallel batches of 8 (Phase 2). Wall time reduced from ~60s to ~20s on M5 Max.
+
 ## 2026-03-27 (cleanup: dead model, plan docs, dependency pinning, preload, docs)
 
 - Removed dead Silero VAD model (`silero_vad.onnx`) and `onnxruntime` dependency.
