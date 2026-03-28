@@ -1,5 +1,9 @@
 # History
 
+## 2026-03-28 (migration plan: whisper removal)
+
+- Added `PLAN-whisper-removal.md` with phased migration spec for removing faster-whisper backend entirely. 10 phases with verification gates, risk assessment, and commit grouping.
+
 ## 2026-03-28 (parakeet: UI polish, auto-start, notes shortcuts)
 
 - **Auto-start recording:** Parakeet backend starts recording immediately on launch — no Enter prompt needed (whisper still shows context prompt).
