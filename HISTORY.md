@@ -1,5 +1,10 @@
 # History
 
+## 2026-03-28 (improvements: JSONL, FLAC, retry, pruning, cleanup)
+
+- **RichLog pruning:** UI transcript pane now caps at 500 lines. Oldest lines are pruned automatically; all content is on disk in the JSONL transcript.
+- **Removed dead `requests` dependency** from pyproject.toml (never imported).
+
 ## 2026-03-28 (JSONL transcript format)
 
 - **Switched transcript format from plain text to JSON Lines:** Each event is a JSON object on its own line in `transcript.jsonl`. Replaces `Session.append_sentence(str)` with `Session.append_event(dict)`. Events: `session_start`, `session_end`, `transcript`, `divider`, `pause`, `note`, `warning`.

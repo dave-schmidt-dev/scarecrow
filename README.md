@@ -131,6 +131,7 @@ On a clean quit, Scarecrow routes shutdown through `app.cleanup_after_exit()` to
 - drain and transcribe the final buffered audio window
 - abandon the batch executor if a worker times out, ignore late batch callbacks, and continue shutdown
 - shut down the batch executor (non-blocking)
+- compress audio from WAV to FLAC (lossless)
 - flush and close the session transcript file
 
 Ctrl+C uses the same cleanup path, so the final buffered batch is flushed before the session closes.
@@ -158,11 +159,29 @@ Each recording session creates a timestamped directory:
 ```
 recordings/
   2026-03-24_07-48-36/
-    audio.wav          # full recording (16kHz PCM16)
-    transcript.txt     # batch transcription with timestamped dividers; opens with "Session Start:" and closes with "Session End:"
+    audio.flac           # full recording (16kHz PCM16, lossless FLAC)
+    transcript.jsonl     # JSON Lines transcript — one event per line
 ```
 
-Audio is saved as uncompressed WAV (~1.8 MB/min at 16kHz mono) rather than MP3 (~120 KB/min). WAV writes raw PCM samples directly in the audio callback with zero CPU overhead — no encoder running in the hot path. Given that transcription models already demand significant CPU, this keeps the recording layer as lightweight as possible.
+### Transcript format (JSON Lines)
+
+Each line in `transcript.jsonl` is a JSON object with a `type` field:
+
+```jsonl
+{"type":"session_start","timestamp":"2026-03-28T14:30:00","session_dir":"/path/to/session"}
+{"type":"transcript","elapsed":0,"text":"Transcribed speech appears here."}
+{"type":"note","tag":"TASK","timestamp":"14:30:20","text":"follow up on X"}
+{"type":"warning","timestamp":"14:30:25","text":"Audio input overflow"}
+{"type":"divider","elapsed":60}
+{"type":"pause","elapsed":75}
+{"type":"session_end","timestamp":"2026-03-28T14:31:00"}
+```
+
+Event types: `session_start`, `session_end`, `transcript`, `divider`, `pause`, `note`, `warning`. This format is designed for automated processing (summarization, task extraction) — filter by type, parse fields, no regex needed.
+
+### Audio format
+
+Audio is recorded as WAV during the session (raw PCM in the audio callback with zero CPU overhead), then losslessly compressed to FLAC on shutdown (~2:1 size reduction, ~0.9 MB/min). The WAV is deleted after successful compression. If compression fails, the WAV is kept.
 
 ## Development
 

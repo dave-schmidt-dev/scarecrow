@@ -9,7 +9,6 @@ dependencies = [
     "sounddevice",
     "soundfile",
     "numpy",
-    "requests>=2.33.0",
 ]
 
 [project.scripts]
