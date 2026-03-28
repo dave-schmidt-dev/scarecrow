@@ -1,5 +1,18 @@
 # History
 
+## 2026-03-28 (parakeet: VAD chunking, bug fixes, benchmarking)
+
+- **Fixed audio duplication bug:** `audio[-0:]` returns the full array in numpy; when `overlap_ms=0` (parakeet), every batch contained all previous audio. Fixed by skipping overlap logic when `overlap_samples == 0`.
+- **Paragraph joining:** Consecutive batch results are now space-joined into flowing paragraphs in the RichLog transcript pane, instead of one line per batch. Paragraphs reset on dividers, notes, warnings, and pause markers. Uses `RichLog.lines` splice + cache clear to update in-place.
+- **VAD-based chunking:** Parakeet backend now uses silence detection instead of fixed 5-second timer. Audio drains at natural speech pauses (300ms+ silence), with 8-second hard max for continuous speech. Poll interval: 150ms. Whisper backend unchanged (fixed 15s timer).
+- **Silence drain includes trailing gap:** VAD drain now includes the silent chunks after speech, preventing word clipping at trailing edges of utterances.
+- **200ms audio overlap for parakeet:** Added small overlap between VAD chunks to catch words at silence boundaries (was 0ms, whisper uses 500ms).
+- **Divider interval increased to 60s:** Transcript timestamp dividers now fire every 60s (was 30s) for less interruption during continuous transcription.
+- **Batch timing logs:** Parakeet transcription now logs audio duration, wall time, and RTF to debug log for duty cycle monitoring.
+- **LibriSpeech benchmarking:** Added `benchmarks/bench_librispeech.py` with LibriSpeech test-clean dataset. Supports fixed chunking (`--chunk N`) and VAD chunking (`--vad`). Tracks speed (RTF), accuracy (WER with punctuation normalization), CPU, RSS, and MLX GPU memory. Added `benchmarks/gpu_monitor.sh` for Apple Silicon GPU power monitoring.
+- **Benchmark results (3 min, 15s fixed chunks, normalized WER):** Parakeet 18.7% WER / 0.006x RTF / 50% CPU / 1.5 GB RSS / 2.2 GB GPU. Whisper 3.6% WER / 0.30x RTF / 400% CPU / 3.5 GB RSS. Parakeet ~47x faster. Individual utterance accuracy is perfect (0% WER) — chunked WER is from boundary artifacts.
+- **GPU power draw:** ~45-50mW idle between chunks, 400-900mW during transcription bursts. Under 1W peak — negligible battery impact.
+
 ## 2026-03-27 (docs update: open bugs and TODO refresh)
 
 - Added BUG-20260327-parakeet-batch-newlines to BUGS.md: RichLog.write() creates newlines per batch, causing noisy transcript pane at 5-second intervals.

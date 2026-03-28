@@ -95,10 +95,16 @@ class InfoBar(Static):
                 color = "red"
             text.append(" ")
             text.append(bars[idx], style=color)
+            # Fixed-width level label (4 chars) to prevent layout jitter
             if scaled < 0.15:
-                text.append(" quiet", style="dim")
-            elif scaled >= 0.75:
-                text.append(" LOUD", style=f"bold {color}")
+                label, lstyle = "quiet", "dim"
+            elif scaled < 0.4:
+                label, lstyle = "low ", "green"
+            elif scaled < 0.75:
+                label, lstyle = "med ", "yellow"
+            else:
+                label, lstyle = "HIGH", f"bold {color}"
+            text.append(f" {label}", style=lstyle)
         text.append("  ")
 
         h = self.elapsed // 3600
@@ -115,7 +121,8 @@ class InfoBar(Static):
             text.append("  ")
 
         if self.state in (AppState.RECORDING, AppState.PAUSED) and width >= 50:
-            text.append("batch ", style="dim")
+            label = "buf " if config.BACKEND == "parakeet" else "batch "
+            text.append(label, style="dim")
             text.append(f"{self.batch_countdown}s", style="bold")
 
         if self.status_message:
@@ -169,6 +176,9 @@ class ScarecrowApp(App[None]):
         self._disk_warn_shown: bool = False
         self._session_disk_warn_shown: bool = False
         self._last_divider_elapsed: int = -config.DIVIDER_INTERVAL
+        # Paragraph accumulator: join consecutive batch results on one block
+        self._current_paragraph: str = ""
+        self._paragraph_line_count: int = 0
 
     def compose(self) -> ComposeResult:
         yield InfoBar(id="info-bar")
@@ -283,6 +293,8 @@ class ScarecrowApp(App[None]):
             f" [dim]{timestamp}[/dim] \u2014 {message}"
         )
         file_line = f"[WARNING] {timestamp} -- {message}"
+        self._current_paragraph = ""
+        self._paragraph_line_count = 0
         with contextlib.suppress(NoMatches):
             self.query_one("#captions", RichLog).write(styled_line)
         if self._session is not None:
@@ -445,8 +457,24 @@ class ScarecrowApp(App[None]):
                 captions = None
             if captions is not None:
                 if divider is not None:
+                    # Freeze current paragraph, write divider, start fresh
+                    self._current_paragraph = ""
+                    self._paragraph_line_count = 0
                     captions.write(f"[dim]{divider}[/dim]")
-                captions.write(text)
+
+                # Append to current paragraph and replace in RichLog
+                if self._current_paragraph:
+                    self._current_paragraph += " " + text
+                else:
+                    self._current_paragraph = text
+
+                # Remove previous paragraph lines, then write updated block
+                if self._paragraph_line_count > 0:
+                    del captions.lines[-self._paragraph_line_count :]
+                    captions._line_cache.clear()
+                before = len(captions.lines)
+                captions.write(self._current_paragraph)
+                self._paragraph_line_count = len(captions.lines) - before
 
         if self._session is not None:
             if divider is not None:
@@ -526,6 +554,23 @@ class ScarecrowApp(App[None]):
         self._batch_window_start = self._elapsed
         self._submit_batch_transcription(audio, batch_elapsed)
 
+    def _vad_transcribe(self) -> None:
+        """Drain audio at silence boundaries (parakeet backend)."""
+        if self._audio_recorder is None or self._transcriber is None:
+            return
+
+        self._reap_batch_futures()
+        if self._batch_futures:
+            return
+
+        audio = self._audio_recorder.drain_to_silence()
+        if audio is None or len(audio) == 0:
+            return
+
+        batch_elapsed = self._batch_window_start
+        self._batch_window_start = self._elapsed
+        self._submit_batch_transcription(audio, batch_elapsed)
+
     def _build_initial_prompt(self) -> str | None:
         parts = []
         if self._context_entries:
@@ -548,6 +593,8 @@ class ScarecrowApp(App[None]):
         s = self._elapsed % 60
         ts = f"{h:02d}:{m:02d}:{s:02d}"
         marker = f"── {ts} · Recording paused ──"
+        self._current_paragraph = ""
+        self._paragraph_line_count = 0
         captions = self.query_one("#captions", RichLog)
         captions.write(f"[dim]{marker}[/dim]")
         if self._session is not None:
@@ -566,7 +613,7 @@ class ScarecrowApp(App[None]):
         self._audio_recorder = AudioRecorder(
             output_path=self._session.audio_path,
             sample_rate=config.SAMPLE_RATE,
-            overlap_ms=0 if config.BACKEND == "parakeet" else 500,
+            overlap_ms=200 if config.BACKEND == "parakeet" else 500,
         )
 
         try:
@@ -586,10 +633,17 @@ class ScarecrowApp(App[None]):
             self._session = None
             return
 
-        self._batch_timer = self.set_interval(
-            BATCH_INTERVAL_SECONDS,
-            self._on_batch_tick,
-        )
+        self._use_vad = config.BACKEND == "parakeet"
+        if self._use_vad:
+            self._batch_timer = self.set_interval(
+                config.VAD_POLL_INTERVAL_MS / 1000,
+                self._on_vad_poll,
+            )
+        else:
+            self._batch_timer = self.set_interval(
+                BATCH_INTERVAL_SECONDS,
+                self._on_batch_tick,
+            )
         self._recording_start_time = time.monotonic()
         self._elapsed = 0
         self._batch_window_start = 0
@@ -605,6 +659,16 @@ class ScarecrowApp(App[None]):
             self.query_one("#captions", RichLog).write(
                 f"[dim]Session Start: {ts}[/dim]"
             )
+
+    def _on_vad_poll(self) -> None:
+        """Poll for silence boundaries (parakeet backend)."""
+        if self.state is AppState.RECORDING:
+            self._vad_transcribe()
+            # Update countdown to show buffer age
+            if self._audio_recorder is not None:
+                buf_s = int(self._audio_recorder.buffer_seconds)
+                self._batch_countdown = buf_s
+                self._sync_info_bar()
 
     def _on_batch_tick(self) -> None:
         self._batch_countdown = BATCH_INTERVAL_SECONDS
@@ -790,6 +854,9 @@ class ScarecrowApp(App[None]):
         if not raw:
             input_widget.value = ""
             return
+
+        self._current_paragraph = ""
+        self._paragraph_line_count = 0
 
         timestamp = datetime.now().strftime("%H:%M:%S")
         file_line = f"[{tag}] {timestamp} -- {raw}"

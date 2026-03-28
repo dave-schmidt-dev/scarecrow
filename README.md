@@ -9,8 +9,8 @@ Always-recording TUI for transcription and inline notes.
 Scarecrow uses faster-whisper or parakeet-mlx for accurate batch transcription. You can attach timestamped notes inline by typing prefix commands (`/task`) or plain text. Audio and transcripts are saved per-session.
 
 **Backends:**
-- **whisper** (default) — faster-whisper large-v3-turbo on CPU, 15-second batch windows
-- **parakeet** — parakeet-mlx (Parakeet TDT 0.6B v3) on Apple Silicon GPU, 5-second batch windows, ~2x better accuracy, native punctuation and capitalization
+- **whisper** — faster-whisper large-v3-turbo on CPU, 15-second fixed batch windows, supports context injection via `initial_prompt`
+- **parakeet** (default) — parakeet-mlx (Parakeet TDT 0.6B v3) on Apple Silicon GPU, VAD-based chunking (drains at speech pauses), ~47x faster than whisper, <1W GPU power draw
 
 ## Bug Tracking
 
@@ -114,7 +114,7 @@ When Scarecrow launches, the notes input shows a context prompt. Type one or mor
 ### TUI layout
 
 The TUI shows:
-- **Info bar** — recording state (`REC` / `PAUSED`), mic indicator, elapsed time, word count, batch countdown, and an audio level meter (▁▂▃▄▅▆▇█) with color coding (green = quiet, yellow = normal, red = loud) using a log scale with peak-hold decay
+- **Info bar** — recording state (`REC` / `PAUSED`), mic indicator with level label (quiet/low/med/high), elapsed time, word count, buffer/batch countdown, and an audio level meter (▁▂▃▄▅▆▇█) with color coding (green/yellow/red) using a log scale with peak-hold decay
 - **Transcript pane** — batch transcription output with timestamped dividers (scrollable); every session begins with a `Session Start: YYYY-MM-DD HH:MM:SS` line and ends with a `Session End: YYYY-MM-DD HH:MM:SS` line
 - **Context display** — shown between the transcript pane and notes input when context is active; shows entry counts: "Context: 3 · Tasks: 2 · Notes: 1"
 - **Notes pane** — text input for inline annotations; `/task` or `/t` prefix tags as `[TASK]`; plain text defaults to `[NOTE]`; notes are written to the transcript pane and transcript file with a wall-clock timestamp
@@ -168,11 +168,11 @@ The batch model (`large-v3-turbo`) is preloaded during the prepare phase before 
 
 ### Architecture
 
-Scarecrow uses a single transcription backend at a time. A 16kHz audio stream is buffered and fed to the active model at the configured batch interval (15s for whisper, 5s for parakeet). No subprocesses — everything runs in a single process. Backend is selected via `BACKEND` in `scarecrow/config.py` or `scripts/setup.py`.
+Scarecrow uses a single transcription backend at a time. A 16kHz audio stream is buffered and fed to the active model. Whisper uses fixed 15-second batch windows. Parakeet uses VAD-based chunking — audio drains at natural speech pauses (300ms+ silence) with an 8-second hard max for continuous speech, polled every 150ms. No subprocesses — everything runs in a single process. Backend is selected via `BACKEND` in `scarecrow/config.py` or `scripts/setup.py`.
 
 Inline notes are typed in the notes pane and submitted with Enter. The tag is determined by an optional prefix at the start of the text: `/task` or `/t` for `[TASK]`, or no prefix for `[NOTE]`. Each note is written to the transcript pane and the transcript file with a wall-clock timestamp and tag prefix. Notes work in any app state (recording, paused, or idle).
 
-Transcript dividers show the start time of each audio batch window (not the time Whisper finishes processing). A 500ms audio overlap is kept between consecutive batch windows to reduce word drops at chunk boundaries.
+Transcript dividers show the start time of each audio batch window (not the time the model finishes processing). Dividers appear at most every 60 seconds. Audio overlap between chunks reduces word drops at boundaries (200ms for parakeet, 500ms for whisper). Consecutive batch results are joined into flowing paragraphs between dividers.
 
 The batch model is configured in `scarecrow/config.py` or via `scripts/setup.py`.
 

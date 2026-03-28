@@ -119,12 +119,11 @@ async def test_append_transcript_no_divider_without_session() -> None:
         app._append_transcript("Second line.")
         await pilot.pause()
 
-        # With no session, dividers are skipped — lines should contain
-        # our text without interleaved divider lines
+        # With no session, dividers are skipped — consecutive batch results
+        # are joined into a single paragraph block
         texts = [str(line) for line in captions.lines]
-        text_lines = [t for t in texts if "Just the text" in t or "Second line" in t]
-        # Should be exactly 2 text entries with no dividers between
-        assert len(text_lines) == 2
+        joined = [t for t in texts if "Just the text" in t and "Second line" in t]
+        assert len(joined) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +193,7 @@ def test_info_bar_renders_batch_countdown_when_recording() -> None:
 
     text = bar.render().plain
     assert "17s" in text
-    assert "batch" in text
+    assert "batch" in text or "buf" in text
 
 
 def test_info_bar_hides_batch_countdown_when_idle() -> None:

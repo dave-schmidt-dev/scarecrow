@@ -191,16 +191,16 @@ async def test_divider_throttle_skips_intermediate_batches(
         captions = app.query_one("#captions", RichLog)
         initial_lines = len(captions.lines)
 
-        # Call _record_transcript at elapsed values 0..30 in steps of 5
-        # DIVIDER_INTERVAL=30: dividers expected at elapsed=0 and elapsed=30
-        for elapsed in [0, 5, 10, 15, 20, 25, 30]:
+        # Call _record_transcript at elapsed values 0..60 in steps of 10
+        # DIVIDER_INTERVAL=60: dividers expected at elapsed=0 and elapsed=60
+        for elapsed in [0, 10, 20, 30, 40, 50, 60]:
             app._record_transcript("word", batch_elapsed=elapsed)
         await pilot.pause()
 
         new_lines = [str(line) for line in captions.lines[initial_lines:]]
         divider_lines = [ln for ln in new_lines if "test_throttle.txt" in ln]
         assert len(divider_lines) == 2, (
-            f"Expected 2 dividers (at elapsed=0 and elapsed=30), "
+            f"Expected 2 dividers (at elapsed=0 and elapsed=60), "
             f"got {len(divider_lines)}: {divider_lines}"
         )
 
@@ -218,6 +218,7 @@ async def test_divider_appears_after_pause_resume(
     """After resume, _last_divider_elapsed is reset so the next batch gets a divider."""
     from textual.widgets import RichLog
 
+    from scarecrow import config
     from scarecrow.app import AppState, ScarecrowApp
 
     mock_recorder_cls.return_value = _mock_recorder()
@@ -247,7 +248,9 @@ async def test_divider_appears_after_pause_resume(
 
         # Simulate pause then resume (resets _last_divider_elapsed)
         app.state = AppState.PAUSED
-        app._last_divider_elapsed = -30  # mirrors action_toggle_pause reset
+        app._last_divider_elapsed = (
+            -config.DIVIDER_INTERVAL
+        )  # mirrors pause/resume reset
 
         # Now at elapsed=5 — should get a divider because timer was reset
         app._record_transcript("second", batch_elapsed=5)

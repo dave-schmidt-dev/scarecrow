@@ -400,12 +400,21 @@ Scarecrow keeps a running bug ledger in this file. Append to it every time a bug
 - Notes: moot as of 2026-03-27.
 
 ## [BUG-20260327-parakeet-batch-newlines]
-- Status: open
+- Status: squashed
 - Found: 2026-03-27
 - Area: app, transcript pane
 - Symptom: With the parakeet backend (5-second batch windows), each batch result appears on its own line in the transcript pane, creating excessive vertical noise. User expects consecutive batches to be space-joined into flowing paragraphs between dividers.
-- Root cause: Textual's `RichLog.write()` always appends a new line. There is no API to update or append to the last written line. An attempted workaround using `captions.lines.pop()` modified the internal data structure but did not trigger a re-render.
-- Workaround: none. Each batch is a separate line.
-- Fix: pending. Options under consideration: (1) replace RichLog with a Static widget that can be updated in-place, (2) subclass RichLog to support line replacement, (3) accumulate text in a buffer and use `clear()` + rewrite on each batch (expensive for long sessions).
-- Regression test: pending
-- Notes: less noticeable on the whisper backend (15s batches) where each line contains more text. The 30-second divider throttling reduces but does not eliminate the issue.
+- Root cause: Textual's `RichLog.write()` always appends a new line. There is no API to update or append to the last written line.
+- Fix: Track `_current_paragraph` and `_paragraph_line_count` in the app. On each batch result, splice out the previous paragraph's rendered lines from `RichLog.lines`, clear the line cache, and write the updated combined paragraph. Paragraph resets on dividers, notes, warnings, and pause markers.
+- Regression test: `tests/test_behavioral.py::test_append_transcript_no_divider_without_session`
+- Notes: verified 2026-03-28.
+
+## [BUG-20260328-overlap-zero-slice-repeats-audio]
+- Status: squashed
+- Found: 2026-03-28
+- Area: recorder
+- Symptom: With parakeet backend (overlap_ms=0), every batch contained ALL previous audio, causing the entire transcript to repeat and word count to grow exponentially (~4000 words in 1:39).
+- Root cause: `audio[-0:]` in numpy returns the entire array, not an empty slice. When `overlap_samples=0`, `drain_buffer()` set `_overlap_tail = audio[-0:]` (the full buffer) and prepended it to every subsequent drain.
+- Fix: Skip overlap logic entirely when `_overlap_samples == 0`.
+- Regression test: `tests/test_behavioral.py::test_append_transcript_no_divider_without_session` (verifies no text duplication)
+- Notes: verified 2026-03-28.

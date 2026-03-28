@@ -45,6 +45,7 @@ class AudioRecorder:
 
         # In-memory buffer for batch transcription
         self._audio_chunks: list[np.ndarray] = []
+        self._chunk_energies: list[float] = []  # RMS per chunk, for VAD
         self._buffer_lock = threading.Lock()
         self._overlap_tail: np.ndarray | None = None
         self._overlap_samples = int(sample_rate * overlap_ms / 1000)
@@ -112,9 +113,14 @@ class AudioRecorder:
                 self._peak_level = peak
                 if peak > self._held_peak:
                     self._held_peak = peak
+                # Compute RMS for VAD
+                rms = float(
+                    np.sqrt(np.mean((indata.astype(np.float32) / 32768.0) ** 2))
+                )
                 # Buffer for batch transcription
                 with self._buffer_lock:
                     self._audio_chunks.append(indata.copy())
+                    self._chunk_energies.append(rms)
                 # Feed to RealtimeSTT (or other consumer)
                 if self._on_audio is not None:
                     try:
@@ -150,9 +156,26 @@ class AudioRecorder:
 
         with self._buffer_lock:
             self._audio_chunks.clear()
+            self._chunk_energies.clear()
             self._overlap_tail = None
 
         self._stream.start()
+
+    def _finalize_audio(self, chunks: list[np.ndarray]) -> np.ndarray:
+        """Concatenate int16 chunks → float32, apply overlap tail."""
+        combined = np.concatenate(chunks, axis=0).squeeze()
+        audio = combined.astype(np.float32) / 32768.0
+
+        if self._overlap_tail is not None and self._overlap_samples > 0:
+            audio = np.concatenate([self._overlap_tail, audio])
+
+        if self._overlap_samples > 0:
+            if len(audio) > self._overlap_samples:
+                self._overlap_tail = audio[-self._overlap_samples :]
+            else:
+                self._overlap_tail = audio.copy()
+
+        return audio
 
     def drain_buffer(self) -> np.ndarray | None:
         """Return accumulated audio since last drain, or None if empty.
@@ -160,27 +183,90 @@ class AudioRecorder:
         Audio is returned as float32 normalized to [-1, 1] at 16kHz
         — ready for Whisper with no resampling needed.
 
-        A 500ms overlap from the previous drain is prepended so
-        Whisper has context at chunk boundaries (avoids dropped words).
+        Overlap from the previous drain is prepended so the model has
+        context at chunk boundaries (avoids dropped words).
         """
         with self._buffer_lock:
             if not self._audio_chunks:
                 return None
             chunks = self._audio_chunks.copy()
             self._audio_chunks.clear()
+            self._chunk_energies.clear()
 
-        combined = np.concatenate(chunks, axis=0).squeeze()
-        audio = combined.astype(np.float32) / 32768.0
+        return self._finalize_audio(chunks)
 
-        if self._overlap_tail is not None:
-            audio = np.concatenate([self._overlap_tail, audio])
+    def drain_to_silence(
+        self,
+        silence_threshold: float = config.VAD_SILENCE_THRESHOLD,
+        min_silence_ms: int = config.VAD_MIN_SILENCE_MS,
+        max_buffer_seconds: float = config.VAD_MAX_BUFFER_SECONDS,
+    ) -> np.ndarray | None:
+        """Drain audio up to the most recent silence boundary.
 
-        if len(audio) > self._overlap_samples:
-            self._overlap_tail = audio[-self._overlap_samples :]
-        else:
-            self._overlap_tail = audio.copy()
+        Scans chunk energies from the end to find a run of consecutive
+        silent blocks >= min_silence_ms. If found, drains up to the start
+        of that silence. If no silence is found and the buffer exceeds
+        max_buffer_seconds, does a hard drain of everything.
 
-        return audio
+        Returns None if the buffer is too short to act on.
+        """
+        with self._buffer_lock:
+            if not self._audio_chunks:
+                return None
+
+            n_chunks = len(self._audio_chunks)
+            # Estimate samples per chunk from first chunk
+            samples_per_chunk = len(self._audio_chunks[0])
+            total_samples = sum(len(c) for c in self._audio_chunks)
+            total_seconds = total_samples / self._sample_rate
+
+            # Need at least 0.5s of audio before we bother looking
+            if total_seconds < 0.5:
+                return None
+
+            # How many consecutive silent chunks needed
+            min_silence_samples = int(self._sample_rate * min_silence_ms / 1000)
+            min_silent_chunks = max(1, min_silence_samples // max(samples_per_chunk, 1))
+
+            # Scan from end backward for a silence run
+            silence_end = None
+            consecutive_silent = 0
+            for i in range(n_chunks - 1, -1, -1):
+                if self._chunk_energies[i] < silence_threshold:
+                    consecutive_silent += 1
+                    if consecutive_silent >= min_silent_chunks:
+                        # Drain up to the start of this silence run
+                        silence_start = i
+                        silence_end = silence_start
+                        break
+                else:
+                    consecutive_silent = 0
+
+            if silence_end is not None and silence_end > 0:
+                # Drain through the silence (include silent chunks so
+                # we don't clip words that fade into the silence gap)
+                drain_end = min(silence_end + consecutive_silent, n_chunks)
+                chunks = self._audio_chunks[:drain_end]
+                self._audio_chunks = self._audio_chunks[drain_end:]
+                self._chunk_energies = self._chunk_energies[drain_end:]
+            elif total_seconds >= max_buffer_seconds:
+                # Hard drain — continuous speech exceeded max
+                chunks = self._audio_chunks.copy()
+                self._audio_chunks.clear()
+                self._chunk_energies.clear()
+            else:
+                # Not enough silence yet, keep accumulating
+                return None
+
+        return self._finalize_audio(chunks)
+
+    @property
+    def buffer_seconds(self) -> float:
+        """Current buffer duration in seconds."""
+        with self._buffer_lock:
+            if not self._audio_chunks:
+                return 0.0
+            return sum(len(c) for c in self._audio_chunks) / self._sample_rate
 
     def pause(self) -> None:
         with self._lock:
