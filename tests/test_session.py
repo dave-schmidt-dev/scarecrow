@@ -1,5 +1,6 @@
 """Unit tests for Session."""
 
+import json
 import re
 import time
 from pathlib import Path
@@ -7,6 +8,11 @@ from pathlib import Path
 import pytest
 
 from scarecrow.session import Session
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    lines = path.read_text(encoding="utf-8").strip().splitlines()
+    return [json.loads(line) for line in lines]
 
 
 def test_creates_session_directory(tmp_path: Path) -> None:
@@ -38,49 +44,53 @@ def test_audio_path(tmp_path: Path) -> None:
 
 
 def test_transcript_path(tmp_path: Path) -> None:
-    """transcript_path returns transcript.txt inside the session directory."""
+    """transcript_path returns transcript.jsonl inside the session directory."""
     session = Session(base_dir=tmp_path)
-    assert session.transcript_path == session.session_dir / "transcript.txt"
-    assert session.transcript_path.name == "transcript.txt"
+    assert session.transcript_path == session.session_dir / "transcript.jsonl"
+    assert session.transcript_path.name == "transcript.jsonl"
     session.finalize()
 
 
-def test_append_sentence_creates_file(tmp_path: Path) -> None:
-    """append_sentence creates transcript.txt; header write at init creates it."""
+def test_append_event_creates_file(tmp_path: Path) -> None:
+    """append_event creates transcript.jsonl; session_start event at init creates it."""
     session = Session(base_dir=tmp_path)
-    # File is created at init time when the session header is written
+    # File is created at init time when the session_start event is written
     assert session.transcript_path.exists()
-    session.append_sentence("Hello world")
+    session.append_event({"type": "transcript", "text": "Hello world"})
     assert session.transcript_path.exists()
     session.finalize()
 
 
-def test_append_sentence_content(tmp_path: Path) -> None:
-    """append_sentence writes the text followed by a newline, after the header."""
+def test_append_event_content(tmp_path: Path) -> None:
+    """append_event writes a JSON line after the session_start event."""
     session = Session(base_dir=tmp_path)
-    session.append_sentence("Hello world")
-    lines = session.transcript_path.read_text(encoding="utf-8").splitlines()
-    # First line is the session header; second line is the appended sentence
-    assert lines[1] == "Hello world"
+    session.append_event({"type": "transcript", "text": "Hello world"})
+    events = _read_jsonl(session.transcript_path)
+    # First event is session_start; second is the appended event
+    assert events[1] == {"type": "transcript", "text": "Hello world"}
     session.finalize()
 
 
 def test_multiple_appends_one_per_line(tmp_path: Path) -> None:
-    """Multiple appends produce one sentence per line, after the header."""
+    """Multiple appends produce one JSON object per line, after the session_start."""
     session = Session(base_dir=tmp_path)
-    sentences = ["First sentence.", "Second sentence.", "Third sentence."]
-    for s in sentences:
-        session.append_sentence(s)
-    lines = session.transcript_path.read_text(encoding="utf-8").splitlines()
-    # First line is the session header; remaining lines are the appended sentences
-    assert lines[1:] == sentences
+    payloads = [
+        {"type": "transcript", "text": "First sentence."},
+        {"type": "transcript", "text": "Second sentence."},
+        {"type": "transcript", "text": "Third sentence."},
+    ]
+    for p in payloads:
+        session.append_event(p)
+    events = _read_jsonl(session.transcript_path)
+    # First event is session_start; remaining events are the appended ones
+    assert events[1:] == payloads
     session.finalize()
 
 
 def test_append_flushes_immediately(tmp_path: Path) -> None:
-    """append_sentence flushes so content is readable without closing."""
+    """append_event flushes so content is readable without closing."""
     session = Session(base_dir=tmp_path)
-    session.append_sentence("Flushed line")
+    session.append_event({"type": "transcript", "text": "Flushed line"})
     # Read file while it's still open (file handle not yet closed)
     content = session.transcript_path.read_text(encoding="utf-8")
     assert "Flushed line" in content
@@ -90,14 +100,14 @@ def test_append_flushes_immediately(tmp_path: Path) -> None:
 def test_finalize_closes_cleanly(tmp_path: Path) -> None:
     """finalize closes the file handle without error."""
     session = Session(base_dir=tmp_path)
-    session.append_sentence("Some text")
+    session.append_event({"type": "transcript", "text": "Some text"})
     session.finalize()
     # Calling finalize again should not raise
     session.finalize()
 
 
 def test_finalize_without_appending(tmp_path: Path) -> None:
-    """finalize works cleanly even if no sentences were appended."""
+    """finalize works cleanly even if no events were appended beyond session_start."""
     session = Session(base_dir=tmp_path)
     session.finalize()  # Should not raise
 
@@ -120,24 +130,27 @@ def test_unique_directories_for_different_sessions(tmp_path: Path) -> None:
     session2.finalize()
 
 
-def test_session_header_is_first_line(tmp_path: Path) -> None:
-    """The first line of the transcript starts with 'Session Start: '."""
+def test_session_header_is_first_event(tmp_path: Path) -> None:
+    """The first event in the transcript is a session_start JSON object."""
     session = Session(base_dir=tmp_path)
     session.finalize()
-    lines = session.transcript_path.read_text(encoding="utf-8").splitlines()
-    assert len(lines) >= 1
-    assert lines[0].startswith("Session Start: ")
+    events = _read_jsonl(session.transcript_path)
+    assert len(events) >= 1
+    assert events[0]["type"] == "session_start"
 
 
 def test_session_header_format(tmp_path: Path) -> None:
-    """The session header matches 'Session Start: YYYY-MM-DD HH:MM:SS'."""
+    """The session_start event has a timestamp in ISO 8601 format and session_dir."""
     session = Session(base_dir=tmp_path)
     session.finalize()
-    first_line = session.transcript_path.read_text(encoding="utf-8").splitlines()[0]
-    pattern = r"^Session Start: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$"
-    assert re.match(pattern, first_line), (
-        f"Header line {first_line!r} does not match expected format"
+    events = _read_jsonl(session.transcript_path)
+    first = events[0]
+    assert first["type"] == "session_start"
+    pattern = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$"
+    assert re.match(pattern, first["timestamp"]), (
+        f"session_start timestamp {first['timestamp']!r} does not match ISO 8601"
     )
+    assert "session_dir" in first
 
 
 # ---------------------------------------------------------------------------
@@ -145,69 +158,70 @@ def test_session_header_format(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_transcript_file_contains_all_appended_sentences(tmp_path: Path) -> None:
-    """All sentences appended to a session must appear in the file on disk."""
+def test_transcript_file_contains_all_appended_events(tmp_path: Path) -> None:
+    """All events appended to a session must appear in the file on disk."""
     session = Session(base_dir=tmp_path)
-    sentences = [
+    texts = [
         "First sentence here.",
         "Second sentence here.",
         "Third sentence here.",
     ]
-    for s in sentences:
-        session.append_sentence(s)
+    for t in texts:
+        session.append_event({"type": "transcript", "text": t})
     session.finalize()
 
     content = session.transcript_path.read_text(encoding="utf-8")
-    for s in sentences:
-        assert s in content, f"Expected sentence {s!r} not found in transcript"
+    for t in texts:
+        assert t in content, f"Expected text {t!r} not found in transcript"
 
 
-def test_transcript_file_has_session_start_header(tmp_path: Path) -> None:
-    """The transcript file must start with a 'Session Start:' header line."""
+def test_transcript_file_has_session_start_event(tmp_path: Path) -> None:
+    """The transcript file must start with a session_start event."""
     session = Session(base_dir=tmp_path)
-    session.append_sentence("Some content.")
+    session.append_event({"type": "transcript", "text": "Some content."})
     session.finalize()
 
-    lines = session.transcript_path.read_text(encoding="utf-8").splitlines()
-    assert lines[0].startswith("Session Start: "), (
-        f"First line must be a Session Start header; got: {lines[0]!r}"
+    events = _read_jsonl(session.transcript_path)
+    assert events[0]["type"] == "session_start", (
+        f"First event must be session_start; got: {events[0]!r}"
     )
 
 
-def test_transcript_file_has_session_end_header(tmp_path: Path) -> None:
-    """write_end_header writes a Session End footer."""
+def test_transcript_file_has_session_end_event(tmp_path: Path) -> None:
+    """write_end_header writes a session_end event."""
     session = Session(base_dir=tmp_path)
-    session.append_sentence("Some content.")
+    session.append_event({"type": "transcript", "text": "Some content."})
     session.write_end_header()
     session.finalize()
 
-    content = session.transcript_path.read_text(encoding="utf-8")
-    assert "Session End: " in content, (
-        "Transcript file must contain a Session End header after write_end_header()"
+    events = _read_jsonl(session.transcript_path)
+    end_events = [e for e in events if e.get("type") == "session_end"]
+    assert end_events, (
+        "Transcript file must contain a session_end event after write_end_header()"
     )
 
 
-def test_transcript_session_end_header_format(tmp_path: Path) -> None:
-    """Session End header must match 'Session End: YYYY-MM-DD HH:MM:SS'."""
+def test_transcript_session_end_event_format(tmp_path: Path) -> None:
+    """session_end event must have an ISO 8601 timestamp."""
     session = Session(base_dir=tmp_path)
     session.write_end_header()
     session.finalize()
 
-    lines = session.transcript_path.read_text(encoding="utf-8").splitlines()
-    end_lines = [ln for ln in lines if ln.startswith("Session End: ")]
-    assert end_lines, "No 'Session End:' line found in transcript"
-    pattern = r"^Session End: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$"
-    assert re.match(pattern, end_lines[0]), (
-        f"Session End line {end_lines[0]!r} does not match expected format"
+    events = _read_jsonl(session.transcript_path)
+    end_events = [e for e in events if e.get("type") == "session_end"]
+    assert end_events, "No session_end event found in transcript"
+    pattern = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$"
+    assert re.match(pattern, end_events[0]["timestamp"]), (
+        f"session_end timestamp {end_events[0]['timestamp']!r} does not match ISO 8601"
     )
 
 
 def test_transcript_content_order(tmp_path: Path) -> None:
-    """Sentences must appear in the file in the order they were appended."""
+    """Events must appear in the file in the order they were appended."""
     session = Session(base_dir=tmp_path)
-    session.append_sentence("Alpha.")
-    session.append_sentence("Beta.")
-    session.append_sentence("Gamma.")
+    session.append_event({"type": "transcript", "text": "Alpha."})
+    session.append_event({"type": "transcript", "text": "Beta."})
+    session.append_event({"type": "transcript", "text": "Gamma."})
     session.finalize()
 
     content = session.transcript_path.read_text(encoding="utf-8")
@@ -215,7 +229,7 @@ def test_transcript_content_order(tmp_path: Path) -> None:
     beta_pos = content.index("Beta.")
     gamma_pos = content.index("Gamma.")
     assert alpha_pos < beta_pos < gamma_pos, (
-        "Sentences must appear in the file in the order they were appended"
+        "Events must appear in the file in the order they were appended"
     )
 
 
@@ -280,14 +294,14 @@ def test_final_audio_path_falls_back_to_wav(tmp_path: Path) -> None:
     session.finalize()
 
 
-def test_append_sentence_handles_open_failure(tmp_path: Path) -> None:
-    """append_sentence must catch OSError from open() and set write_failed."""
+def test_append_event_handles_open_failure(tmp_path: Path) -> None:
+    """append_event must catch OSError from open() and set write_failed."""
     from unittest.mock import patch
 
     session = Session(base_dir=tmp_path)
     # Close the transcript file so the internal handle is None.
     session.finalize()
-    # Reset internal state so the next append_sentence call tries to open again.
+    # Reset internal state so the next append_event call tries to open again.
     session._finalized = False
     session._transcript_file = None
 
@@ -300,7 +314,9 @@ def test_append_sentence_handles_open_failure(tmp_path: Path) -> None:
         return original_open(self, *args, **kwargs)
 
     with patch.object(Path, "open", failing_open):
-        session.append_sentence("this should fail silently")
+        session.append_event(
+            {"type": "transcript", "text": "this should fail silently"}
+        )
 
     assert session.write_failed is True, (
         "write_failed must be True after open() raises OSError"

@@ -287,13 +287,18 @@ class ScarecrowApp(App[None]):
             f"[bold yellow][WARNING][/bold yellow]"
             f" [dim]{timestamp}[/dim] \u2014 {message}"
         )
-        file_line = f"[WARNING] {timestamp} -- {message}"
         self._current_paragraph = ""
         self._paragraph_line_count = 0
         with contextlib.suppress(NoMatches):
             self.query_one("#captions", RichLog).write(styled_line)
         if self._session is not None:
-            self._session.append_sentence(file_line)
+            self._session.append_event(
+                {
+                    "type": "warning",
+                    "timestamp": timestamp,
+                    "text": message,
+                }
+            )
 
     def _check_recorder_warnings(self) -> None:
         """Poll recorder and session for warnings; write to transcript once."""
@@ -503,8 +508,14 @@ class ScarecrowApp(App[None]):
 
         if self._session is not None:
             if divider is not None:
-                self._session.append_sentence(f"\n{divider}")
-            self._session.append_sentence(text)
+                self._session.append_event({"type": "divider", "elapsed": elapsed})
+            self._session.append_event(
+                {
+                    "type": "transcript",
+                    "elapsed": elapsed,
+                    "text": text,
+                }
+            )
 
         self._word_count += len(text.split())
         if include_ui:
@@ -593,7 +604,12 @@ class ScarecrowApp(App[None]):
         captions = self.query_one("#captions", RichLog)
         captions.write(f"[dim]{marker}[/dim]")
         if self._session is not None:
-            self._session.append_sentence(f"\n{marker}")
+            self._session.append_event(
+                {
+                    "type": "pause",
+                    "elapsed": self._elapsed,
+                }
+            )
 
     def _start_recording(self) -> None:
         if self.state is not AppState.IDLE:
@@ -866,7 +882,14 @@ class ScarecrowApp(App[None]):
             log.error("Note pane unavailable: %s", file_line)
 
         if self._session is not None:
-            self._session.append_sentence(file_line)
+            self._session.append_event(
+                {
+                    "type": "note",
+                    "tag": tag,
+                    "timestamp": timestamp,
+                    "text": raw,
+                }
+            )
 
         self._note_counts[tag] = self._note_counts.get(tag, 0) + 1
         self._word_count += len(raw.split())

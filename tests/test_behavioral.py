@@ -23,6 +23,13 @@ from scarecrow.app import (
 # ---------------------------------------------------------------------------
 
 
+def _read_jsonl(path: Path) -> list[dict]:
+    import json
+
+    lines = path.read_text(encoding="utf-8").strip().splitlines()
+    return [json.loads(line) for line in lines]
+
+
 def _mock_transcriber():
     """Return a mock batch-only Transcriber."""
     mock = MagicMock()
@@ -86,7 +93,7 @@ async def test_append_transcript_writes_divider_with_timestamp_and_path() -> Non
 
         # Set up a mock session with a known transcript path
         mock_session = MagicMock()
-        mock_session.transcript_path = Path("/tmp/test_session.txt")
+        mock_session.transcript_path = Path("/tmp/test_session.jsonl")
         app._session = mock_session
         app._elapsed = 125  # 00:02:05
 
@@ -102,7 +109,7 @@ async def test_append_transcript_writes_divider_with_timestamp_and_path() -> Non
         # Collect all rendered plain text from the new lines
         new_lines_text = " ".join(str(line) for line in captions.lines[initial_lines:])
         assert "00:02:05" in new_lines_text, "Divider must contain timestamp"
-        assert "test_session.txt" in new_lines_text, "Divider must contain path"
+        assert "test_session.jsonl" in new_lines_text, "Divider must contain path"
 
 
 async def test_append_transcript_no_divider_without_session() -> None:
@@ -263,7 +270,7 @@ async def test_shutdown_writes_shutting_down_message(
     mock_session = MagicMock()
     mock_session.session_dir = Path("/tmp/test-session")
     mock_session.audio_path = Path("/tmp/test-session/audio.wav")
-    mock_session.transcript_path = Path("/tmp/test-session/transcript.txt")
+    mock_session.transcript_path = Path("/tmp/test-session/transcript.jsonl")
     mock_session_cls.return_value = mock_session
 
     async with _app(with_transcriber=True).run_test() as pilot:
@@ -668,8 +675,9 @@ async def test_flush_final_batch_writes_to_transcript_file(tmp_path: Path) -> No
         app._stop_recording()
         await pilot.pause()
 
-    content = real_session.transcript_path.read_text(encoding="utf-8")
-    assert "final transcribed text" in content
+    events = _read_jsonl(real_session.transcript_path)
+    texts = [e.get("text", "") for e in events if e.get("type") == "transcript"]
+    assert any("final transcribed text" in t for t in texts)
 
 
 async def test_flush_final_batch_disables_async_callback_path(tmp_path: Path) -> None:
@@ -699,8 +707,9 @@ async def test_flush_final_batch_disables_async_callback_path(tmp_path: Path) ->
         app._stop_recording()
         await pilot.pause()
 
-    content = real_session.transcript_path.read_text(encoding="utf-8")
-    assert content.count("one final line") == 1
+    events = _read_jsonl(real_session.transcript_path)
+    texts = [e.get("text", "") for e in events if e.get("type") == "transcript"]
+    assert texts.count("one final line") == 1
 
 
 # ---------------------------------------------------------------------------
@@ -725,8 +734,9 @@ def test_ctrl_c_cleanup_after_exit_flushes_and_finalizes(tmp_path: Path) -> None
 
     app.cleanup_after_exit()
 
-    content = real_session.transcript_path.read_text(encoding="utf-8")
-    assert "ctrl c text" in content
+    events = _read_jsonl(real_session.transcript_path)
+    texts = [e.get("text", "") for e in events if e.get("type") == "transcript"]
+    assert any("ctrl c text" in t for t in texts)
     mock_recorder.stop.assert_called_once()
     mock_transcriber.shutdown.assert_called_once_with(timeout=5)
     assert app._session is None
@@ -851,8 +861,9 @@ def test_wait_for_batch_workers_captures_completed_text(tmp_path: Path) -> None:
     app._submit_batch_transcription(np.zeros(16000), batch_elapsed=30)
     app.cleanup_after_exit()
 
-    content = real_session.transcript_path.read_text(encoding="utf-8")
-    assert "inflight batch text" in content
+    events = _read_jsonl(real_session.transcript_path)
+    texts = [e.get("text", "") for e in events if e.get("type") == "transcript"]
+    assert any("inflight batch text" in t for t in texts)
     assert app._session is None
 
 
@@ -866,14 +877,14 @@ def test_session_finalize_idempotent_after_interrupt(tmp_path: Path) -> None:
     from scarecrow.session import Session
 
     session = Session(base_dir=tmp_path)
-    session.append_sentence("before interrupt")
+    session.append_event({"type": "transcript", "text": "before interrupt"})
 
     # Simulate KeyboardInterrupt between close() and _transcript_file = None
     session._finalized = True
     session.finalize()
 
-    # append_sentence after finalize must be a no-op
-    session.append_sentence("after finalize")
+    # append_event after finalize must be a no-op
+    session.append_event({"type": "transcript", "text": "after finalize"})
     content = session.transcript_path.read_text(encoding="utf-8")
     assert "before interrupt" in content
     assert "after finalize" not in content
@@ -918,6 +929,30 @@ def test_cleanup_after_exit_shuts_down_batch_executor() -> None:
 
     mock_executor.shutdown.assert_called_once_with(wait=False, cancel_futures=False)
     assert app._batch_executor is None
+
+
+# ---------------------------------------------------------------------------
+# RichLog pruning — UI must never hold more than RICHLOG_MAX_LINES
+# ---------------------------------------------------------------------------
+
+
+async def test_richlog_pruned_to_max_lines() -> None:
+    """RichLog must not exceed RICHLOG_MAX_LINES after transcript writes."""
+    from scarecrow.app import RICHLOG_MAX_LINES
+
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        app._session = None
+        captions = app.query_one("#captions", RichLog)
+
+        # Write more than RICHLOG_MAX_LINES entries
+        for i in range(RICHLOG_MAX_LINES + 100):
+            app._append_transcript(f"line {i}")
+        await pilot.pause()
+
+        assert len(captions.lines) <= RICHLOG_MAX_LINES
 
 
 # ---------------------------------------------------------------------------
@@ -1069,9 +1104,12 @@ async def test_note_submission_writes_to_session(tmp_path: Path) -> None:
         app._submit_note()
         await pilot.pause()
 
-    content = real_session.transcript_path.read_text(encoding="utf-8")
-    assert "[TASK]" in content
-    assert "save this note" in content
+    events = _read_jsonl(real_session.transcript_path)
+    note_events = [e for e in events if e.get("type") == "note"]
+    assert any(
+        e.get("tag") == "TASK" and "save this note" in e.get("text", "")
+        for e in note_events
+    )
 
 
 async def test_enter_submits_note() -> None:
@@ -1191,7 +1229,7 @@ async def test_end_to_end_recording_session_text_appears_in_captions(
     mock_recorder_cls.return_value = mock_recorder
 
     mock_session = MagicMock()
-    mock_session.transcript_path = Path("/tmp/e2e_session.txt")
+    mock_session.transcript_path = Path("/tmp/e2e_session.jsonl")
     mock_session_cls.return_value = mock_session
 
     transcriber = _mock_transcriber()
@@ -1213,15 +1251,15 @@ async def test_end_to_end_recording_session_text_appears_in_captions(
 
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
-async def test_end_to_end_session_append_sentence_called(
+async def test_end_to_end_session_append_event_called(
     mock_session_cls, mock_recorder_cls
 ) -> None:
-    """_append_transcript calls session.append_sentence."""
+    """_append_transcript calls session.append_event."""
     mock_recorder = _mock_recorder()
     mock_recorder_cls.return_value = mock_recorder
 
     mock_session = MagicMock()
-    mock_session.transcript_path = Path("/tmp/e2e_session2.txt")
+    mock_session.transcript_path = Path("/tmp/e2e_session2.jsonl")
     mock_session_cls.return_value = mock_session
 
     transcriber = _mock_transcriber()
@@ -1235,9 +1273,9 @@ async def test_end_to_end_session_append_sentence_called(
         app._append_transcript("verified sentence text")
         await pilot.pause()
 
-        # append_sentence is called once for the header (Session Start) and once for
-        # the divider and once for the actual text; just verify the text made it in.
-        calls = [str(c) for c in mock_session.append_sentence.call_args_list]
+        # append_event is called for the divider and for the actual text;
+        # just verify the text event made it in.
+        calls = [str(c) for c in mock_session.append_event.call_args_list]
         assert any("verified sentence text" in c for c in calls)
 
 

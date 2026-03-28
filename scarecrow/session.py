@@ -1,5 +1,6 @@
 """Session management — timestamped directories and transcript files."""
 
+import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -22,8 +23,13 @@ class Session:
         self._transcript_file = None
         self._finalized = False
         self._write_failed: bool = False
-        header_timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
-        self.append_sentence(f"Session Start: {header_timestamp}")
+        self.append_event(
+            {
+                "type": "session_start",
+                "timestamp": now.isoformat(timespec="seconds"),
+                "session_dir": str(self._session_dir),
+            }
+        )
 
     @property
     def session_dir(self) -> Path:
@@ -45,22 +51,22 @@ class Session:
 
     @property
     def transcript_path(self) -> Path:
-        """Returns path to transcript.txt in session dir."""
-        return self._session_dir / "transcript.txt"
+        """Returns path to transcript.jsonl in session dir."""
+        return self._session_dir / "transcript.jsonl"
 
     @property
     def write_failed(self) -> bool:
         """True if a transcript write has failed (e.g. disk full)."""
         return self._write_failed
 
-    def append_sentence(self, text: str) -> None:
-        """Appends a line to transcript.txt, flushes immediately."""
+    def append_event(self, event: dict) -> None:
+        """Appends a JSON event to transcript.jsonl, flushes immediately."""
         if self._finalized:
             return
         try:
             if self._transcript_file is None:
                 self._transcript_file = self.transcript_path.open("a", encoding="utf-8")
-            self._transcript_file.write(text + "\n")
+            self._transcript_file.write(json.dumps(event) + "\n")
             self._transcript_file.flush()
         except OSError:
             log.exception("Failed to write to transcript file")
@@ -93,8 +99,8 @@ class Session:
 
     def write_end_header(self) -> None:
         """Write session end timestamp to transcript."""
-        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.append_sentence(f"Session End: {ts}")
+        ts = datetime.now().isoformat(timespec="seconds")
+        self.append_event({"type": "session_end", "timestamp": ts})
 
     def finalize(self) -> None:
         """Closes any open file handles."""

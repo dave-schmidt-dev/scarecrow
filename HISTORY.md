@@ -1,5 +1,11 @@
 # History
 
+## 2026-03-28 (JSONL transcript format)
+
+- **Switched transcript format from plain text to JSON Lines:** Each event is a JSON object on its own line in `transcript.jsonl`. Replaces `Session.append_sentence(str)` with `Session.append_event(dict)`. Events: `session_start`, `session_end`, `transcript`, `divider`, `pause`, `note`, `warning`.
+- **Updated all callers in `app.py`:** `_record_transcript`, `_warn_transcript`, `_submit_note`, and `_write_pause_marker` now emit typed JSON events instead of formatted plain-text lines. UI rendering is unchanged.
+- **Updated all tests:** `test_session.py` and `test_behavioral.py` rewritten to parse JSONL and assert on event types and fields.
+
 ## 2026-03-28 (batch transcription retry with graceful degradation)
 
 - **Added retry logic to `transcribe_batch()`:** On failure, retries up to 3 times total (1 initial + 2 retries) with a 0.5s delay between attempts before giving up.
