@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import signal
 from pathlib import Path
 
@@ -24,6 +25,10 @@ def _resample(audio: np.ndarray, src_sr: int, dst_sr: int = 16000) -> np.ndarray
     return np.interp(new_times, old_times, audio).astype(np.float32)
 
 
+@pytest.mark.skipif(
+    not importlib.util.find_spec("parakeet_mlx"),
+    reason="parakeet_mlx not installed",
+)
 def test_batch_transcription_with_real_audio_fixture() -> None:
     """Feed audio through the batch path with actual models.
 
@@ -31,7 +36,6 @@ def test_batch_transcription_with_real_audio_fixture() -> None:
     to synthetic audio so the pipeline mechanics are still exercised on
     machines without the fixture.
     """
-    pytest.importorskip("parakeet_mlx")
 
     batches: list[str] = []
     errors: list[tuple[str, str]] = []

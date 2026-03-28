@@ -1,7 +1,6 @@
 """Manual verification script — records 5 seconds of audio.
 
-Also demonstrates drain_buffer(), which the app uses for batch transcription
-with medium.en every 30 seconds.
+Also demonstrates drain_buffer(), which the app uses for VAD-based batch transcription.
 
 Run with:
     uv run python scripts/test_audio_capture.py

@@ -123,12 +123,13 @@ def test_parakeet_model_lazy_import() -> None:
     assert manager._parakeet_model is None
 
     mock_model = MagicMock()
+    mock_parakeet = MagicMock()
+    mock_parakeet.from_pretrained.return_value = mock_model
 
-    with patch("scarecrow.runtime.ModelManager.get_parakeet_model") as mock_get:
-        mock_get.return_value = mock_model
+    with patch.dict("sys.modules", {"parakeet_mlx": mock_parakeet}):
         result = manager.get_parakeet_model()
 
-    mock_get.assert_called_once()
+    mock_parakeet.from_pretrained.assert_called_once()
     assert result is mock_model
 
 

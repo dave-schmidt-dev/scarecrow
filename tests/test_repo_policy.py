@@ -86,3 +86,57 @@ def test_check_bugs_regression_refs_rejects_manual_only(tmp_path: Path) -> None:
         check_repo_policy.REPO_ROOT = original_root
 
     assert failures == ["[BUG-demo]: squashed bug must name a regression test."]
+
+
+def test_check_bugs_regression_refs_rejects_script_command(tmp_path: Path) -> None:
+    """A script command (not a test path) must be rejected as a regression test."""
+    original_root = check_repo_policy.REPO_ROOT
+    try:
+        check_repo_policy.REPO_ROOT = tmp_path
+        (tmp_path / "BUGS.md").write_text(
+            "## [BUG-demo]\n"
+            "- Status: squashed\n"
+            "- Regression test: scripts/check_repo_policy.py --staged-only\n",
+            encoding="utf-8",
+        )
+        failures = check_repo_policy.check_bugs_regression_refs()
+    finally:
+        check_repo_policy.REPO_ROOT = original_root
+
+    assert failures == ["[BUG-demo]: squashed bug must name a regression test."]
+
+
+def test_check_bugs_regression_refs_rejects_informal_text(tmp_path: Path) -> None:
+    """Informal validation prose must be rejected as a regression test."""
+    original_root = check_repo_policy.REPO_ROOT
+    try:
+        check_repo_policy.REPO_ROOT = tmp_path
+        (tmp_path / "BUGS.md").write_text(
+            "## [BUG-demo]\n"
+            "- Status: squashed\n"
+            "- Regression test: not a formal test — validated by crash absence\n",
+            encoding="utf-8",
+        )
+        failures = check_repo_policy.check_bugs_regression_refs()
+    finally:
+        check_repo_policy.REPO_ROOT = original_root
+
+    assert failures == ["[BUG-demo]: squashed bug must name a regression test."]
+
+
+def test_check_bugs_regression_refs_skips_wont_fix(tmp_path: Path) -> None:
+    """Won't-fix bugs are exempt from regression test requirements."""
+    original_root = check_repo_policy.REPO_ROOT
+    try:
+        check_repo_policy.REPO_ROOT = tmp_path
+        (tmp_path / "BUGS.md").write_text(
+            "## [BUG-demo]\n"
+            "- Status: won't fix\n"
+            "- Regression test: n/a (component removed)\n",
+            encoding="utf-8",
+        )
+        failures = check_repo_policy.check_bugs_regression_refs()
+    finally:
+        check_repo_policy.REPO_ROOT = original_root
+
+    assert failures == []

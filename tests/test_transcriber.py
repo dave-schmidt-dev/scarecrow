@@ -121,7 +121,9 @@ def test_get_parakeet_model_thread_safety() -> None:
         barrier.wait()
         results[idx] = manager.get_parakeet_model()
 
-    with patch("parakeet_mlx.from_pretrained", side_effect=counting_from_pretrained):
+    mock_parakeet = MagicMock()
+    mock_parakeet.from_pretrained = counting_from_pretrained
+    with patch.dict("sys.modules", {"parakeet_mlx": mock_parakeet}):
         t1 = threading.Thread(target=worker, args=(0,))
         t2 = threading.Thread(target=worker, args=(1,))
         t1.start()

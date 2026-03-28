@@ -65,6 +65,8 @@ def check_bugs_regression_refs() -> list[str]:
     sections = re.split(r"(?m)^## ", text)
     for raw in sections[1:]:
         title, _, body = raw.partition("\n")
+        # Only squashed bugs require a regression test reference.
+        # Won't-fix bugs are exempt — they have no fix to regress.
         if "- Status: squashed" not in body:
             continue
         match = re.search(r"(?mi)^- Regression test:\s*(.+)$", body)
@@ -72,13 +74,11 @@ def check_bugs_regression_refs() -> list[str]:
             failures.append(f"{title.strip()}: missing regression test entry.")
             continue
         value = match.group(1).strip().lower()
-        reject = {"pending", "none", "n/a"}
+        # A valid reference must contain a test path (tests/) or test node (::).
+        # Everything else — plain English, script commands, "n/a", "none",
+        # "pending", "manual", "not a formal test" — is rejected.
         has_test_ref = "::" in value or "tests/" in value
-        if (
-            value in reject
-            or any(k in value for k in reject)
-            or (not has_test_ref and "manual" in value)
-        ):
+        if not has_test_ref:
             failures.append(
                 f"{title.strip()}: squashed bug must name a regression test."
             )

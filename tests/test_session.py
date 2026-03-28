@@ -217,3 +217,35 @@ def test_transcript_content_order(tmp_path: Path) -> None:
     assert alpha_pos < beta_pos < gamma_pos, (
         "Sentences must appear in the file in the order they were appended"
     )
+
+
+# ---------------------------------------------------------------------------
+# Session I/O failure handling
+# ---------------------------------------------------------------------------
+
+
+def test_append_sentence_handles_open_failure(tmp_path: Path) -> None:
+    """append_sentence must catch OSError from open() and set write_failed."""
+    from unittest.mock import patch
+
+    session = Session(base_dir=tmp_path)
+    # Close the transcript file so the internal handle is None.
+    session.finalize()
+    # Reset internal state so the next append_sentence call tries to open again.
+    session._finalized = False
+    session._transcript_file = None
+
+    # Patch the builtin open used inside pathlib so that Path.open raises.
+    original_open = Path.open
+
+    def failing_open(self, *args, **kwargs):
+        if self == session.transcript_path:
+            raise OSError("permission denied")
+        return original_open(self, *args, **kwargs)
+
+    with patch.object(Path, "open", failing_open):
+        session.append_sentence("this should fail silently")
+
+    assert session.write_failed is True, (
+        "write_failed must be True after open() raises OSError"
+    )

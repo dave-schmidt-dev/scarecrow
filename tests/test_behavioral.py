@@ -1507,3 +1507,238 @@ async def test_flush_noop_when_not_recording() -> None:
         await pilot.pause()
 
         mock_rec.drain_buffer.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Shutdown race: _ignore_batch_results set before _wait_for_batch_workers
+# ---------------------------------------------------------------------------
+
+
+def test_ignore_batch_results_set_before_wait() -> None:
+    """_ignore_batch_results must be True by the time _wait_for_batch_workers runs.
+
+    If the flag is set after the wait, a late callback from a worker can still
+    call _post_to_ui and duplicate text already captured from the future result.
+    """
+    flag_at_call_time: list[bool] = []
+
+    def fake_wait():
+        flag_at_call_time.append(app._ignore_batch_results)
+        return (True, [])
+
+    # Use a ready transcriber so cleanup_after_exit doesn't short-circuit
+    app = ScarecrowApp(transcriber=_mock_transcriber())
+    app._ignore_batch_results = False
+    app._wait_for_batch_workers = fake_wait  # type: ignore[method-assign]
+
+    app.cleanup_after_exit()
+
+    assert flag_at_call_time, "_wait_for_batch_workers was never called"
+    assert flag_at_call_time[0] is True, (
+        "_ignore_batch_results was False when _wait_for_batch_workers ran; "
+        "late callbacks can still duplicate text"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Shutdown error path: _flush_final_batch handles transcription errors locally
+# ---------------------------------------------------------------------------
+
+
+def test_flush_final_batch_handles_transcription_error() -> None:
+    """_flush_final_batch must catch transcription errors and surface them via
+    _show_error rather than letting them propagate through the callback path."""
+    import numpy as np
+
+    mock_recorder = _mock_recorder()
+    mock_recorder.drain_buffer.return_value = np.zeros(16000, dtype=np.float32)
+
+    transcriber = _mock_transcriber()
+    transcriber.transcribe_batch.side_effect = RuntimeError("GPU OOM")
+
+    app = ScarecrowApp(transcriber=transcriber)
+    app._audio_recorder = mock_recorder
+
+    errors: list[str] = []
+    app._show_error = lambda msg: errors.append(msg)  # type: ignore[method-assign]
+
+    # Must not raise
+    app._flush_final_batch(include_ui=True)
+
+    assert len(errors) == 1
+    assert "GPU OOM" in errors[0]
+
+
+# ---------------------------------------------------------------------------
+# Session I/O startup failure handling
+# ---------------------------------------------------------------------------
+
+
+@patch("scarecrow.app.Session")
+async def test_start_recording_handles_session_creation_failure(
+    mock_session_cls,
+) -> None:
+    """Session creation failure must call _show_error and leave state as IDLE."""
+    mock_session_cls.side_effect = OSError("disk full")
+
+    app = ScarecrowApp(transcriber=_mock_transcriber())
+    app._preflight_check = lambda: False  # type: ignore[method-assign]
+    async with app.run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        app._preflight_check = lambda: True  # type: ignore[method-assign]
+
+        error_messages: list[str] = []
+        original_show_error = app._show_error
+
+        def track_error(msg: str, **kwargs) -> None:
+            error_messages.append(msg)
+            original_show_error(msg, **kwargs)
+
+        app._show_error = track_error  # type: ignore[method-assign]
+
+        app._start_recording()
+        await pilot.pause()
+
+        assert app.state is AppState.IDLE, (
+            "State must remain IDLE after session failure"
+        )
+        assert app._session is None, "_session must not be set after failure"
+        assert error_messages, (
+            "_show_error must be called after session creation failure"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Audit gap: _preflight_check failure paths
+# ---------------------------------------------------------------------------
+
+
+@patch("sounddevice.query_devices")
+async def test_preflight_check_shows_error_when_no_input_devices(
+    mock_qd,
+) -> None:
+    """_preflight_check must return False and show error when no audio input found."""
+    mock_qd.return_value = [{"max_input_channels": 0, "name": "dummy output only"}]
+
+    mock_transcriber = MagicMock()
+    mock_transcriber.is_ready = True
+
+    app = ScarecrowApp(transcriber=mock_transcriber)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        result = app._preflight_check()
+
+    assert result is False
+    assert app._status_is_error is True
+    assert "No audio input" in app._status_message
+
+
+@patch("sounddevice.query_devices")
+async def test_preflight_check_shows_error_when_device_query_fails(
+    mock_qd,
+) -> None:
+    """_preflight_check must return False and show error when query_devices raises."""
+    mock_qd.side_effect = OSError("no audio subsystem")
+
+    mock_transcriber = MagicMock()
+    mock_transcriber.is_ready = True
+
+    app = ScarecrowApp(transcriber=mock_transcriber)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        result = app._preflight_check()
+
+    assert result is False
+    assert app._status_is_error is True
+    assert "Could not query" in app._status_message
+
+
+# ---------------------------------------------------------------------------
+# Audit gap: _check_recorder_warnings surfaces recorder warnings
+# ---------------------------------------------------------------------------
+
+
+async def test_check_recorder_warnings_surfaces_warning() -> None:
+    """_check_recorder_warnings must write recorder warnings to the transcript pane."""
+    app = ScarecrowApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        mock_rec = MagicMock()
+        mock_rec._last_warning = "Audio input overflow"
+        mock_rec._disk_write_failed = False
+        app._audio_recorder = mock_rec
+        app._session = None
+
+        captions = app.query_one("#captions", RichLog)
+        initial_lines = len(captions.lines)
+
+        app._check_recorder_warnings()
+        await pilot.pause()
+
+        assert len(captions.lines) > initial_lines
+        text = " ".join(str(line) for line in captions.lines[initial_lines:])
+        assert "Audio input overflow" in text
+        assert mock_rec._last_warning is None  # consumed
+
+
+# ---------------------------------------------------------------------------
+# Audit gap: action_pause handles device-loss exceptions from stream.pause/resume
+# ---------------------------------------------------------------------------
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_pause_handles_stream_stop_failure(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """action_pause must not crash if recorder.pause() raises (e.g. device lost)."""
+    mock_rec = _mock_recorder()
+    mock_rec.pause.side_effect = OSError("device disconnected")
+    mock_recorder_cls.return_value = mock_rec
+    mock_session_cls.return_value = MagicMock()
+
+    app = ScarecrowApp(transcriber=_mock_transcriber())
+    app._preflight_check = lambda: True  # type: ignore[method-assign]
+    async with app.run_test() as pilot:
+        app._start_recording()
+        await pilot.pause(delay=0.3)
+        assert app.state is AppState.RECORDING
+
+        # Must not raise
+        app.action_pause()
+        await pilot.pause()
+
+        # State transitions to PAUSED regardless
+        assert app.state is AppState.PAUSED
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_resume_handles_stream_start_failure(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """action_pause (resume branch) must not crash if recorder.resume() raises."""
+    mock_rec = _mock_recorder()
+    mock_rec.resume.side_effect = OSError("device gone")
+    mock_recorder_cls.return_value = mock_rec
+    mock_session_cls.return_value = MagicMock()
+
+    app = ScarecrowApp(transcriber=_mock_transcriber())
+    app._preflight_check = lambda: True  # type: ignore[method-assign]
+    async with app.run_test() as pilot:
+        app._start_recording()
+        await pilot.pause(delay=0.3)
+
+        # Pause first (recorder.pause works fine here)
+        mock_rec.pause.side_effect = None
+        app.action_pause()
+        await pilot.pause()
+        assert app.state is AppState.PAUSED
+
+        # Now resume — recorder.resume raises
+        app.action_pause()
+        await pilot.pause()
+
+        # State transitions to RECORDING regardless
+        assert app.state is AppState.RECORDING

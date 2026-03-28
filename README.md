@@ -112,7 +112,7 @@ The TUI shows:
 
 - Microphone is released (system mic indicator turns off)
 - Buffered audio is transcribed immediately before pausing
-- "Recording paused" markers are written to the transcript pane and file every 15s
+- A "Recording paused" marker is written to the transcript pane and file
 - Elapsed timer continues running (tracks total session time)
 - On resume, batch countdown resets for clean intervals
 
@@ -130,7 +130,7 @@ On a clean quit, Scarecrow routes shutdown through `app.cleanup_after_exit()` to
 - wait for any in-flight batch transcription to finish and capture its text directly from the future
 - drain and transcribe the final buffered audio window
 - abandon the batch executor if a worker times out, ignore late batch callbacks, and continue shutdown
-- shut down the batch executor (5-second timeout)
+- shut down the batch executor (non-blocking)
 - flush and close the session transcript file
 
 Ctrl+C uses the same cleanup path, so the final buffered batch is flushed before the session closes.
@@ -139,7 +139,6 @@ Ctrl+C uses the same cleanup path, so the final buffered batch is flushed before
 
 On launch, Scarecrow prints:
 - Which model is loading with timing
-- Model cache locations (or whether they need downloading)
 - Where recordings and transcripts are saved
 
 The parakeet model is preloaded during the prepare phase before the TUI launches, so the first batch transcription fires immediately without a cold-load delay. Models run in offline mode (`HF_HUB_OFFLINE=1`) to avoid network stalls. Debug logs are written to `~/.cache/scarecrow/debug.log`.

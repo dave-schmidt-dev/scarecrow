@@ -17,6 +17,7 @@ from datetime import datetime
 from enum import Enum, auto
 from typing import TYPE_CHECKING, ClassVar
 
+from rich.markup import escape
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -185,7 +186,7 @@ class ScarecrowApp(App[None]):
             wrap=True,
             min_width=0,
         )
-        startup_hint = "Enter to start recording"
+        startup_hint = "Starting\u2026"
         yield Static(
             startup_hint,
             id="notes-label",
@@ -473,9 +474,9 @@ class ScarecrowApp(App[None]):
 
                 # Append to current paragraph and replace in RichLog
                 if self._current_paragraph:
-                    self._current_paragraph += " " + text
+                    self._current_paragraph += " " + escape(text)
                 else:
-                    self._current_paragraph = text
+                    self._current_paragraph = escape(text)
 
                 # Remove previous paragraph lines, then write updated block
                 if self._paragraph_line_count > 0:
@@ -504,11 +505,17 @@ class ScarecrowApp(App[None]):
             return
 
         batch_elapsed = self._batch_window_start
-        text = self._transcriber.transcribe_batch(
-            audio,
-            batch_elapsed,
-            emit_callback=False,
-        )
+        try:
+            text = self._transcriber.transcribe_batch(
+                audio,
+                batch_elapsed,
+                emit_callback=False,
+            )
+        except Exception as exc:
+            log.exception("Final batch transcription failed during shutdown")
+            if include_ui:
+                self._show_error(f"Final batch transcription failed: {exc}")
+            return
         if text:
             self._record_transcript(
                 text,
@@ -581,7 +588,13 @@ class ScarecrowApp(App[None]):
 
         self._bind_callbacks()
         self._ignore_batch_results = False
-        self._session = Session(base_dir=config.DEFAULT_RECORDINGS_DIR)
+        try:
+            self._session = Session(base_dir=config.DEFAULT_RECORDINGS_DIR)
+        except Exception as exc:
+            log.exception("Failed to create recording session directory")
+            self._show_error(f"Could not create session: {exc}")
+            return
+
         self._audio_recorder = AudioRecorder(
             output_path=self._session.audio_path,
             sample_rate=config.SAMPLE_RATE,
@@ -639,7 +652,11 @@ class ScarecrowApp(App[None]):
             self._vad_transcribe()
             self.state = AppState.PAUSED
             if self._audio_recorder is not None:
-                self._audio_recorder.pause()
+                try:
+                    self._audio_recorder.pause()
+                except Exception as exc:
+                    log.exception("Failed to pause audio recorder")
+                    self._set_status(f"Could not pause recorder: {exc}", error=True)
             self._set_status("Paused")
             self._write_pause_marker()
             return
@@ -647,7 +664,11 @@ class ScarecrowApp(App[None]):
         if self.state is AppState.PAUSED:
             self.state = AppState.RECORDING
             if self._audio_recorder is not None:
-                self._audio_recorder.resume()
+                try:
+                    self._audio_recorder.resume()
+                except Exception as exc:
+                    log.exception("Failed to resume audio recorder")
+                    self._set_status(f"Could not resume recorder: {exc}", error=True)
             self._batch_countdown = BATCH_INTERVAL_SECONDS
             self._last_divider_elapsed = -config.DIVIDER_INTERVAL
             self._set_status("")
@@ -725,8 +746,8 @@ class ScarecrowApp(App[None]):
                         self._show_error(f"Could not stop audio recorder: {exc}")
 
             try:
-                batch_workers_finished, captured = self._wait_for_batch_workers()
                 self._ignore_batch_results = True
+                batch_workers_finished, captured = self._wait_for_batch_workers()
                 for text in captured:
                     self._record_transcript(text, include_ui=include_ui)
                 if batch_workers_finished:
@@ -814,8 +835,10 @@ class ScarecrowApp(App[None]):
 
         timestamp = datetime.now().strftime("%H:%M:%S")
         file_line = f"[{tag}] {timestamp} -- {raw}"
+        escaped_raw = escape(raw)
         styled_line = (
-            f"[bold cyan][{tag}][/bold cyan] [dim]{timestamp}[/dim] \u2014 {raw}"
+            f"[bold cyan][{tag}][/bold cyan]"
+            f" [dim]{timestamp}[/dim] \u2014 {escaped_raw}"
         )
 
         try:

@@ -49,10 +49,9 @@ class Session:
         """Appends a line to transcript.txt, flushes immediately."""
         if self._finalized:
             return
-        if self._transcript_file is None:
-            self._transcript_file = self.transcript_path.open("a", encoding="utf-8")
-
         try:
+            if self._transcript_file is None:
+                self._transcript_file = self.transcript_path.open("a", encoding="utf-8")
             self._transcript_file.write(text + "\n")
             self._transcript_file.flush()
         except OSError:

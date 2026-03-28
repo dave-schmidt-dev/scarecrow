@@ -1,5 +1,19 @@
 # History
 
+## 2026-03-28 (audit round 3: error handling, shutdown races, test gaps, docs)
+
+- **Fixed unhandled preload_batch_model() crash:** `main()` now wraps `preload_batch_model()` in try/except for clean error output and exit on model load failure (MLX OOM, native abort, download failure).
+- **Fixed Session I/O crash on startup:** `_start_recording()` now wraps `Session()` creation in try/except so disk-full or permission errors surface via `_show_error()` instead of crashing. `Session.append_sentence()` now catches `OSError` from `open()` as well as `write()`/`flush()`.
+- **Fixed shutdown late-callback race:** `_ignore_batch_results` is now set BEFORE `_wait_for_batch_workers()`, closing the window where a worker's `_on_batch_result` callback could duplicate text already captured from the future.
+- **Fixed final-flush error loss:** `_flush_final_batch()` now catches exceptions from `transcribe_batch()` locally instead of relying on the callback path (which routed through `call_from_thread` and was silently lost on the app thread).
+- **Fixed drain_to_silence() floor division:** Changed from floor to ceiling division for `min_silent_chunks`, preventing premature drains with non-even chunk sizes (e.g., 1700-sample chunks at 600ms silence threshold).
+- **Fixed pause/resume device-loss crash:** `action_pause()` now wraps `recorder.pause()` and `recorder.resume()` in try/except so device disconnection doesn't crash the app.
+- **Fixed Rich markup injection:** User note text and transcriber output are now escaped via `rich.markup.escape()` before rendering in the RichLog, preventing markup injection from transcript text or notes.
+- **Fixed real-model test crashes:** Replaced `pytest.importorskip("parakeet_mlx")` with `importlib.util.find_spec()` checks in test_startup.py, test_integration.py, and test_transcriber.py — probes without importing, avoiding native CoreAudio/MLX crashes. Fixed `test_parakeet_model_lazy_import` to actually test the lazy-import path instead of mocking the method under test.
+- **Added missing failure path tests:** preflight check (no devices, device query failure), recorder warning surfacing, pause/resume device-loss, session creation failure, transcript open failure, shutdown race flag timing, final-flush error handling.
+- **Fixed BUGS.md stale entries:** Updated 16 squashed bug entries pointing to deleted tests, renamed tests, or non-test regression references. Tightened policy checker to require `tests/` or `::` in regression test values for squashed bugs, skip won't-fix bugs.
+- **Fixed stale docs:** README pause marker frequency, batch executor shutdown description, removed non-existent startup cache output. Updated `__init__.py` docstring, `test_audio_capture.py` docstring, startup hint text.
+
 ## 2026-03-28 (audit fixes, lazy imports, /flush safety)
 
 - **Fixed /flush audio loss bug:** `/flush` was doing a double-drain (VAD then full drain) which could lose audio if a batch was already in-flight. Now does a single `drain_buffer()` with a busy check — if a batch is running, audio stays in the buffer.

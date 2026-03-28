@@ -74,7 +74,11 @@ def main() -> None:
         sys.exit(1)
 
     print("  Loading Parakeet model…", flush=True)
-    transcriber.preload_batch_model()
+    try:
+        transcriber.preload_batch_model()
+    except Exception as exc:
+        print(f"  Failed to load Parakeet model: {exc}", file=sys.stderr)
+        sys.exit(1)
 
     t1 = time.monotonic()
     print(f"  Ready ({t1 - t0:.1f}s)", flush=True)

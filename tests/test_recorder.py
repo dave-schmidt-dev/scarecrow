@@ -250,3 +250,56 @@ def test_buffer_seconds_reflects_buffered_audio(
 
     assert recorder.buffer_seconds == pytest.approx(0.1)
     recorder.stop()
+
+
+def test_drain_to_silence_uses_ceil_for_silence_chunks(
+    output_path: Path, mock_sd, mock_sf
+) -> None:
+    """drain_to_silence must use ceiling division for min_silent_chunks.
+
+    Regression: BUG floor division underestimates required silence with
+    non-even chunk sizes. With 1700-sample chunks at 16kHz, 600ms silence
+    requires ceil(9600/1700)=6 chunks, not floor(9600/1700)=5.
+    """
+    recorder = AudioRecorder(output_path)
+    recorder.start()
+
+    # Use 1700-sample chunks (non-even division with 600ms silence at 16kHz)
+    # min_silence_samples = 16000 * 600 / 1000 = 9600
+    # floor(9600 / 1700) = 5 chunks = 531ms (WRONG - less than 600ms)
+    # ceil(9600 / 1700) = 6 chunks = 637ms (CORRECT - at least 600ms)
+    loud_chunk = np.full((1700, 1), 16000, dtype="int16")
+    silent_chunk = np.zeros((1700, 1), dtype="int16")
+
+    # 7 loud chunks + exactly 5 silent chunks
+    # With floor division (bug): 5 >= 5, would drain
+    # With ceil division (fix): 5 < 6, should NOT drain (not enough silence)
+    with recorder._buffer_lock:
+        for _ in range(7):
+            recorder._audio_chunks.append(loud_chunk.copy())
+            recorder._chunk_energies.append(0.5)
+        for _ in range(5):
+            recorder._audio_chunks.append(silent_chunk.copy())
+            recorder._chunk_energies.append(0.0)
+
+    # Total audio: 12 * 1700 / 16000 = 1.275s (above 0.5s minimum)
+    # But only 5 silent chunks = 531ms < 600ms required
+    # With the ceil fix, this should NOT drain (returns None or hard-drain if > max)
+    # Since 1.275s < 30s max, it should return None
+    result = recorder.drain_to_silence(min_silence_ms=600)
+    assert result is None, (
+        "drain_to_silence with 5 silent chunks at 1700 samples should NOT drain "
+        "(ceil(9600/1700)=6 chunks required, only 5 provided)"
+    )
+
+    # Now add the 6th silent chunk — should drain
+    with recorder._buffer_lock:
+        recorder._audio_chunks.append(silent_chunk.copy())
+        recorder._chunk_energies.append(0.0)
+
+    result = recorder.drain_to_silence(min_silence_ms=600)
+    assert result is not None, (
+        "drain_to_silence with 6 silent chunks at 1700 samples SHOULD drain "
+        "(ceil(9600/1700)=6 chunks required, 6 provided)"
+    )
+    recorder.stop()

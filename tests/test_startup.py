@@ -13,6 +13,7 @@ production but slipped past unit tests:
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import sys
 from pathlib import Path
@@ -41,6 +42,21 @@ def test_scarecrow_transcriber_is_importable() -> None:
 def test_scarecrow_app_is_importable() -> None:
     """scarecrow.app must be importable without launching any UI."""
     import scarecrow.app  # noqa: F401
+
+
+def test_scarecrow_recorder_does_not_import_sounddevice() -> None:
+    """Importing scarecrow.recorder must not trigger sounddevice import.
+
+    sounddevice initializes PortAudio at import time, spawning CoreAudio
+    background threads that crash the interpreter during test-suite teardown.
+    recorder.py must use lazy imports — sounddevice only loads inside
+    AudioRecorder.start(), never at module level.
+    """
+    import scarecrow.recorder
+
+    assert not hasattr(scarecrow.recorder, "sd"), (
+        "scarecrow.recorder must not bind 'sd' at module level"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -184,13 +200,34 @@ def test_transcriber_prepare_sets_is_ready() -> None:
 import pytest  # noqa: E402  (after helpers so the flag check above works)
 
 
+def test_main_handles_preload_batch_model_failure() -> None:
+    """main() must handle preload_batch_model() failures with a clean exit."""
+    from scarecrow import __main__
+
+    fake_transcriber = MagicMock()
+    fake_transcriber.prepare.return_value = None
+    fake_transcriber.preload_batch_model.side_effect = RuntimeError("MLX OOM")
+
+    with (
+        patch("scarecrow.transcriber.Transcriber", return_value=fake_transcriber),
+        patch("scarecrow.__main__._wait_for_enter_or_timeout"),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        __main__.main()
+
+    assert exc_info.value.code == 1
+
+
+@pytest.mark.skipif(
+    not importlib.util.find_spec("parakeet_mlx"),
+    reason="parakeet_mlx not installed",
+)
 def test_transcriber_prepare_with_real_model() -> None:
     """prepare() must succeed and preload_batch_model works when parakeet_mlx available.
 
     This is the most realistic startup smoke test — it exercises the actual
     model-loading path that runs when the user launches `scarecrow`.
     """
-    pytest.importorskip("parakeet_mlx")
 
     from scarecrow.transcriber import Transcriber
 

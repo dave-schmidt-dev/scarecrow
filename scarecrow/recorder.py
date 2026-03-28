@@ -200,7 +200,8 @@ class AudioRecorder:
 
             # How many consecutive silent chunks needed
             min_silence_samples = int(self._sample_rate * min_silence_ms / 1000)
-            min_silent_chunks = max(1, min_silence_samples // max(samples_per_chunk, 1))
+            _denom = max(samples_per_chunk, 1)
+            min_silent_chunks = max(1, -(-min_silence_samples // _denom))
 
             # Scan from end backward for a silence run
             silence_end = None
