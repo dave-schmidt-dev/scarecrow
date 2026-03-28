@@ -74,7 +74,6 @@ def test_main_finally_uses_app_cleanup_hook() -> None:
         patch("scarecrow.transcriber.Transcriber", return_value=fake_transcriber),
         patch("scarecrow.app.ScarecrowApp", return_value=fake_app),
         patch("scarecrow.__main__._wait_for_enter_or_timeout"),
-        patch("scarecrow.__main__._model_cache_path", return_value=None),
     ):
         __main__.main()
 
@@ -96,7 +95,6 @@ def test_main_calls_preload_batch_model() -> None:
         patch("scarecrow.transcriber.Transcriber", return_value=fake_transcriber),
         patch("scarecrow.app.ScarecrowApp", return_value=fake_app),
         patch("scarecrow.__main__._wait_for_enter_or_timeout"),
-        patch("scarecrow.__main__._model_cache_path", return_value=None),
     ):
         __main__.main()
 
@@ -172,50 +170,36 @@ def test_transcriber_can_be_instantiated() -> None:
     assert not t.is_ready
 
 
-def test_transcriber_prepare_with_mocked_whisper() -> None:
-    """prepare() must succeed when WhisperModel is mocked (tests the wiring)."""
+def test_transcriber_prepare_sets_is_ready() -> None:
+    """prepare() must succeed and set is_ready (no model loading needed)."""
     from scarecrow.transcriber import Transcriber
 
-    with patch("scarecrow.runtime.WhisperModel"):
-        t = Transcriber()
-        t.prepare()
+    t = Transcriber()
+    t.prepare()
 
     assert t.is_ready
     t.shutdown(timeout=0)
 
 
-_BATCH_MODEL_CACHED: bool | None = None
-
-
-def _batch_model_is_cached() -> bool:
-    """Return True only if the batch Whisper model is already on disk."""
-    global _BATCH_MODEL_CACHED
-    if _BATCH_MODEL_CACHED is None:
-        from scarecrow import config
-        from scarecrow.__main__ import _model_cache_path
-
-        _BATCH_MODEL_CACHED = _model_cache_path(config.FINAL_MODEL) is not None
-    return _BATCH_MODEL_CACHED
-
-
 import pytest  # noqa: E402  (after helpers so the flag check above works)
 
 
-@pytest.mark.skipif(
-    not _batch_model_is_cached(),
-    reason="batch Whisper model not in HF cache — skipping model load test",
-)
 def test_transcriber_prepare_with_real_model() -> None:
-    """prepare() must succeed when the batch model is cached.
+    """prepare() must succeed and preload_batch_model works when parakeet_mlx available.
 
     This is the most realistic startup smoke test — it exercises the actual
     model-loading path that runs when the user launches `scarecrow`.
     """
+    pytest.importorskip("parakeet_mlx")
+
     from scarecrow.transcriber import Transcriber
 
     t = Transcriber()
     t.prepare()
     assert t.is_ready
+
+    # preload_batch_model should not raise when parakeet_mlx is available
+    t.preload_batch_model()
     t.shutdown()
 
 

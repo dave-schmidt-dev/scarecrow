@@ -1,5 +1,28 @@
 # History
 
+## 2026-03-28 (VAD tuning, /flush command, cleanup)
+
+- **VAD tuning:** `VAD_MIN_SILENCE_MS` 300→600ms (drain on real sentence-ending pauses, not mid-sentence hesitations), `VAD_MAX_BUFFER_SECONDS` 8→30s (avoid forced mid-speech splits). Reduces chunk-boundary transcription errors significantly.
+- **Removed audio overlap:** Overlap was a whisper-era concept that caused duplicate text with parakeet (see commit 70f871c). Removed `overlap_ms` parameter, `_overlap_tail` state, and overlap logic from `AudioRecorder` entirely.
+- **Added `/flush` (`/f`) command:** Force-drains the audio buffer and submits for transcription immediately, regardless of silence detection. Useful when you want text to appear without waiting for a pause.
+- **Removed `/note` (`/n`) command:** Redundant — typing anything without a prefix already creates a `[NOTE]`.
+- **Fixed buffer time jitter:** The 1-second tick timer was decrementing `_batch_countdown` independently while the VAD poll (every 150ms) was setting it to the actual buffer size — they fought each other causing non-linear display. Removed the tick decrement; only the VAD poll updates the buffer display now.
+- **Startup display:** Replaced "Batch interval: 5s" with "Chunking: VAD (drains at speech pauses)" to accurately reflect VAD behavior.
+- **Dead code cleanup:** Removed unused `on_audio` callback parameter from `AudioRecorder`, removed `has_active_worker` (always False) from `Transcriber`, fixed stale whisper references in comments/docstrings.
+- **Crash mitigation:** Added `_sounddevice.terminate()` before `os._exit()` in test runner to shut down CoreAudio threads cleanly, preventing macOS crash reporter popups.
+
+## 2026-03-28 (whisper removal migration)
+
+- Removed `faster-whisper` backend entirely; `parakeet-mlx` is now the only transcription engine
+- Promoted `parakeet-mlx` from optional to required dependency in pyproject.toml
+- Removed context injection system (`/context`, `/clear` commands, initial_prompt, rolling tail)
+- Simplified runtime.py: removed WhisperModel, model_cache_path, warm_tqdm_lock
+- Simplified transcriber.py: removed whisper dispatch, _batch_lock, initial_prompt parameter
+- Simplified app.py: removed backend branching, context state, whisper batch timer
+- Removed whisper-specific config constants (FINAL_MODEL, LANGUAGE, BEAM_SIZE, BACKEND, etc.)
+- Updated test suite: deleted ~23 whisper/context tests, rewrote ~24 tests for parakeet-only
+- Simplified setup script and benchmark to parakeet-only paths
+
 ## 2026-03-28 (migration plan: whisper removal)
 
 - Added `PLAN-whisper-removal.md` with phased migration spec for removing faster-whisper backend entirely. 10 phases with verification gates, risk assessment, and commit grouping.

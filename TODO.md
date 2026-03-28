@@ -1,18 +1,8 @@
 # Open Issues
 
-## Parakeet backend (feature/parakeet-mlx branch)
-- Parakeet does not support initial_prompt context injection — `/context` command logs to transcript but doesn't influence transcription accuracy
-- LibriSpeech benchmark (3 min, normalized WER): parakeet 18.4% vs whisper 4.5% on chunked audio; parakeet is perfect (0% WER) on individual utterances — gap is from chunk boundary artifacts
-- VAD silence threshold (0.01 RMS) may need tuning for noisy environments
-
 ## Transcript accuracy
-- condition_on_previous_text=False on whisper batch path (True caused inference slowdowns)
-- Monitor: "surge" → "search" type errors on clean podcast audio — may need domain-specific prompts
-
-## Resource usage
-- Whisper: 400% CPU mean, 3.6 GB RSS, ~4s per 15s chunk
-- Parakeet: 50% CPU mean, 1.5 GB RSS, 2.2 GB GPU peak, ~50ms per chunk, <1W GPU power draw
-- VAD chunking keeps GPU idle between speech pauses (~45mW idle)
+- VAD silence threshold (0.01 RMS) may need tuning for noisy environments
+- LibriSpeech benchmark (3 min, normalized WER): parakeet 18.4% on chunked audio; parakeet is perfect (0% WER) on individual utterances — gap is from chunk boundary artifacts
 
 ## Accessibility
 - Screen reader support blocked on Textual framework (planned but not yet shipped)
@@ -24,6 +14,12 @@
 ---
 
 # Roadmap
+
+## Parakeet model investigation
+- Investigate alternative parakeet models for improved accuracy
+- Compare WER across different model sizes (0.6B vs larger variants)
+- Evaluate accuracy/speed/memory tradeoffs on M5 Max hardware
+- Test with domain-specific audio (meetings, podcasts, dictation)
 
 ## System audio recording
 - Capture system/app audio (meetings, calls, podcasts) in addition to mic input

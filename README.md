@@ -6,11 +6,9 @@
 
 Always-recording TUI for transcription and inline notes.
 
-Scarecrow uses faster-whisper or parakeet-mlx for accurate batch transcription. You can attach timestamped notes inline by typing prefix commands (`/task`) or plain text. Audio and transcripts are saved per-session.
+Scarecrow uses parakeet-mlx for accurate batch transcription. You can attach timestamped notes inline by typing prefix commands (`/task`) or plain text. Audio and transcripts are saved per-session.
 
-**Backends:**
-- **whisper** — faster-whisper large-v3-turbo on CPU, 15-second fixed batch windows, supports context injection via `initial_prompt`
-- **parakeet** (default) — parakeet-mlx (Parakeet TDT 0.6B v3) on Apple Silicon GPU, VAD-based chunking (drains at speech pauses), ~47x faster than whisper, <1W GPU power draw
+**Backend:** parakeet-mlx (Parakeet TDT 0.6B v3) on Apple Silicon GPU — VAD-based chunking (drains at speech pauses), ~0.006x RTF, <1W GPU power draw
 
 ## Bug Tracking
 
@@ -32,10 +30,8 @@ Scarecrow keeps a persistent bug ledger in [BUGS.md](BUGS.md). Future fixes must
 ```bash
 git clone <repo-url> && cd scarecrow
 python3 scripts/sync_env.py
-python scripts/setup.py   # interactive model selection + alias setup
+python scripts/setup.py   # show parakeet config info + alias setup
 ```
-
-The setup script walks you through choosing the batch transcription model.
 
 **Which launch method to use:**
 - **iTerm2 users (recommended):** Use the iTerm2 profile — it handles font sizing, auto-close, and calls the venv binary directly.
@@ -88,25 +84,18 @@ Avoid `uv run` in the alias — it can re-trigger the macOS `UF_HIDDEN` flag on 
 ## Usage
 
 ```bash
-sc          # launch Scarecrow (starts in IDLE; press Enter to begin recording)
+sc          # launch Scarecrow (auto-starts recording)
 ```
-
-**Startup flow:**
-
-When Scarecrow launches, the notes input shows a context prompt. Type one or more terms (proper nouns, speaker names, topic keywords) and press Enter to seed Whisper's `initial_prompt` before the first batch. Press Enter with no text to start recording immediately with no context.
 
 **Keybindings** inside the TUI:
 - `Ctrl+P` — pause / resume (releases microphone while paused)
 - `Ctrl+Q` — quit
 - `Enter` — submit note (or, at startup, start recording)
 
-**Note and task commands** (type at the start of your note, then press Enter):
+**Commands** (type at the start of your note, then press Enter):
 - `/task` or `/t` — submit note tagged `[TASK]`
+- `/flush` or `/f` — force-flush the audio buffer (transcribe immediately)
 - no prefix — submit note tagged `[NOTE]` (default)
-
-**Context commands** (available after recording starts):
-- `/context <terms>` — append terms to Whisper's `initial_prompt`; written to transcript as `[CONTEXT]`
-- `/clear` — wipe all context entries and the rolling tail; hides the context display
 
 **Help:**
 - `/help`, `/h`, or `?` — show available commands and keybindings inline in the transcript pane
@@ -116,19 +105,8 @@ When Scarecrow launches, the notes input shows a context prompt. Type one or mor
 The TUI shows:
 - **Info bar** — recording state (`REC` / `PAUSED`), mic indicator with level label (quiet/low/med/high), elapsed time, word count, buffer/batch countdown, and an audio level meter (▁▂▃▄▅▆▇█) with color coding (green/yellow/red) using a log scale with peak-hold decay
 - **Transcript pane** — batch transcription output with timestamped dividers (scrollable); every session begins with a `Session Start: YYYY-MM-DD HH:MM:SS` line and ends with a `Session End: YYYY-MM-DD HH:MM:SS` line
-- **Context display** — shown between the transcript pane and notes input when context is active; shows entry counts: "Context: 3 · Tasks: 2 · Notes: 1"
 - **Notes pane** — text input for inline annotations; `/task` or `/t` prefix tags as `[TASK]`; plain text defaults to `[NOTE]`; notes are written to the transcript pane and transcript file with a wall-clock timestamp
 - **Footer** — keybindings
-
-### Context injection
-
-Scarecrow feeds a rolling context string into every Whisper batch call as `initial_prompt`. This improves accuracy for domain-specific vocabulary (proper nouns, product names, technical terms).
-
-The prompt is built from two parts:
-1. **Context entries** — accumulated from the startup prompt and any `/context` commands during the session, joined by `, `
-2. **Previous-batch tail** — the last 35 words of the most recent batch output, appended after the context entries, so Whisper has word-continuity across chunk boundaries
-
-Use `/clear` to wipe both the context entries and the tail if transcription quality degrades (e.g., after a topic change).
 
 ### Pause behavior
 
@@ -160,21 +138,19 @@ Ctrl+C uses the same cleanup path, so the final buffered batch is flushed before
 ### Startup output
 
 On launch, Scarecrow prints:
-- Which model is loading (batch) with timing
+- Which model is loading with timing
 - Model cache locations (or whether they need downloading)
 - Where recordings and transcripts are saved
 
-The batch model (`large-v3-turbo`) is preloaded during the prepare phase before the TUI launches, so the first batch transcription fires immediately without a cold-load delay. Models run in offline mode (`HF_HUB_OFFLINE=1`) to avoid network stalls. Debug logs are written to `~/.cache/scarecrow/debug.log`.
+The parakeet model is preloaded during the prepare phase before the TUI launches, so the first batch transcription fires immediately without a cold-load delay. Models run in offline mode (`HF_HUB_OFFLINE=1`) to avoid network stalls. Debug logs are written to `~/.cache/scarecrow/debug.log`.
 
 ### Architecture
 
-Scarecrow uses a single transcription backend at a time. A 16kHz audio stream is buffered and fed to the active model. Whisper uses fixed 15-second batch windows. Parakeet uses VAD-based chunking — audio drains at natural speech pauses (300ms+ silence) with an 8-second hard max for continuous speech, polled every 150ms. No subprocesses — everything runs in a single process. Backend is selected via `BACKEND` in `scarecrow/config.py` or `scripts/setup.py`.
+Scarecrow uses parakeet-mlx as its sole transcription engine. A 16kHz audio stream is buffered and fed to the model using VAD-based chunking — audio drains at natural speech pauses (600ms+ silence) with a 30-second hard max for continuous speech, polled every 150ms. No subprocesses — everything runs in a single process.
 
 Inline notes are typed in the notes pane and submitted with Enter. The tag is determined by an optional prefix at the start of the text: `/task` or `/t` for `[TASK]`, or no prefix for `[NOTE]`. Each note is written to the transcript pane and the transcript file with a wall-clock timestamp and tag prefix. Notes work in any app state (recording, paused, or idle).
 
-Transcript dividers show the start time of each audio batch window (not the time the model finishes processing). Dividers appear at most every 60 seconds. Audio overlap between chunks reduces word drops at boundaries (200ms for parakeet, 500ms for whisper). Consecutive batch results are joined into flowing paragraphs between dividers.
-
-The batch model is configured in `scarecrow/config.py` or via `scripts/setup.py`.
+Transcript dividers show the start time of each audio batch window (not the time the model finishes processing). Dividers appear at most every 60 seconds. Consecutive batch results are joined into flowing paragraphs between dividers.
 
 ## Session files
 
@@ -252,19 +228,19 @@ Detailed error output is written to `~/.cache/scarecrow/debug.log`. Check this f
 scarecrow/
   __main__.py        # entry point, model preloading, startup output
   app.py             # Textual TUI, batch transcription scheduling, notes pane
-  config.py          # model names, audio settings, defaults
+  config.py          # audio settings, parakeet model config, defaults
   env_health.py      # editable-install .pth repair (macOS UF_HIDDEN)
   recorder.py        # sounddevice audio capture + WAV writing
-  runtime.py         # HF offline bootstrap, tqdm lock, Whisper model manager
+  runtime.py         # HF offline bootstrap, parakeet model manager
   session.py         # timestamped session dirs + transcript files
-  transcriber.py     # batch-only faster-whisper transcription (large-v3-turbo)
+  transcriber.py     # VAD-based parakeet-mlx batch transcription
   app.tcss           # TUI stylesheet
 assets/
   scarecrow-icon.svg # app icon
 bin/
   scarecrow          # wrapper script (sets PYTHONPATH, bypasses UF_HIDDEN)
 scripts/
-  setup.py           # interactive batch-model selection + alias setup
+  setup.py           # parakeet config info + alias setup
   sync_env.py        # uv sync + editable-install repair
   repair_venv.py     # standalone .pth repair/validation
 examples/

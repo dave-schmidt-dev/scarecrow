@@ -22,6 +22,14 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     exit_code = main(sys.argv[1:])
+    # Terminate PortAudio before os._exit() so CoreAudio's IOThread doesn't
+    # segfault trying to call back into a half-torn-down Python interpreter.
+    try:
+        import sounddevice as _sd
+
+        _sd._terminate()
+    except Exception:
+        pass
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(exit_code)

@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
-"""Benchmark parakeet-mlx vs faster-whisper on LibriSpeech test-clean.
+"""Benchmark parakeet-mlx on LibriSpeech test-clean.
 
 Concatenates utterances into long audio streams (default ~3 min each),
-then transcribes in batch chunks (5s for parakeet, 15s for whisper)
-to simulate real scarecrow usage. Tracks speed, accuracy, CPU, memory,
-and GPU memory throughout.
+then transcribes in batch chunks to simulate real scarecrow usage. Tracks
+speed, accuracy, CPU, memory, and GPU memory throughout.
+
+Supports both VAD-based chunking (matching scarecrow's live behaviour) and
+fixed-interval chunking for controlled comparison.
 
 Usage:
-    uv run python benchmarks/bench_librispeech.py [--minutes N] [--backend both]
+    uv run python benchmarks/bench_librispeech.py [--minutes N] [--vad]
 """
 
 from __future__ import annotations
 
 import argparse
 import gc
-import os
 import random
 import threading
 import time
@@ -136,10 +137,8 @@ class ResourceMonitor:
     _stop: threading.Event = field(default_factory=threading.Event)
     _thread: threading.Thread | None = None
     _process: psutil.Process = field(default_factory=lambda: psutil.Process())
-    _has_mlx: bool = False
 
-    def start(self, has_mlx: bool = False):
-        self._has_mlx = has_mlx
+    def start(self):
         self._process.cpu_percent()  # prime the counter
         self.snapshots.clear()
         self._stop.clear()
@@ -159,14 +158,13 @@ class ResourceMonitor:
                 cpu_percent=self._process.cpu_percent(),
                 rss_mb=self._process.memory_info().rss / (1024 * 1024),
             )
-            if self._has_mlx:
-                try:
-                    import mlx.core as mx
+            try:
+                import mlx.core as mx
 
-                    snap.gpu_active_mb = mx.metal.get_active_memory() / (1024 * 1024)
-                    snap.gpu_peak_mb = mx.metal.get_peak_memory() / (1024 * 1024)
-                except Exception:
-                    pass
+                snap.gpu_active_mb = mx.metal.get_active_memory() / (1024 * 1024)
+                snap.gpu_peak_mb = mx.metal.get_peak_memory() / (1024 * 1024)
+            except Exception:
+                pass
             self.snapshots.append(snap)
             self._stop.wait(self.interval)
 
@@ -194,32 +192,14 @@ def summarize_resources(snapshots: list[ResourceSnapshot]) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Backends
+# Backend
 # ---------------------------------------------------------------------------
-
-
-def make_whisper():
-    os.environ.setdefault("HF_HUB_OFFLINE", "1")
-    from faster_whisper import WhisperModel
-
-    return WhisperModel("large-v3-turbo", device="auto", compute_type="auto")
 
 
 def make_parakeet():
     from parakeet_mlx import from_pretrained
 
     return from_pretrained("mlx-community/parakeet-tdt-0.6b-v3")
-
-
-def transcribe_whisper(model, audio: np.ndarray) -> str:
-    segments, _ = model.transcribe(
-        audio,
-        language="en",
-        beam_size=5,
-        vad_filter=False,
-        condition_on_previous_text=False,
-    )
-    return " ".join(seg.text.strip() for seg in segments).strip()
 
 
 def transcribe_parakeet(model, audio: np.ndarray) -> str:
@@ -319,11 +299,9 @@ def vad_split(audio: np.ndarray, sample_rate: int = 16000) -> list[np.ndarray]:
 
 
 def run_benchmark(
-    backend: str,
     audio: np.ndarray,
     reference: str,
     model,
-    transcribe_fn,
     chunk_seconds: int,
     *,
     use_vad: bool = False,
@@ -331,6 +309,7 @@ def run_benchmark(
     """Transcribe audio in chunks, simulating real-time batching."""
     sample_rate = 16000
     total_audio_s = len(audio) / sample_rate
+    backend = "parakeet"
 
     if use_vad:
         audio_chunks = vad_split(audio, sample_rate)
@@ -349,18 +328,16 @@ def run_benchmark(
     print(f"{'=' * 70}")
 
     monitor = ResourceMonitor(interval=0.25)
-    has_mlx = backend == "parakeet"
 
     # Reset MLX peak memory counter
-    if has_mlx:
-        try:
-            import mlx.core as mx
+    try:
+        import mlx.core as mx
 
-            mx.metal.reset_peak_memory()
-        except Exception:
-            pass
+        mx.metal.reset_peak_memory()
+    except Exception:
+        pass
 
-    monitor.start(has_mlx=has_mlx)
+    monitor.start()
     chunk_results = []
     all_hypotheses = []
 
@@ -368,7 +345,7 @@ def run_benchmark(
         chunk_dur = len(chunk) / sample_rate
 
         t0 = time.perf_counter()
-        hyp = transcribe_fn(model, chunk)
+        hyp = transcribe_parakeet(model, chunk)
         wall = time.perf_counter() - t0
         rtf = wall / chunk_dur
 
@@ -440,44 +417,6 @@ def run_benchmark(
     )
 
 
-def print_comparison(results: list[BenchmarkResult]):
-    print(f"\n{'=' * 70}")
-    print("  COMPARISON")
-    print(f"{'=' * 70}")
-
-    headers = [""] + [r.backend.upper() for r in results]
-    rows = [
-        ("RTF (overall)", [f"{r.rtf:.3f}x" for r in results]),
-        ("WER", [f"{r.wer:.1%}" for r in results]),
-        ("Wall time", [f"{r.total_wall_s:.1f}s" for r in results]),
-        ("CPU mean", [f"{r.resources.get('cpu_mean', 0):.0f}%" for r in results]),
-        ("CPU peak", [f"{r.resources.get('cpu_max', 0):.0f}%" for r in results]),
-        ("RSS peak", [f"{r.resources.get('rss_max_mb', 0):.0f} MB" for r in results]),
-        (
-            "GPU peak",
-            [
-                f"{r.resources.get('gpu_peak_mb', 0):.0f} MB"
-                if "gpu_peak_mb" in r.resources
-                else "N/A"
-                for r in results
-            ],
-        ),
-    ]
-
-    col_w = 14
-    print(f"  {'':22s}" + "".join(f"{h:>{col_w}s}" for h in headers[1:]))
-    for label, vals in rows:
-        print(f"  {label:22s}" + "".join(f"{v:>{col_w}s}" for v in vals))
-
-    if len(results) == 2:
-        p, w = results[0], results[1]
-        speedup = w.total_wall_s / p.total_wall_s if p.total_wall_s > 0 else 0
-        print(
-            f"\n  {p.backend} is {speedup:.1f}x "
-            f"{'faster' if speedup > 1 else 'slower'} than {w.backend}"
-        )
-
-
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -485,13 +424,13 @@ def print_comparison(results: list[BenchmarkResult]):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Benchmark ASR backends on LibriSpeech"
+        description="Benchmark parakeet-mlx on LibriSpeech"
     )
     parser.add_argument(
         "--minutes",
         type=float,
         default=3.0,
-        help="Minutes of audio to benchmark per backend",
+        help="Minutes of audio to benchmark",
     )
     parser.add_argument(
         "--chunk",
@@ -503,9 +442,6 @@ def main():
         "--vad",
         action="store_true",
         help="Use VAD-based silence chunking instead of fixed intervals",
-    )
-    parser.add_argument(
-        "--backend", choices=["parakeet", "whisper", "both"], default="both"
     )
     args = parser.parse_args()
 
@@ -530,46 +466,19 @@ def main():
             f"→ {len(chunks_preview)} chunks"
         )
     else:
-        print(f"Chunking: fixed {args.chunk}s  |  No overlap  |  No context injection")
+        print(f"Chunking: fixed {args.chunk}s")
 
-    results = []
-
-    if args.backend in ("parakeet", "both"):
-        print("\nLoading parakeet model...")
-        model = make_parakeet()
-        results.append(
-            run_benchmark(
-                "parakeet",
-                audio,
-                reference,
-                model,
-                transcribe_parakeet,
-                args.chunk,
-                use_vad=args.vad,
-            )
-        )
-        del model
-        gc.collect()
-
-    if args.backend in ("whisper", "both"):
-        print("\nLoading whisper model...")
-        model = make_whisper()
-        results.append(
-            run_benchmark(
-                "whisper",
-                audio,
-                reference,
-                model,
-                transcribe_whisper,
-                args.chunk,
-                use_vad=args.vad,
-            )
-        )
-        del model
-        gc.collect()
-
-    if len(results) == 2:
-        print_comparison(results)
+    print("\nLoading parakeet model...")
+    model = make_parakeet()
+    run_benchmark(
+        audio,
+        reference,
+        model,
+        args.chunk,
+        use_vad=args.vad,
+    )
+    del model
+    gc.collect()
 
 
 if __name__ == "__main__":

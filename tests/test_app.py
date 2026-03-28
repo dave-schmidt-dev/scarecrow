@@ -244,18 +244,3 @@ async def test_pane_labels_show_model_names() -> None:
         labels = [w.render() for w in app.query(".pane-label")]
         label_text = " ".join(str(lbl) for lbl in labels)
         assert "Transcript" in label_text
-
-
-@patch("scarecrow.config.BACKEND", "whisper")
-@patch("scarecrow.app.AudioRecorder")
-@patch("scarecrow.app.Session")
-async def test_app_launches_in_idle_no_autostart(
-    mock_session_cls, mock_recorder_cls
-) -> None:
-    """App stays IDLE after mount with whisper backend (context prompt)."""
-    mock_recorder_cls.return_value = _mock_recorder()
-    mock_session_cls.return_value = MagicMock()
-
-    async with _app(with_transcriber=True).run_test() as pilot:
-        await pilot.pause(delay=0.3)
-        assert pilot.app.state is AppState.IDLE  # type: ignore[attr-defined]

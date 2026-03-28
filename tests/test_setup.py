@@ -2,50 +2,20 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from scripts import setup as setup_script
 
 
-def test_write_config_updates_current_batch_model(
-    tmp_path: Path,
-) -> None:
-    """write_config should replace whatever batch model is in config.py."""
-    project_root = tmp_path / "project"
-    config_path = project_root / "scarecrow" / "config.py"
-    config_path.parent.mkdir(parents=True)
-    config_path.write_text(
-        'FINAL_MODEL = "small.en"\n',
-        encoding="utf-8",
-    )
-
-    original_file = setup_script.__file__
-    try:
-        setup_script.__file__ = str(project_root / "scripts" / "setup.py")
-        setup_script.write_config("medium.en")
-    finally:
-        setup_script.__file__ = original_file
-
-    updated = config_path.read_text(encoding="utf-8")
-    assert 'FINAL_MODEL = "medium.en"' in updated
+def test_setup_alias_prints_project_dir(capsys) -> None:
+    """setup_alias should print a shell alias pointing to the project directory."""
+    setup_script.setup_alias()
+    output = capsys.readouterr().out
+    assert "alias sc=" in output
+    assert "bin/scarecrow" in output
 
 
-def test_write_config_treats_model_names_as_plain_text(tmp_path: Path) -> None:
-    """Replacement text must not interpret regex backreferences."""
-    project_root = tmp_path / "project"
-    config_path = project_root / "scarecrow" / "config.py"
-    config_path.parent.mkdir(parents=True)
-    config_path.write_text(
-        'FINAL_MODEL = "medium.en"\n',
-        encoding="utf-8",
-    )
-
-    original_file = setup_script.__file__
-    try:
-        setup_script.__file__ = str(project_root / "scripts" / "setup.py")
-        setup_script.write_config(r"x\g<2>z")
-    finally:
-        setup_script.__file__ = original_file
-
-    updated = config_path.read_text(encoding="utf-8")
-    assert 'FINAL_MODEL = "x\\g<2>z"' in updated
+def test_explain_architecture_mentions_parakeet(capsys) -> None:
+    """explain_architecture should describe the parakeet backend."""
+    setup_script.explain_architecture()
+    output = capsys.readouterr().out
+    assert "parakeet" in output.lower()
+    assert "VAD" in output

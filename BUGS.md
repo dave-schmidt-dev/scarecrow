@@ -79,7 +79,7 @@ Scarecrow keeps a running bug ledger in this file. Append to it every time a bug
 - Root cause: tests patched `faster_whisper.WhisperModel` instead of the already-imported `scarecrow.runtime.WhisperModel` symbol used by `ModelManager`.
 - Fix: updated tests to patch `scarecrow.runtime.WhisperModel`, which is the actual symbol dereferenced during prepare/startup.
 - Regression test: `tests/test_transcriber.py::test_prepare_sets_is_ready`, `tests/test_transcriber.py::test_shutdown_joins_thread`, `tests/test_startup.py::test_transcriber_prepare_with_mocked_whisper`
-- Notes: verified 2026-03-24.
+- Notes: verified 2026-03-24. Superseded by whisper removal — faster-whisper and WhisperModel no longer exist in the codebase.
 
 ## [BUG-20260324-full-suite-native-crash]
 - Status: squashed
@@ -143,7 +143,7 @@ Scarecrow keeps a running bug ledger in this file. Append to it every time a bug
 - Workaround: start through `python -m scarecrow` or the console script so `__main__` sets env first.
 - Fix: runtime bootstrap moved into `scarecrow/runtime.py`, with one model manager owning env flags, tqdm warmup, and both Whisper model load paths.
 - Regression test: `tests/test_startup.py::test_hf_hub_offline_set_by_main_module`, `tests/test_startup.py::test_transcriber_prepare_with_real_model`, `tests/test_integration.py::test_transcriber_pipeline_with_real_audio_fixture`
-- Notes: verified 2026-03-24.
+- Notes: verified 2026-03-24. Superseded by whisper removal — runtime.py now manages parakeet-only bootstrap; tqdm_lock warmup removed.
 
 ## [BUG-20260324-missing-real-pipeline-test]
 - Status: squashed
@@ -196,7 +196,7 @@ Scarecrow keeps a running bug ledger in this file. Append to it every time a bug
 - Root cause: `ModelManager.get_batch_model()` had no thread synchronization.
 - Fix: added `threading.Lock` to `ModelManager`, guarding all model creation paths.
 - Regression test: `tests/test_transcriber.py::test_get_batch_model_thread_safety`
-- Notes: verified 2026-03-24.
+- Notes: verified 2026-03-24. Superseded by whisper removal — ModelManager now manages parakeet model only; lock still applies.
 
 ## [BUG-20260324-pause-wipes-live-pane]
 - Status: squashed
@@ -226,7 +226,7 @@ Scarecrow keeps a running bug ledger in this file. Append to it every time a bug
 - Root cause: scripts were not updated after the runtime refactor replaced RealtimeSTT with Silero VAD + faster-whisper.
 - Fix: rewrote both scripts to use current API (`TranscriberBindings`, `accept_audio`, `AudioRecorder` with `on_audio` callback).
 - Regression test: `tests/test_regressions.py::test_scarecrow_importable_from_outside_project_dir` (validates the import path these scripts depend on)
-- Notes: verified 2026-03-24. Scripts are manual test helpers and not part of the automated suite; the import-path regression test guards the shared failure mode.
+- Notes: verified 2026-03-24. Scripts are manual test helpers and not part of the automated suite; the import-path regression test guards the shared failure mode. Superseded by whisper removal — faster-whisper and RealtimeSTT references removed from all scripts.
 
 ## [BUG-20260324-final-flush-lost]
 - Status: squashed
@@ -417,4 +417,14 @@ Scarecrow keeps a running bug ledger in this file. Append to it every time a bug
 - Root cause: `audio[-0:]` in numpy returns the entire array, not an empty slice. When `overlap_samples=0`, `drain_buffer()` set `_overlap_tail = audio[-0:]` (the full buffer) and prepended it to every subsequent drain.
 - Fix: Skip overlap logic entirely when `_overlap_samples == 0`.
 - Regression test: `tests/test_behavioral.py::test_append_transcript_no_divider_without_session` (verifies no text duplication)
-- Notes: verified 2026-03-28.
+- Notes: verified 2026-03-28. Overlap removed entirely in whisper removal migration (2026-03-28).
+
+## [BUG-20260328-buffer-time-jitter]
+- Status: squashed
+- Found: 2026-03-28
+- Area: app (InfoBar display)
+- Symptom: Buffer time counter in InfoBar was non-linear — incrementing, then decrementing, then incrementing — instead of smoothly reflecting actual buffer duration.
+- Root cause: Two competing updaters. The 1-second `_tick()` timer decremented `_batch_countdown` by 1 every second (leftover from whisper's fixed-interval batch timer). The VAD poll (every 150ms) set `_batch_countdown` to the actual `buffer_seconds`. Between polls, the tick would subtract 1, then the next poll would correct it, causing visible jitter.
+- Fix: Removed `_batch_countdown` decrement from `_tick()`. Only the VAD poll updates the buffer display now.
+- Regression test: `tests/test_behavioral.py::test_tick_does_not_decrement_batch_countdown`
+- Notes: The tick decrement was a whisper-era concept (countdown to next fixed batch). With VAD, the display should reflect actual buffer size, not a countdown.

@@ -27,7 +27,6 @@ def _mock_transcriber():
     """Return a mock batch-only Transcriber."""
     mock = MagicMock()
     mock.is_ready = True
-    mock.has_active_worker = False
     mock.shutdown.return_value = None
 
     def _shutdown(timeout=5):
@@ -49,15 +48,12 @@ def _mock_recorder():
     return mock
 
 
-def _app(
-    with_transcriber: bool = False, *, awaiting_context: bool = False
-) -> ScarecrowApp:
+def _app(with_transcriber: bool = False) -> ScarecrowApp:
     if with_transcriber:
         app = ScarecrowApp(
             transcriber=_mock_transcriber(),
         )
         app._preflight_check = lambda: True  # type: ignore[method-assign]
-        app._awaiting_context = awaiting_context
         return app
     return ScarecrowApp()
 
@@ -209,6 +205,22 @@ def test_info_bar_hides_batch_countdown_when_idle() -> None:
 
     text = bar.render().plain
     assert "batch" not in text
+
+
+async def test_tick_does_not_decrement_batch_countdown() -> None:
+    """_tick must not decrement _batch_countdown — only the VAD poll sets it.
+
+    Regression: BUG-20260328-buffer-time-jitter. The 1-second tick was
+    decrementing the countdown independently, fighting the VAD poll and
+    causing visible jitter in the buffer time display.
+    """
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        app._batch_countdown = 10
+        app._recording_start_time = None
+        app._audio_recorder = None
+        app._tick()
+        assert app._batch_countdown == 10
 
 
 def test_info_bar_renders_recording_state_label() -> None:
@@ -368,40 +380,6 @@ async def test_append_transcript_syncs_info_bar() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 8. _on_batch_tick resets countdown to BATCH_INTERVAL_SECONDS
-# ---------------------------------------------------------------------------
-
-
-async def test_on_batch_tick_resets_countdown() -> None:
-    """_on_batch_tick must reset _batch_countdown to BATCH_INTERVAL_SECONDS."""
-    async with _app().run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.pause()
-
-        # Drive countdown down to simulate elapsed time
-        app._batch_countdown = 5
-        app._on_batch_tick()
-        await pilot.pause()
-
-        assert app._batch_countdown == BATCH_INTERVAL_SECONDS
-
-
-async def test_on_batch_tick_syncs_info_bar() -> None:
-    """_on_batch_tick must update InfoBar batch_countdown to BATCH_INTERVAL_SECONDS."""
-    async with _app().run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.pause()
-
-        app._batch_countdown = 1
-        app.state = AppState.RECORDING  # so InfoBar shows countdown
-        app._on_batch_tick()
-        await pilot.pause()
-
-        bar = app.query_one(InfoBar)
-        assert bar.batch_countdown == BATCH_INTERVAL_SECONDS
-
-
-# ---------------------------------------------------------------------------
 # 9. peak_level property exists on AudioRecorder and starts at 0.0
 # ---------------------------------------------------------------------------
 
@@ -520,9 +498,11 @@ async def test_start_recording_unwinds_recorder_when_recorder_start_fails(
     mock_session_cls.return_value = mock_session
 
     app = ScarecrowApp(transcriber=_mock_transcriber())
-    app._awaiting_context = False
+    app._preflight_check = lambda: False  # type: ignore[method-assign]
     async with app.run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        # Re-enable so the manual call works
+        app._preflight_check = lambda: True  # type: ignore[method-assign]
         app._start_recording()
         await pilot.pause()
 
@@ -551,7 +531,7 @@ async def test_stop_recording_flushes_final_batch_before_finalize(
 
     transcriber = _mock_transcriber()
 
-    def fake_final_batch(audio, elapsed, *, emit_callback=False, initial_prompt=None):
+    def fake_final_batch(audio, elapsed, *, emit_callback=False):
         calls.append("final-batch")
         assert emit_callback is False
         return "transcribed text"
@@ -626,24 +606,6 @@ async def test_stop_recording_waits_for_inflight_batch_before_finalize(
     assert calls == ["batch-start", "batch-end", "shutdown", "session-finalize"]
 
 
-async def test_batch_tick_skips_overlap_without_draining_new_audio() -> None:
-    """A second batch tick while one is inflight must leave recorder audio buffered."""
-    from concurrent.futures import Future
-
-    recorder = MagicMock()
-    recorder.drain_buffer.side_effect = [np.zeros(16000), np.ones(16000)]
-
-    async with ScarecrowApp(transcriber=_mock_transcriber()).run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.pause()
-        app._audio_recorder = recorder
-        app._batch_futures = {Future()}
-
-        app._batch_transcribe()
-
-    assert recorder.drain_buffer.call_count == 0
-
-
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_stop_recording_surfaces_session_finalize_failure(
@@ -715,7 +677,7 @@ async def test_flush_final_batch_disables_async_callback_path(tmp_path: Path) ->
 
     transcriber = _mock_transcriber()
 
-    def fake_batch(_audio, _elapsed, *, emit_callback=True, initial_prompt=None):
+    def fake_batch(_audio, _elapsed, *, emit_callback=True):
         assert emit_callback is False
         return "one final line"
 
@@ -1112,9 +1074,6 @@ async def test_enter_submits_note() -> None:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
         await pilot.pause()
 
-        # Bypass the context-collection phase so Enter routes to _submit_note
-        app._awaiting_context = False
-
         input_widget = app.query_one("#note-input", Input)
         await pilot.click("#note-input")
         await pilot.pause()
@@ -1133,290 +1092,6 @@ async def test_enter_submits_note() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Context injection (whisper-only — parakeet does not support context injection)
-# ---------------------------------------------------------------------------
-
-
-@patch("scarecrow.config.BACKEND", "whisper")
-@patch("scarecrow.app.AudioRecorder")
-@patch("scarecrow.app.Session")
-async def test_context_start_empty_starts_recording(
-    mock_session_cls, mock_recorder_cls
-) -> None:
-    """Pressing Enter with an empty input starts recording when transcriber is ready."""
-    mock_recorder_cls.return_value = _mock_recorder()
-    mock_session_cls.return_value = MagicMock()
-
-    async with _app(with_transcriber=True, awaiting_context=True).run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        app._start_recording()
-        await pilot.pause(delay=0.3)
-        assert app.state is AppState.RECORDING
-
-
-@patch("scarecrow.config.BACKEND", "whisper")
-async def test_context_start_empty_stays_idle_without_transcriber() -> None:
-    """Pressing Enter with no transcriber stays IDLE and shows an error."""
-    async with _app(awaiting_context=True).run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.press("enter")
-        await pilot.pause(delay=0.2)
-        assert app.state is AppState.IDLE
-
-
-@patch("scarecrow.config.BACKEND", "whisper")
-@patch("scarecrow.app.AudioRecorder")
-@patch("scarecrow.app.Session")
-async def test_context_start_with_text_writes_context_block(
-    mock_session_cls, mock_recorder_cls
-) -> None:
-    """Pressing Enter with context text writes a [CONTEXT] block to RichLog."""
-    mock_recorder_cls.return_value = _mock_recorder()
-    mock_session_cls.return_value = MagicMock()
-
-    async with _app(with_transcriber=True, awaiting_context=True).run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.pause()
-
-        input_widget = app.query_one("#note-input", Input)
-        input_widget.value = "Malcolm X"
-
-        captions = app.query_one("#captions", RichLog)
-        initial_lines = len(captions.lines)
-
-        await pilot.press("enter")
-        await pilot.pause(delay=0.3)
-
-        new_text = " ".join(str(line) for line in captions.lines[initial_lines:])
-        assert "CONTEXT" in new_text
-        assert "Malcolm X" in new_text
-
-
-@patch("scarecrow.config.BACKEND", "whisper")
-@patch("scarecrow.app.AudioRecorder")
-@patch("scarecrow.app.Session")
-async def test_context_start_stores_entries(
-    mock_session_cls, mock_recorder_cls
-) -> None:
-    """Context text provided at launch must be stored in _context_entries."""
-    mock_recorder_cls.return_value = _mock_recorder()
-    mock_session_cls.return_value = MagicMock()
-
-    async with _app(with_transcriber=True, awaiting_context=True).run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.pause()
-
-        input_widget = app.query_one("#note-input", Input)
-        input_widget.value = "Malcolm X"
-
-        await pilot.press("enter")
-        await pilot.pause(delay=0.3)
-
-        assert app._context_entries == ["Malcolm X"]
-
-
-@patch("scarecrow.app.AudioRecorder")
-@patch("scarecrow.app.Session")
-async def test_context_command_appends_entries(
-    mock_session_cls, mock_recorder_cls
-) -> None:
-    """/context command during recording appends a new entry."""
-    mock_recorder_cls.return_value = _mock_recorder()
-    mock_session_cls.return_value = MagicMock()
-
-    async with _app(with_transcriber=True).run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        # Start recording first
-        app._start_recording()
-        await pilot.pause(delay=0.3)
-        assert app.state is AppState.RECORDING
-
-        # Send /context command
-        input_widget = app.query_one("#note-input", Input)
-        input_widget.value = "/context Yakub"
-        await pilot.press("enter")
-        await pilot.pause()
-
-        assert "Yakub" in app._context_entries
-
-
-@patch("scarecrow.config.BACKEND", "whisper")
-@patch("scarecrow.app.AudioRecorder")
-@patch("scarecrow.app.Session")
-async def test_clear_command_wipes_entries(mock_session_cls, mock_recorder_cls) -> None:
-    """/clear command empties _context_entries and _previous_batch_tail."""
-    mock_recorder_cls.return_value = _mock_recorder()
-    mock_session_cls.return_value = MagicMock()
-
-    async with _app(with_transcriber=True, awaiting_context=True).run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.pause()
-
-        # Start with some context
-        input_widget = app.query_one("#note-input", Input)
-        input_widget.value = "Malcolm X"
-        await pilot.press("enter")
-        await pilot.pause(delay=0.3)
-        assert app._context_entries == ["Malcolm X"]
-
-        # Now clear
-        input_widget.value = "/clear"
-        await pilot.press("enter")
-        await pilot.pause()
-
-        assert app._context_entries == []
-        assert app._previous_batch_tail == ""
-
-
-@patch("scarecrow.config.BACKEND", "whisper")
-@patch("scarecrow.app.AudioRecorder")
-@patch("scarecrow.app.Session")
-async def test_context_display_shown_when_context_present(
-    mock_session_cls, mock_recorder_cls
-) -> None:
-    """#context-display widget must be visible after context is added."""
-    from textual.widgets import Static
-
-    mock_recorder_cls.return_value = _mock_recorder()
-    mock_session_cls.return_value = MagicMock()
-
-    async with _app(with_transcriber=True, awaiting_context=True).run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.pause()
-
-        input_widget = app.query_one("#note-input", Input)
-        input_widget.value = "Malcolm X"
-        await pilot.press("enter")
-        await pilot.pause(delay=0.3)
-
-        display = app.query_one("#context-display", Static)
-        assert display.display is True
-        assert "Context: 1" in str(display.render())
-
-
-@patch("scarecrow.config.BACKEND", "whisper")
-@patch("scarecrow.app.AudioRecorder")
-@patch("scarecrow.app.Session")
-async def test_context_display_hidden_after_clear(
-    mock_session_cls, mock_recorder_cls
-) -> None:
-    """#context-display widget must be hidden after /clear."""
-    from textual.widgets import Static
-
-    mock_recorder_cls.return_value = _mock_recorder()
-    mock_session_cls.return_value = MagicMock()
-
-    async with _app(with_transcriber=True, awaiting_context=True).run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.pause()
-
-        input_widget = app.query_one("#note-input", Input)
-        input_widget.value = "Malcolm X"
-        await pilot.press("enter")
-        await pilot.pause(delay=0.3)
-
-        input_widget.value = "/clear"
-        await pilot.press("enter")
-        await pilot.pause()
-
-        display = app.query_one("#context-display", Static)
-        assert display.display is False
-
-
-async def test_build_initial_prompt_context_only() -> None:
-    """_build_initial_prompt with only entries returns joined entries string."""
-    async with _app().run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.pause()
-
-        app._context_entries = ["Malcolm X", "Nation of Islam"]
-        app._previous_batch_tail = ""
-
-        result = app._build_initial_prompt()
-        assert result == "Malcolm X, Nation of Islam"
-
-
-async def test_build_initial_prompt_with_tail() -> None:
-    """_build_initial_prompt combines entries and tail with '. ' separator."""
-    async with _app().run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.pause()
-
-        app._context_entries = ["Malcolm X"]
-        app._previous_batch_tail = "he spoke about civil rights"
-
-        result = app._build_initial_prompt()
-        assert result == "Malcolm X. he spoke about civil rights"
-
-
-async def test_build_initial_prompt_empty_returns_none() -> None:
-    """_build_initial_prompt returns None when both entries and tail are empty."""
-    async with _app().run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.pause()
-
-        app._context_entries = []
-        app._previous_batch_tail = ""
-
-        result = app._build_initial_prompt()
-        assert result is None
-
-
-async def test_update_tail_stores_last_35_words() -> None:
-    """_update_tail keeps only the last 35 words of the provided text."""
-    async with _app().run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.pause()
-
-        # Build a 50-word string
-        words = [f"word{i}" for i in range(50)]
-        long_text = " ".join(words)
-
-        app._update_tail(long_text)
-
-        tail_words = app._previous_batch_tail.split()
-        assert len(tail_words) == 35
-        assert tail_words == words[-35:]
-
-
-@patch("scarecrow.config.BACKEND", "whisper")
-async def test_notes_label_shows_context_prompt_before_recording() -> None:
-    """The notes label must show the context prompt before recording starts."""
-    async with _app(awaiting_context=True).run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.pause()
-
-        from textual.widgets import Static
-
-        label = app.query_one("#notes-label", Static)
-        label_text = str(label.render()).lower()
-        assert "context" in label_text
-
-
-@patch("scarecrow.app.AudioRecorder")
-@patch("scarecrow.app.Session")
-async def test_notes_label_reverts_after_recording_starts(
-    mock_session_cls, mock_recorder_cls
-) -> None:
-    """After recording starts the notes label must revert to the notes prompt."""
-    mock_recorder_cls.return_value = _mock_recorder()
-    mock_session_cls.return_value = MagicMock()
-
-    async with _app(with_transcriber=True, awaiting_context=True).run_test() as pilot:
-        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.pause()
-
-        from textual.widgets import Static
-
-        app._start_recording()
-        await pilot.pause(delay=0.3)
-
-        label = app.query_one("#notes-label", Static)
-        label_text = str(label.render())
-        assert "Notes" in label_text or "Enter to start" in label_text
-
-
-# ---------------------------------------------------------------------------
 # Note count tracking
 # ---------------------------------------------------------------------------
 
@@ -1430,7 +1105,6 @@ async def test_note_counts_increment(mock_session_cls, mock_recorder_cls) -> Non
 
     async with _app(with_transcriber=True).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        # Start recording so _handle_add_context works
         app._start_recording()
         await pilot.pause(delay=0.3)
         assert app.state is AppState.RECORDING
@@ -1447,40 +1121,26 @@ async def test_note_counts_increment(mock_session_cls, mock_recorder_cls) -> Non
         app._submit_note()
         await pilot.pause()
 
-        # Submit a /context entry
-        input_widget.value = "/context Malcolm X"
-        await pilot.press("enter")
-        await pilot.pause()
-
         assert app._note_counts["NOTE"] == 1
         assert app._note_counts["TASK"] == 1
-        assert app._note_counts["CONTEXT"] >= 1
 
 
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
-async def test_context_display_shows_all_counts(
+async def test_note_display_shows_task_and_note_counts(
     mock_session_cls, mock_recorder_cls
 ) -> None:
-    """#context-display must show counts for Context, Tasks, and Notes."""
-    from textual.widgets import Static
-
+    """_note_counts must track Tasks and Notes counts after submissions."""
     mock_recorder_cls.return_value = _mock_recorder()
     mock_session_cls.return_value = MagicMock()
 
     async with _app(with_transcriber=True).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        # Start recording
         app._start_recording()
         await pilot.pause(delay=0.3)
         assert app.state is AppState.RECORDING
 
         input_widget = app.query_one("#note-input", Input)
-
-        # Add a context entry
-        input_widget.value = "/context Malcolm X"
-        await pilot.press("enter")
-        await pilot.pause()
 
         # Add a task note
         input_widget.value = "/task follow up"
@@ -1492,11 +1152,8 @@ async def test_context_display_shows_all_counts(
         app._submit_note()
         await pilot.pause()
 
-        display = app.query_one("#context-display", Static)
-        display_text = str(display.render())
-        assert "Context: 1" in display_text
-        assert "Tasks: 1" in display_text
-        assert "Notes: 1" in display_text
+        assert app._note_counts["TASK"] == 1
+        assert app._note_counts["NOTE"] == 1
 
 
 def test_info_bar_peak_level_renders() -> None:
@@ -1588,9 +1245,9 @@ async def test_end_to_end_session_append_sentence_called(
 async def test_batch_transcription_triggered_at_interval(
     mock_session_cls, mock_recorder_cls
 ) -> None:
-    """_on_batch_tick must call _batch_transcribe when RECORDING."""
+    """_vad_transcribe must call _submit_batch_transcription when RECORDING."""
     mock_recorder = _mock_recorder()
-    mock_recorder.drain_buffer.return_value = np.zeros(16000, dtype=np.float32)
+    mock_recorder.drain_to_silence.return_value = np.zeros(16000, dtype=np.float32)
     mock_recorder_cls.return_value = mock_recorder
     mock_session_cls.return_value = MagicMock()
 
@@ -1611,12 +1268,12 @@ async def test_batch_transcription_triggered_at_interval(
 
         app._submit_batch_transcription = track_submit  # type: ignore[method-assign]
 
-        # Fire the batch tick manually — simulates BATCH_INTERVAL_SECONDS elapsed
-        app._on_batch_tick()
+        # Fire VAD transcribe manually — simulates silence detected
+        app._vad_transcribe()
         await pilot.pause()
 
         assert len(submit_calls) == 1, (
-            "_submit_batch_transcription must be called once when batch tick fires"
+            "_submit_batch_transcription must be called once when _vad_transcribe fires"
         )
 
 
@@ -1625,9 +1282,9 @@ async def test_batch_transcription_triggered_at_interval(
 async def test_batch_transcription_not_triggered_before_interval(
     mock_session_cls, mock_recorder_cls
 ) -> None:
-    """_submit_batch_transcription must NOT be called before the batch tick fires."""
+    """_submit_batch_transcription must NOT be called without _vad_transcribe firing."""
     mock_recorder = _mock_recorder()
-    mock_recorder.drain_buffer.return_value = np.zeros(16000, dtype=np.float32)
+    mock_recorder.drain_to_silence.return_value = np.zeros(16000, dtype=np.float32)
     mock_recorder_cls.return_value = mock_recorder
     mock_session_cls.return_value = MagicMock()
 
@@ -1648,11 +1305,11 @@ async def test_batch_transcription_not_triggered_before_interval(
 
         app._submit_batch_transcription = track_submit  # type: ignore[method-assign]
 
-        # Do NOT fire the batch tick — just wait briefly
+        # Do NOT call _vad_transcribe — just wait briefly
         await pilot.pause(delay=0.1)
 
         assert len(submit_calls) == 0, (
-            "_submit_batch_transcription must not be called before the batch interval"
+            "_submit_batch_transcription must not be called without _vad_transcribe"
         )
 
 

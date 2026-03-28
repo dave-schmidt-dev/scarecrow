@@ -9,16 +9,9 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from scarecrow.runtime import model_cache_path
 from scarecrow.transcriber import Transcriber, TranscriberBindings
 
 _FIXTURE_PATH = Path("recordings/2026-03-23_22-12-02/audio.wav")
-
-
-def _batch_model_cached() -> bool:
-    from scarecrow import config
-
-    return model_cache_path(config.FINAL_MODEL) is not None
 
 
 def _resample(audio: np.ndarray, src_sr: int, dst_sr: int = 16000) -> np.ndarray:
@@ -31,10 +24,6 @@ def _resample(audio: np.ndarray, src_sr: int, dst_sr: int = 16000) -> np.ndarray
     return np.interp(new_times, old_times, audio).astype(np.float32)
 
 
-@pytest.mark.skipif(
-    not _batch_model_cached(),
-    reason="batch model must be cached to run integration test",
-)
 def test_batch_transcription_with_real_audio_fixture() -> None:
     """Feed audio through the batch path with actual models.
 
@@ -42,7 +31,7 @@ def test_batch_transcription_with_real_audio_fixture() -> None:
     to synthetic audio so the pipeline mechanics are still exercised on
     machines without the fixture.
     """
-    from scarecrow import config
+    pytest.importorskip("parakeet_mlx")
 
     batches: list[str] = []
     errors: list[tuple[str, str]] = []
@@ -64,6 +53,7 @@ def test_batch_transcription_with_real_audio_fixture() -> None:
     signal.alarm(30)
     try:
         transcriber.prepare()
+        transcriber.preload_batch_model()
 
         check_content = _FIXTURE_PATH.exists()
         if check_content:
@@ -78,7 +68,6 @@ def test_batch_transcription_with_real_audio_fixture() -> None:
         signal.alarm(0)
 
     assert errors == []
-    assert config.CONDITION_ON_PREVIOUS_TEXT is False
 
     if check_content:
         assert batches, "expected a batch transcription result"

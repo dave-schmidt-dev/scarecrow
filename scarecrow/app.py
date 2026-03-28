@@ -35,13 +35,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-def _get_batch_interval() -> int:
-    if config.BACKEND == "parakeet":
-        return config.BATCH_INTERVAL_PARAKEET
-    return config.BATCH_INTERVAL_WHISPER
-
-
-BATCH_INTERVAL_SECONDS = _get_batch_interval()
+BATCH_INTERVAL_SECONDS = config.BATCH_INTERVAL
 
 
 class AppState(Enum):
@@ -120,7 +114,7 @@ class InfoBar(Static):
             text.append("  ")
 
         if self.state in (AppState.RECORDING, AppState.PAUSED) and width >= 50:
-            label = "buf " if config.BACKEND == "parakeet" else "batch "
+            label = "buf "
             text.append(label, style="dim")
             text.append(f"{self.batch_countdown}s", style="bold")
 
@@ -167,10 +161,7 @@ class ScarecrowApp(App[None]):
         self._batch_window_start: int = 0
         self._shutdown_lock = threading.RLock()
         self._ignore_batch_results = False
-        self._context_entries: list[str] = []
-        self._awaiting_context: bool = True
-        self._previous_batch_tail: str = ""
-        self._note_counts: dict[str, int] = {"CONTEXT": 0, "TASK": 0, "NOTE": 0}
+        self._note_counts: dict[str, int] = {"TASK": 0, "NOTE": 0}
         self._recording_start_time: float | None = None
         self._disk_warn_shown: bool = False
         self._session_disk_warn_shown: bool = False
@@ -181,14 +172,8 @@ class ScarecrowApp(App[None]):
 
     def compose(self) -> ComposeResult:
         yield InfoBar(id="info-bar")
-        if config.BACKEND == "parakeet":
-            model_label = config.PARAKEET_MODEL.split("/")[-1]
-        else:
-            model_label = config.FINAL_MODEL
-        if config.BACKEND == "parakeet":
-            interval_label = "VAD"
-        else:
-            interval_label = f"every {BATCH_INTERVAL_SECONDS}s"
+        model_label = config.PARAKEET_MODEL.split("/")[-1]
+        interval_label = "VAD"
         yield Static(
             f"Transcript  [dim]({model_label} · {interval_label})[/dim]",
             classes="pane-label",
@@ -200,11 +185,7 @@ class ScarecrowApp(App[None]):
             wrap=True,
             min_width=0,
         )
-        yield Static("", id="context-display")
-        if config.BACKEND == "parakeet":
-            startup_hint = "Enter to start recording"
-        else:
-            startup_hint = "Context (e.g. Alice, React, Q4 planning) or Enter to start"
+        startup_hint = "Enter to start recording"
         yield Static(
             startup_hint,
             id="notes-label",
@@ -228,8 +209,15 @@ class ScarecrowApp(App[None]):
         with contextlib.suppress(NoMatches):
             self.query_one("#captions", RichLog).write(self._BANNER)
         self.query_one("#note-input", Input).focus()
-        if config.BACKEND == "parakeet" and self._awaiting_context:
-            self._handle_context_start("")
+        if not self._preflight_check():
+            return
+        self._start_recording()
+        # Restore notes label
+        with contextlib.suppress(NoMatches):
+            label = self.query_one("#notes-label", Static)
+            label.update(
+                "Notes  [dim](/t task  /f flush  /help · Enter to submit)[/dim]"
+            )
 
     def _preflight_check(self) -> bool:
         import sounddevice as sd
@@ -259,7 +247,6 @@ class ScarecrowApp(App[None]):
     def _tick(self) -> None:
         if self._recording_start_time is not None:
             self._elapsed = int(time.monotonic() - self._recording_start_time)
-        self._batch_countdown = max(0, self._batch_countdown - 1)
         self._check_recorder_warnings()
         self._sync_info_bar()
 
@@ -326,26 +313,32 @@ class ScarecrowApp(App[None]):
             self._session_disk_warn_shown = True
             self._warn_transcript("Transcript write failed \u2014 disk may be full")
 
+    def _handle_flush(self) -> None:
+        """Force-flush the audio buffer immediately."""
+        with contextlib.suppress(NoMatches):
+            self.query_one("#note-input", Input).value = ""
+        if self.state is not AppState.RECORDING:
+            return
+        self._vad_transcribe()
+        # If VAD didn't drain (no silence boundary), force a full drain
+        if self._audio_recorder is not None:
+            audio = self._audio_recorder.drain_buffer()
+            if audio is not None and len(audio) > 0:
+                batch_elapsed = self._batch_window_start
+                self._batch_window_start = self._elapsed
+                self._submit_batch_transcription(audio, batch_elapsed)
+
     def _show_help(self) -> None:
         """Show inline help in the transcript pane."""
         with contextlib.suppress(NoMatches):
             self.query_one("#note-input", Input).value = ""
-        has_context = config.BACKEND != "parakeet"
         help_text = (
             "[bold]Commands:[/bold]\n"
             "  /task, /t [dim]<text>[/dim]   "
             "Add a task note\n"
-            "  /note, /n [dim]<text>[/dim]   "
-            "Add a plain note\n"
-            + (
-                "  /context [dim]<terms>[/dim]   "
-                "Add context terms for accuracy\n"
-                "  /clear              "
-                "Clear context & reset\n"
-                if has_context
-                else ""
-            )
-            + "  /help, /h, ?        "
+            "  /flush, /f          "
+            "Force-flush the audio buffer now\n"
+            "  /help, /h, ?        "
             "Show this message\n"
             "\n"
             "[bold]Keybindings:[/bold]\n"
@@ -432,12 +425,10 @@ class ScarecrowApp(App[None]):
             self._set_status("Batch busy; carrying audio into the next window.")
             return False
 
-        prompt = self._build_initial_prompt()
         future = self._ensure_batch_executor().submit(
             self._transcriber.transcribe_batch,
             audio,
             batch_elapsed,
-            initial_prompt=prompt,
         )
         self._batch_futures.add(future)
         return True
@@ -511,7 +502,6 @@ class ScarecrowApp(App[None]):
         text = self._transcriber.transcribe_batch(
             audio,
             batch_elapsed,
-            initial_prompt=self._build_initial_prompt(),
             emit_callback=False,
         )
         if text:
@@ -544,27 +534,6 @@ class ScarecrowApp(App[None]):
             self._batch_executor = None
         return not timed_out, captured
 
-    def _batch_transcribe(self) -> None:
-        if self._audio_recorder is None or self._transcriber is None:
-            return
-
-        self._reap_batch_futures()
-        if self._batch_futures:
-            log.warning(
-                "Skipping batch tick while previous batch "
-                "transcription is still running"
-            )
-            self._set_status("Batch busy; carrying audio into the next window.")
-            return
-
-        audio = self._audio_recorder.drain_buffer()
-        if audio is None or len(audio) == 0:
-            return
-
-        batch_elapsed = self._batch_window_start
-        self._batch_window_start = self._elapsed
-        self._submit_batch_transcription(audio, batch_elapsed)
-
     def _vad_transcribe(self) -> None:
         """Drain audio at silence boundaries (parakeet backend)."""
         if self._audio_recorder is None or self._transcriber is None:
@@ -582,21 +551,8 @@ class ScarecrowApp(App[None]):
         self._batch_window_start = self._elapsed
         self._submit_batch_transcription(audio, batch_elapsed)
 
-    def _build_initial_prompt(self) -> str | None:
-        parts = []
-        if self._context_entries:
-            parts.append(", ".join(self._context_entries))
-        if self._previous_batch_tail:
-            parts.append(self._previous_batch_tail)
-        return ". ".join(parts) if parts else None
-
-    def _update_tail(self, text: str) -> None:
-        words = text.split()
-        self._previous_batch_tail = " ".join(words[-35:])
-
     def _append_transcript(self, text: str, batch_elapsed: int | None = None) -> None:
         self._record_transcript(text, batch_elapsed)
-        self._update_tail(text)
 
     def _write_pause_marker(self) -> None:
         h = self._elapsed // 3600
@@ -624,7 +580,6 @@ class ScarecrowApp(App[None]):
         self._audio_recorder = AudioRecorder(
             output_path=self._session.audio_path,
             sample_rate=config.SAMPLE_RATE,
-            overlap_ms=200 if config.BACKEND == "parakeet" else 500,
         )
 
         try:
@@ -644,17 +599,10 @@ class ScarecrowApp(App[None]):
             self._session = None
             return
 
-        self._use_vad = config.BACKEND == "parakeet"
-        if self._use_vad:
-            self._batch_timer = self.set_interval(
-                config.VAD_POLL_INTERVAL_MS / 1000,
-                self._on_vad_poll,
-            )
-        else:
-            self._batch_timer = self.set_interval(
-                BATCH_INTERVAL_SECONDS,
-                self._on_batch_tick,
-            )
+        self._batch_timer = self.set_interval(
+            config.VAD_POLL_INTERVAL_MS / 1000,
+            self._on_vad_poll,
+        )
         self._recording_start_time = time.monotonic()
         self._elapsed = 0
         self._batch_window_start = 0
@@ -681,17 +629,9 @@ class ScarecrowApp(App[None]):
             self._batch_countdown = buf_s
             self._sync_info_bar()
 
-    def _on_batch_tick(self) -> None:
-        self._batch_countdown = BATCH_INTERVAL_SECONDS
-        self._sync_info_bar()
-        if self.state is AppState.RECORDING:
-            self._batch_transcribe()
-        elif self.state is AppState.PAUSED:
-            self._write_pause_marker()
-
     def action_pause(self) -> None:
         if self.state is AppState.RECORDING:
-            self._batch_transcribe()
+            self._vad_transcribe()
             self.state = AppState.PAUSED
             if self._audio_recorder is not None:
                 self._audio_recorder.pause()
@@ -759,8 +699,8 @@ class ScarecrowApp(App[None]):
                 or self._session is not None
                 or bool(self._batch_futures)
             )
-            has_active_transcriber = self._transcriber is not None and (
-                self._transcriber.is_ready or self._transcriber.has_active_worker
+            has_active_transcriber = (
+                self._transcriber is not None and self._transcriber.is_ready
             )
             needs_cleanup = has_open_resources or has_active_transcriber
             if not needs_cleanup:
@@ -809,9 +749,7 @@ class ScarecrowApp(App[None]):
                 self._batch_executor.shutdown(wait=False, cancel_futures=False)
                 self._batch_executor = None
 
-            if self._transcriber is not None and (
-                self._transcriber.is_ready or self._transcriber.has_active_worker
-            ):
+            if self._transcriber is not None and self._transcriber.is_ready:
                 try:
                     self._transcriber.shutdown(timeout=5)
                 except Exception as exc:
@@ -838,8 +776,6 @@ class ScarecrowApp(App[None]):
     _NOTE_PREFIXES: ClassVar[dict[str, str]] = {
         "/task": "TASK",
         "/t": "TASK",
-        "/note": "NOTE",
-        "/n": "NOTE",
     }
 
     def _submit_note(self) -> None:
@@ -891,81 +827,6 @@ class ScarecrowApp(App[None]):
         self._update_context_display()
         input_widget.value = ""
 
-    def _handle_context_start(self, raw: str) -> None:
-        text = raw.strip()
-        self._awaiting_context = False
-
-        # Restore notes label
-        with contextlib.suppress(NoMatches):
-            label = self.query_one("#notes-label", Static)
-            label.update(
-                "Notes  [dim](/t task  /n note  /help · Enter to submit)[/dim]"
-            )
-
-        # Clear the input
-        with contextlib.suppress(NoMatches):
-            self.query_one("#note-input", Input).value = ""
-
-        # Start recording
-        if not self._preflight_check():
-            return
-        self._start_recording()
-
-        # Write context if provided
-        if text:
-            self._context_entries.append(text)
-            self._note_counts["CONTEXT"] += 1
-            timestamp = datetime.now().strftime("%H:%M:%S")
-            file_line = f"[CONTEXT] {timestamp} -- {text}"
-            styled_line = (
-                f"[bold magenta][CONTEXT][/bold magenta]"
-                f" [dim]{timestamp}[/dim] \u2014 {text}"
-            )
-            with contextlib.suppress(NoMatches):
-                self.query_one("#captions", RichLog).write(styled_line)
-            if self._session is not None:
-                self._session.append_sentence(file_line)
-            self._update_context_display()
-
-    def _handle_add_context(self, raw: str) -> None:
-        # Strip the /context prefix
-        for prefix in ("/context ", "/context"):
-            if raw.lower().startswith(prefix):
-                text = raw[len(prefix) :].strip()
-                break
-        else:
-            text = ""
-
-        if not text:
-            with contextlib.suppress(NoMatches):
-                self.query_one("#note-input", Input).value = ""
-            return
-
-        self._context_entries.append(text)
-        self._note_counts["CONTEXT"] += 1
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        file_line = f"[CONTEXT] {timestamp} -- {text}"
-        styled_line = (
-            f"[bold magenta][CONTEXT][/bold magenta]"
-            f" [dim]{timestamp}[/dim] \u2014 {text}"
-        )
-        with contextlib.suppress(NoMatches):
-            self.query_one("#captions", RichLog).write(styled_line)
-        if self._session is not None:
-            self._session.append_sentence(file_line)
-        self._update_context_display()
-        with contextlib.suppress(NoMatches):
-            self.query_one("#note-input", Input).value = ""
-
-    def _handle_clear_context(self) -> None:
-        self._context_entries.clear()
-        self._note_counts["CONTEXT"] = 0
-        self._previous_batch_tail = ""
-        self._update_context_display()
-        self._set_status("Context cleared")
-        with contextlib.suppress(NoMatches):
-            self.query_one("#note-input", Input).value = ""
-
     def _update_context_display(self) -> None:
         try:
             display = self.query_one("#context-display", Static)
@@ -973,7 +834,6 @@ class ScarecrowApp(App[None]):
             return
         parts = []
         for label, key in [
-            ("Context", "CONTEXT"),
             ("Tasks", "TASK"),
             ("Notes", "NOTE"),
         ]:
@@ -990,19 +850,13 @@ class ScarecrowApp(App[None]):
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "note-input":
             return
-        if self._awaiting_context:
-            self._handle_context_start(event.input.value)
-            return
         raw = event.input.value.strip()
         lower = raw.lower()
         if lower in ("/help", "/h", "?"):
             self._show_help()
             return
-        if lower == "/clear":
-            self._handle_clear_context()
-            return
-        if lower.startswith("/context ") or lower == "/context":
-            self._handle_add_context(raw)
+        if lower in ("/flush", "/f"):
+            self._handle_flush()
             return
         self._submit_note()
 

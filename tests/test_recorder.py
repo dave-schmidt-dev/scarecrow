@@ -178,26 +178,6 @@ def test_start_is_idempotent(output_path: Path, mock_sd, mock_sf) -> None:
     recorder.stop()
 
 
-def test_on_audio_exception_does_not_crash_callback(
-    output_path: Path, mock_sd, mock_sf
-) -> None:
-    """_callback() continues to write audio even when _on_audio raises."""
-    _, mock_file = mock_sf
-
-    def bad_callback(data: np.ndarray) -> None:
-        raise RuntimeError("simulated consumer crash")
-
-    recorder = AudioRecorder(output_path, on_audio=bad_callback)
-    recorder.start()
-
-    indata = np.zeros((1024, 1), dtype="int16")
-    recorder._callback(indata, 1024, None, None)
-    recorder._callback(indata, 1024, None, None)
-
-    assert mock_file.write.call_count == 2
-    recorder.stop()
-
-
 def test_peak_level_returns_correct_value(output_path: Path, mock_sd, mock_sf) -> None:
     """peak_level property returns the value set by the callback, under lock."""
     recorder = AudioRecorder(output_path)

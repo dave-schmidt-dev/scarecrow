@@ -18,7 +18,6 @@ def _mock_transcriber():
     """Return a mock batch-only Transcriber."""
     mock = MagicMock()
     mock.is_ready = True
-    mock.has_active_worker = False
     mock.shutdown.return_value = None
 
     def _shutdown(timeout=5):
@@ -45,9 +44,8 @@ def _mock_recorder():
 # ---------------------------------------------------------------------------
 
 
-@patch("scarecrow.config.BACKEND", "parakeet")
 def test_transcribe_batch_parakeet_calls_model() -> None:
-    """When BACKEND is parakeet, transcribe_batch routes to _transcribe_parakeet."""
+    """transcribe_batch routes to _transcribe_parakeet."""
     mock_manager = MagicMock()
 
     t = Transcriber(model_manager=mock_manager)
@@ -62,36 +60,10 @@ def test_transcribe_batch_parakeet_calls_model() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 2: initial_prompt is NOT forwarded to Parakeet
+# Test 2: Punctuation and capitalization are preserved
 # ---------------------------------------------------------------------------
 
 
-@patch("scarecrow.config.BACKEND", "parakeet")
-def test_transcribe_batch_parakeet_ignores_initial_prompt() -> None:
-    """When BACKEND is parakeet, initial_prompt is accepted but not forwarded."""
-    mock_manager = MagicMock()
-
-    t = Transcriber(model_manager=mock_manager)
-    t._ready = True
-
-    audio = np.zeros(16000, dtype=np.float32)
-    patcher = patch.object(t, "_transcribe_parakeet", return_value="Hello world.")
-    with patcher as mock_tp:
-        result = t.transcribe_batch(
-            audio, 0, initial_prompt="some context", emit_callback=False
-        )
-        # _transcribe_parakeet called with audio only, no prompt
-        args, _kwargs = mock_tp.call_args
-        assert len(args) == 1
-    assert result == "Hello world."
-
-
-# ---------------------------------------------------------------------------
-# Test 3: Punctuation and capitalization are preserved
-# ---------------------------------------------------------------------------
-
-
-@patch("scarecrow.config.BACKEND", "parakeet")
 def test_transcribe_batch_parakeet_preserves_punctuation() -> None:
     """Parakeet results must be returned with punctuation and capitalization intact."""
     original_text = "Hello, World! This is a test."
@@ -109,11 +81,10 @@ def test_transcribe_batch_parakeet_preserves_punctuation() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 4: Errors in Parakeet path surface via on_error callback
+# Test 3: Errors in Parakeet path surface via on_error callback
 # ---------------------------------------------------------------------------
 
 
-@patch("scarecrow.config.BACKEND", "parakeet")
 def test_transcribe_batch_parakeet_error_emits_callback() -> None:
     """A RuntimeError in parakeet path must trigger on_error and return None."""
     errors: list[tuple[str, str]] = []
@@ -260,25 +231,3 @@ async def test_divider_appears_after_pause_resume(
         assert any("test_resume.txt" in ln for ln in new_after_resume), (
             "Expected a divider after resume at elapsed=5"
         )
-
-
-# ---------------------------------------------------------------------------
-# Test 8: BATCH_INTERVAL_SECONDS reflects the active backend
-# ---------------------------------------------------------------------------
-
-
-def test_batch_interval_reflects_backend() -> None:
-    """_get_batch_interval() must return the correct interval per backend."""
-    from scarecrow.app import _get_batch_interval
-
-    with patch("scarecrow.config.BACKEND", "parakeet"):
-        from scarecrow import config
-
-        config.BACKEND = "parakeet"
-        interval = _get_batch_interval()
-        assert interval == config.BATCH_INTERVAL_PARAKEET
-
-    with patch("scarecrow.config.BACKEND", "whisper"):
-        config.BACKEND = "whisper"
-        interval = _get_batch_interval()
-        assert interval == config.BATCH_INTERVAL_WHISPER

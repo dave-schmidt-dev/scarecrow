@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import threading
-from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -27,14 +26,10 @@ class AudioRecorder:
         output_path: Path,
         sample_rate: int = 16000,
         channels: int = config.CHANNELS,
-        on_audio: Callable[[np.ndarray], None] | None = None,
-        *,
-        overlap_ms: int = 500,
     ) -> None:
         self._output_path = output_path
         self._sample_rate = sample_rate
         self._channels = channels
-        self._on_audio = on_audio
 
         self._stream: sd.InputStream | None = None
         self._sound_file: sf.SoundFile | None = None
@@ -47,9 +42,6 @@ class AudioRecorder:
         self._audio_chunks: list[np.ndarray] = []
         self._chunk_energies: list[float] = []  # RMS per chunk, for VAD
         self._buffer_lock = threading.Lock()
-        self._overlap_tail: np.ndarray | None = None
-        self._overlap_samples = int(sample_rate * overlap_ms / 1000)
-
         # Peak level for audio meter (updated in callback)
         self._peak_level: float = 0.0
         self._held_peak: float = 0.0
@@ -121,14 +113,6 @@ class AudioRecorder:
                 with self._buffer_lock:
                     self._audio_chunks.append(indata.copy())
                     self._chunk_energies.append(rms)
-                # Feed to RealtimeSTT (or other consumer)
-                if self._on_audio is not None:
-                    try:
-                        self._on_audio(indata)
-                    except Exception:
-                        logging.getLogger(__name__).exception(
-                            "Audio feed callback failed; live transcription may stop"
-                        )
 
     def start(self) -> None:
         """Opens sounddevice InputStream with callback, opens SoundFile for writing."""
@@ -157,34 +141,18 @@ class AudioRecorder:
         with self._buffer_lock:
             self._audio_chunks.clear()
             self._chunk_energies.clear()
-            self._overlap_tail = None
-
         self._stream.start()
 
     def _finalize_audio(self, chunks: list[np.ndarray]) -> np.ndarray:
-        """Concatenate int16 chunks → float32, apply overlap tail."""
+        """Concatenate int16 chunks → float32."""
         combined = np.concatenate(chunks, axis=0).squeeze()
-        audio = combined.astype(np.float32) / 32768.0
-
-        if self._overlap_tail is not None and self._overlap_samples > 0:
-            audio = np.concatenate([self._overlap_tail, audio])
-
-        if self._overlap_samples > 0:
-            if len(audio) > self._overlap_samples:
-                self._overlap_tail = audio[-self._overlap_samples :]
-            else:
-                self._overlap_tail = audio.copy()
-
-        return audio
+        return combined.astype(np.float32) / 32768.0
 
     def drain_buffer(self) -> np.ndarray | None:
         """Return accumulated audio since last drain, or None if empty.
 
         Audio is returned as float32 normalized to [-1, 1] at 16kHz
-        — ready for Whisper with no resampling needed.
-
-        Overlap from the previous drain is prepended so the model has
-        context at chunk boundaries (avoids dropped words).
+        — ready for Parakeet with no resampling needed.
         """
         with self._buffer_lock:
             if not self._audio_chunks:

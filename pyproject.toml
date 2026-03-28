@@ -5,7 +5,7 @@ description = "Always-recording TUI for transcription and inline notes"
 requires-python = ">=3.12"
 dependencies = [
     "textual>=1.0",
-    "faster-whisper>=0.9,<2.0",
+    "parakeet-mlx>=0.1",
     "sounddevice",
     "soundfile",
     "numpy",
@@ -14,9 +14,6 @@ dependencies = [
 
 [project.scripts]
 scarecrow = "scarecrow.__main__:main"
-
-[project.optional-dependencies]
-parakeet = ["parakeet-mlx>=0.1"]
 
 [build-system]
 requires = ["hatchling"]

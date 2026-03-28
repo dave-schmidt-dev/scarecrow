@@ -9,7 +9,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from scarecrow.runtime import configure_runtime_environment, model_cache_path
+from scarecrow.runtime import configure_runtime_environment
 
 configure_runtime_environment()
 
@@ -36,11 +36,6 @@ def _wait_for_enter_or_timeout(timeout: int = 30) -> None:
                 termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
-def _model_cache_path(model_name: str) -> Path | None:
-    """Backward-compatible wrapper used by tests and startup output."""
-    return model_cache_path(model_name)
-
-
 def main() -> None:
     log_path = Path.home() / ".cache" / "scarecrow" / "debug.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -58,26 +53,9 @@ def main() -> None:
     print("  Scarecrow", flush=True)
     print("  " + "─" * 40, flush=True)
 
-    backend = config.BACKEND
-    if backend == "parakeet":
-        print("  Backend:      parakeet-mlx (Apple Silicon GPU)", flush=True)
-        print(f"  Model:        {config.PARAKEET_MODEL}", flush=True)
-        print(
-            f"  Batch interval: {config.BATCH_INTERVAL_PARAKEET}s",
-            flush=True,
-        )
-    else:
-        print("  Backend:      faster-whisper (CPU)", flush=True)
-        batch = config.FINAL_MODEL
-        print(f"  Batch model:  {batch} (accurate, every 15s)", flush=True)
-        cache = _model_cache_path(batch)
-        if cache is not None:
-            print(f"  Batch cache:  {cache}", flush=True)
-        else:
-            print(
-                "  Batch cache:  not cached — will download on first run",
-                flush=True,
-            )
+    print("  Backend:      parakeet-mlx (Apple Silicon GPU)", flush=True)
+    print(f"  Model:        {config.PARAKEET_MODEL}", flush=True)
+    print("  Chunking:     VAD (drains at speech pauses)", flush=True)
 
     recordings_dir = config.DEFAULT_RECORDINGS_DIR.resolve()
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -95,12 +73,7 @@ def main() -> None:
         print(f"Failed to prepare batch transcriber: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    loading_msg = (
-        "  Loading Parakeet model…"
-        if backend == "parakeet"
-        else "  Loading batch model…"
-    )
-    print(loading_msg, flush=True)
+    print("  Loading Parakeet model…", flush=True)
     transcriber.preload_batch_model()
 
     t1 = time.monotonic()

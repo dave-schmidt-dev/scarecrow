@@ -7,49 +7,7 @@ import numpy as np
 import pytest
 
 # ---------------------------------------------------------------------------
-# Bug: model cache path detection wrong (dots replaced with dashes)
-# ---------------------------------------------------------------------------
-
-
-def test_model_cache_path_preserves_dots(tmp_path: Path) -> None:
-    """_model_cache_path must not mangle dots in model names like 'tiny.en'."""
-    from scarecrow.__main__ import _model_cache_path
-
-    # Create a fake cache directory matching HuggingFace's naming
-    cache_dir = tmp_path / ".cache" / "huggingface" / "hub"
-    model_dir = cache_dir / "models--Systran--faster-whisper-tiny.en"
-    model_dir.mkdir(parents=True)
-
-    with patch("scarecrow.__main__.Path.home", return_value=tmp_path):
-        result = _model_cache_path("tiny.en")
-        assert result is not None
-        assert "tiny.en" in str(result)
-
-
-def test_model_cache_path_returns_none_when_not_cached(tmp_path: Path) -> None:
-    """_model_cache_path returns None when the model isn't downloaded."""
-    from scarecrow.__main__ import _model_cache_path
-
-    with patch("scarecrow.__main__.Path.home", return_value=tmp_path):
-        result = _model_cache_path("tiny.en")
-        assert result is None
-
-
-def test_model_cache_path_works_for_large_v3(tmp_path: Path) -> None:
-    """large-v3 model name has no dots — should still work."""
-    from scarecrow.__main__ import _model_cache_path
-
-    cache_dir = tmp_path / ".cache" / "huggingface" / "hub"
-    model_dir = cache_dir / "models--Systran--faster-whisper-large-v3"
-    model_dir.mkdir(parents=True)
-
-    with patch("scarecrow.__main__.Path.home", return_value=tmp_path):
-        result = _model_cache_path("large-v3")
-        assert result is not None
-
-
-# ---------------------------------------------------------------------------
-# Bug: batch transcription gets 44100Hz audio but Whisper expects 16000Hz
+# Bug: batch transcription gets 44100Hz audio but Parakeet expects 16000Hz
 # ---------------------------------------------------------------------------
 
 
@@ -76,7 +34,7 @@ def test_drain_buffer_returns_float32(tmp_path: Path) -> None:
 def test_drain_buffer_sample_rate_is_44100(tmp_path: Path) -> None:
     """drain_buffer returns audio at recorder's sample rate (44100), not 16000.
 
-    The batch transcription code must resample before passing to Whisper.
+    The batch transcription code must resample before passing to Parakeet.
     """
     from scarecrow.recorder import AudioRecorder
 
@@ -97,29 +55,29 @@ def test_drain_buffer_sample_rate_is_44100(tmp_path: Path) -> None:
         recorder.stop()
 
 
-@patch("scarecrow.config.BACKEND", "whisper")
 def test_batch_passes_audio_directly_at_16khz() -> None:
-    """Batch transcription passes 16kHz audio directly to Whisper."""
+    """Batch transcription passes 16kHz audio directly to the parakeet backend."""
     from scarecrow.transcriber import Transcriber
 
     # Create 1 second of 16kHz audio
     audio_16k = np.zeros(16000, dtype=np.float32)
 
-    # Mock the batch model
-    mock_segment = MagicMock()
-    mock_segment.text = "hello world"
-    mock_model = MagicMock()
-    mock_model.transcribe.return_value = ([mock_segment], None)
+    captured: list[np.ndarray] = []
+
     t = Transcriber()
     t._ready = True
     t._model_manager = MagicMock()
-    t._model_manager.get_batch_model.return_value = mock_model
+
+    def fake_transcribe_parakeet(audio):
+        captured.append(audio)
+        return "hello world"
+
+    t._transcribe_parakeet = fake_transcribe_parakeet  # type: ignore[method-assign]
 
     t.transcribe_batch(audio_16k, batch_elapsed=30)
 
-    mock_model.transcribe.assert_called_once()
-    transcribed_audio = mock_model.transcribe.call_args[0][0]
-    assert len(transcribed_audio) == 16000
+    assert len(captured) == 1
+    assert len(captured[0]) == 16000
 
 
 # ---------------------------------------------------------------------------
