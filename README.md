@@ -173,6 +173,8 @@ uv run ruff check scarecrow/ tests/  # lint
 uv run vulture scarecrow/ vulture_whitelist.py  # dead code check
 ```
 
+**Do not run `pytest` directly** — always use `bash scripts/run_test_suite.sh`. The Textual async tests trigger a native segfault during interpreter teardown when run in a single pytest process. The suite runner isolates each test file (and each behavioral test node) in its own subprocess to avoid this.
+
 Pre-commit hooks run ruff (lint + format) and vulture automatically.
 
 When fixing bugs, update `BUGS.md` and add or extend the matching regression test in the same change.

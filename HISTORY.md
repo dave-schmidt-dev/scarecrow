@@ -13,6 +13,7 @@
 - **Added missing failure path tests:** preflight check (no devices, device query failure), recorder warning surfacing, pause/resume device-loss, session creation failure, transcript open failure, shutdown race flag timing, final-flush error handling.
 - **Fixed BUGS.md stale entries:** Updated 16 squashed bug entries pointing to deleted tests, renamed tests, or non-test regression references. Tightened policy checker to require `tests/` or `::` in regression test values for squashed bugs, skip won't-fix bugs.
 - **Fixed stale docs:** README pause marker frequency, batch executor shutdown description, removed non-existent startup cache output. Updated `__init__.py` docstring, `test_audio_capture.py` docstring, startup hint text.
+- **Added pytest warning to README:** Explicit "do not run pytest directly" note in Development section explaining the Textual segfault and directing to `run_test_suite.sh`.
 
 ## 2026-03-28 (audit fixes, lazy imports, /flush safety)
 
