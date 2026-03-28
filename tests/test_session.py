@@ -224,6 +224,62 @@ def test_transcript_content_order(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# FLAC compression
+# ---------------------------------------------------------------------------
+
+
+def test_compress_audio_creates_flac(tmp_path: Path) -> None:
+    """compress_audio must create a FLAC file and remove the WAV."""
+    session = Session(base_dir=tmp_path)
+
+    import numpy as np
+    import soundfile as sf
+
+    audio = np.zeros(16000, dtype=np.float32)  # 1 second of silence
+    sf.write(session.audio_path, audio, 16000)
+    assert session.audio_path.exists()
+
+    result = session.compress_audio()
+
+    assert result is not None
+    assert result.suffix == ".flac"
+    assert result.exists()
+    assert not session.audio_path.exists()  # WAV deleted
+    session.finalize()
+
+
+def test_compress_audio_returns_none_when_no_wav(tmp_path: Path) -> None:
+    """compress_audio must return None when no WAV file exists."""
+    session = Session(base_dir=tmp_path)
+    # Don't create any audio file
+    result = session.compress_audio()
+    assert result is None
+    session.finalize()
+
+
+def test_final_audio_path_prefers_flac(tmp_path: Path) -> None:
+    """final_audio_path must return FLAC path when it exists."""
+    session = Session(base_dir=tmp_path)
+
+    import numpy as np
+    import soundfile as sf
+
+    audio = np.zeros(16000, dtype=np.float32)
+    sf.write(session.audio_path, audio, 16000)
+    session.compress_audio()
+
+    assert session.final_audio_path.suffix == ".flac"
+    session.finalize()
+
+
+def test_final_audio_path_falls_back_to_wav(tmp_path: Path) -> None:
+    """final_audio_path must return WAV path when no FLAC exists."""
+    session = Session(base_dir=tmp_path)
+    assert session.final_audio_path == session.audio_path
+    session.finalize()
+
+
 def test_append_sentence_handles_open_failure(tmp_path: Path) -> None:
     """append_sentence must catch OSError from open() and set write_failed."""
     from unittest.mock import patch

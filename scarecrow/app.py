@@ -37,6 +37,7 @@ log = logging.getLogger(__name__)
 
 
 BATCH_INTERVAL_SECONDS = config.BATCH_INTERVAL
+RICHLOG_MAX_LINES = 500
 
 
 class AppState(Enum):
@@ -439,6 +440,20 @@ class ScarecrowApp(App[None]):
         self._batch_futures.add(future)
         return True
 
+    def _prune_richlog(self) -> None:
+        """Remove oldest lines from RichLog if it exceeds RICHLOG_MAX_LINES."""
+        try:
+            captions = self.query_one("#captions", RichLog)
+        except NoMatches:
+            return
+        overflow = len(captions.lines) - RICHLOG_MAX_LINES
+        if overflow > 0:
+            del captions.lines[:overflow]
+            captions._line_cache.clear()
+            # Paragraph tracking is invalidated by pruning
+            self._current_paragraph = ""
+            self._paragraph_line_count = 0
+
     def _transcript_divider(self, elapsed: int, path) -> str:
         h = elapsed // 3600
         m = (elapsed % 3600) // 60
@@ -495,6 +510,7 @@ class ScarecrowApp(App[None]):
         if include_ui:
             self._set_status("")
             self._sync_info_bar()
+            self._prune_richlog()
 
     def _flush_final_batch(self, *, include_ui: bool = True) -> None:
         if self._audio_recorder is None or self._transcriber is None:
@@ -786,6 +802,9 @@ class ScarecrowApp(App[None]):
             if self._session is not None:
                 try:
                     self._session.write_end_header()
+                    flac_path = self._session.compress_audio()
+                    if flac_path:
+                        log.info("Audio compressed to %s", flac_path)
                     self._session.finalize()
                 except Exception as exc:
                     log.exception("Failed to finalize session")
@@ -852,6 +871,7 @@ class ScarecrowApp(App[None]):
         self._note_counts[tag] = self._note_counts.get(tag, 0) + 1
         self._word_count += len(raw.split())
         self._sync_info_bar()
+        self._prune_richlog()
         self._update_context_display()
         input_widget.value = ""
 

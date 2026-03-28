@@ -1,5 +1,11 @@
 # History
 
+## 2026-03-28 (post-session FLAC compression)
+
+- **Added FLAC compression:** After recording stops, `Session.compress_audio()` reads `audio.wav` via soundfile, writes a lossless `audio.flac`, and deletes the WAV (~2:1 size reduction). Called in `cleanup_after_exit()` just before `finalize()`.
+- **Added `Session.final_audio_path` property:** Returns `audio.flac` if it exists, falls back to `audio.wav`.
+- **Added 4 tests:** `test_compress_audio_creates_flac`, `test_compress_audio_returns_none_when_no_wav`, `test_final_audio_path_prefers_flac`, `test_final_audio_path_falls_back_to_wav`.
+
 ## 2026-03-28 (audit round 3: error handling, shutdown races, test gaps, docs)
 
 - **Fixed unhandled preload_batch_model() crash:** `main()` now wraps `preload_batch_model()` in try/except for clean error output and exit on model load failure (MLX OOM, native abort, download failure).

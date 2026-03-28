@@ -36,6 +36,14 @@ class Session:
         return self._session_dir / "audio.wav"
 
     @property
+    def final_audio_path(self) -> Path:
+        """Returns the audio file path — FLAC if compressed, WAV otherwise."""
+        flac = self._session_dir / "audio.flac"
+        if flac.exists():
+            return flac
+        return self.audio_path
+
+    @property
     def transcript_path(self) -> Path:
         """Returns path to transcript.txt in session dir."""
         return self._session_dir / "transcript.txt"
@@ -57,6 +65,31 @@ class Session:
         except OSError:
             log.exception("Failed to write to transcript file")
             self._write_failed = True
+
+    def compress_audio(self) -> Path | None:
+        """Compress audio.wav to audio.flac (lossless).
+
+        Returns FLAC path or None on failure.
+        """
+        import soundfile as sf
+
+        wav_path = self.audio_path
+        if not wav_path.exists():
+            return None
+
+        flac_path = wav_path.with_suffix(".flac")
+        try:
+            data, samplerate = sf.read(wav_path)
+            sf.write(flac_path, data, samplerate, format="FLAC")
+            wav_path.unlink()
+            log.info("Compressed %s → %s", wav_path.name, flac_path.name)
+            return flac_path
+        except Exception:
+            log.exception("Failed to compress audio to FLAC")
+            # Keep the WAV if compression fails
+            if flac_path.exists():
+                flac_path.unlink(missing_ok=True)
+            return None
 
     def write_end_header(self) -> None:
         """Write session end timestamp to transcript."""
