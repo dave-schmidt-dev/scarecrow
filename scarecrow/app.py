@@ -95,15 +95,14 @@ class InfoBar(Static):
                 color = "red"
             text.append(" ")
             text.append(bars[idx], style=color)
-            # Fixed-width level label (4 chars) to prevent layout jitter
             if scaled < 0.15:
                 label, lstyle = "quiet", "dim"
             elif scaled < 0.4:
-                label, lstyle = "low ", "green"
+                label, lstyle = "low  ", "green"
             elif scaled < 0.75:
-                label, lstyle = "med ", "yellow"
+                label, lstyle = "med  ", "yellow"
             else:
-                label, lstyle = "HIGH", f"bold {color}"
+                label, lstyle = "HIGH ", f"bold {color}"
             text.append(f" {label}", style=lstyle)
         text.append("  ")
 
@@ -186,11 +185,12 @@ class ScarecrowApp(App[None]):
             model_label = config.PARAKEET_MODEL.split("/")[-1]
         else:
             model_label = config.FINAL_MODEL
+        if config.BACKEND == "parakeet":
+            interval_label = "VAD"
+        else:
+            interval_label = f"every {BATCH_INTERVAL_SECONDS}s"
         yield Static(
-            (
-                f"Transcript  [dim]({model_label} · "
-                f"every {BATCH_INTERVAL_SECONDS}s)[/dim]"
-            ),
+            f"Transcript  [dim]({model_label} · {interval_label})[/dim]",
             classes="pane-label",
         )
         yield RichLog(
@@ -201,8 +201,12 @@ class ScarecrowApp(App[None]):
             min_width=0,
         )
         yield Static("", id="context-display")
+        if config.BACKEND == "parakeet":
+            startup_hint = "Enter to start recording"
+        else:
+            startup_hint = "Context (e.g. Alice, React, Q4 planning) or Enter to start"
         yield Static(
-            "Context (e.g. Alice, React, Q4 planning) or Enter to start",
+            startup_hint,
             id="notes-label",
             classes="pane-label",
         )
@@ -224,6 +228,8 @@ class ScarecrowApp(App[None]):
         with contextlib.suppress(NoMatches):
             self.query_one("#captions", RichLog).write(self._BANNER)
         self.query_one("#note-input", Input).focus()
+        if config.BACKEND == "parakeet" and self._awaiting_context:
+            self._handle_context_start("")
 
     def _preflight_check(self) -> bool:
         import sounddevice as sd
@@ -324,15 +330,22 @@ class ScarecrowApp(App[None]):
         """Show inline help in the transcript pane."""
         with contextlib.suppress(NoMatches):
             self.query_one("#note-input", Input).value = ""
+        has_context = config.BACKEND != "parakeet"
         help_text = (
             "[bold]Commands:[/bold]\n"
             "  /task, /t [dim]<text>[/dim]   "
             "Add a task note\n"
-            "  /context [dim]<terms>[/dim]   "
-            "Add context terms for accuracy\n"
-            "  /clear              "
-            "Clear context & reset\n"
-            "  /help, /h, ?        "
+            "  /note, /n [dim]<text>[/dim]   "
+            "Add a plain note\n"
+            + (
+                "  /context [dim]<terms>[/dim]   "
+                "Add context terms for accuracy\n"
+                "  /clear              "
+                "Clear context & reset\n"
+                if has_context
+                else ""
+            )
+            + "  /help, /h, ?        "
             "Show this message\n"
             "\n"
             "[bold]Keybindings:[/bold]\n"
@@ -483,9 +496,7 @@ class ScarecrowApp(App[None]):
 
         self._word_count += len(text.split())
         if include_ui:
-            self._set_status(
-                "Listening…" if self._current_state() is AppState.RECORDING else ""
-            )
+            self._set_status("")
             self._sync_info_bar()
 
     def _flush_final_batch(self, *, include_ui: bool = True) -> None:
@@ -651,7 +662,7 @@ class ScarecrowApp(App[None]):
         self._word_count = 0
         self.state = AppState.RECORDING
         self._tick_timer.resume()
-        self._set_status("Listening…")
+        self._set_status("")
 
         # Show session header in transcript pane
         with contextlib.suppress(NoMatches):
@@ -664,11 +675,11 @@ class ScarecrowApp(App[None]):
         """Poll for silence boundaries (parakeet backend)."""
         if self.state is AppState.RECORDING:
             self._vad_transcribe()
-            # Update countdown to show buffer age
-            if self._audio_recorder is not None:
-                buf_s = int(self._audio_recorder.buffer_seconds)
-                self._batch_countdown = buf_s
-                self._sync_info_bar()
+        # Always update buffer age display
+        if self._audio_recorder is not None:
+            buf_s = int(self._audio_recorder.buffer_seconds)
+            self._batch_countdown = buf_s
+            self._sync_info_bar()
 
     def _on_batch_tick(self) -> None:
         self._batch_countdown = BATCH_INTERVAL_SECONDS
@@ -694,7 +705,7 @@ class ScarecrowApp(App[None]):
                 self._audio_recorder.resume()
             self._batch_countdown = BATCH_INTERVAL_SECONDS
             self._last_divider_elapsed = -config.DIVIDER_INTERVAL
-            self._set_status("Listening…")
+            self._set_status("")
             self._sync_info_bar()
 
     def action_quit(self) -> None:
@@ -827,6 +838,8 @@ class ScarecrowApp(App[None]):
     _NOTE_PREFIXES: ClassVar[dict[str, str]] = {
         "/task": "TASK",
         "/t": "TASK",
+        "/note": "NOTE",
+        "/n": "NOTE",
     }
 
     def _submit_note(self) -> None:
@@ -886,7 +899,7 @@ class ScarecrowApp(App[None]):
         with contextlib.suppress(NoMatches):
             label = self.query_one("#notes-label", Static)
             label.update(
-                "Notes  [dim](/task  /context  /clear · Enter to submit)[/dim]"
+                "Notes  [dim](/t task  /n note  /help · Enter to submit)[/dim]"
             )
 
         # Clear the input

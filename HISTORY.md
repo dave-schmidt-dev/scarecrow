@@ -1,5 +1,13 @@
 # History
 
+## 2026-03-28 (parakeet: UI polish, auto-start, notes shortcuts)
+
+- **Auto-start recording:** Parakeet backend starts recording immediately on launch — no Enter prompt needed (whisper still shows context prompt).
+- **Notes shortcuts:** Added `/n` and `/note` as explicit shortcuts for plain notes. Updated notes label to show `/t task  /n note  /help`.
+- **Removed redundant status:** Dropped "Listening..." from info bar (REC indicator is sufficient). Buffer counter now updates continuously.
+- **Transcript label:** Shows "VAD" instead of "every 5s" for parakeet backend.
+- **Context commands:** Hidden from help and UI labels for parakeet (not supported). Whisper backend unchanged.
+
 ## 2026-03-28 (parakeet: VAD chunking, bug fixes, benchmarking)
 
 - **Fixed audio duplication bug:** `audio[-0:]` returns the full array in numpy; when `overlap_ms=0` (parakeet), every batch contained all previous audio. Fixed by skipping overlap logic when `overlap_samples == 0`.

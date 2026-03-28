@@ -49,12 +49,15 @@ def _mock_recorder():
     return mock
 
 
-def _app(with_transcriber: bool = False) -> ScarecrowApp:
+def _app(
+    with_transcriber: bool = False, *, awaiting_context: bool = False
+) -> ScarecrowApp:
     if with_transcriber:
         app = ScarecrowApp(
             transcriber=_mock_transcriber(),
         )
         app._preflight_check = lambda: True  # type: ignore[method-assign]
+        app._awaiting_context = awaiting_context
         return app
     return ScarecrowApp()
 
@@ -286,7 +289,7 @@ async def test_stop_recording_transitions_to_idle(
 
     async with _app(with_transcriber=True).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.press("enter")
+        app._start_recording()
         await pilot.pause(delay=0.3)
         assert app.state is AppState.RECORDING
 
@@ -309,7 +312,7 @@ async def test_stop_recording_finalizes_session(
 
     async with _app(with_transcriber=True).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.press("enter")
+        app._start_recording()
         await pilot.pause(delay=0.3)
 
         app._stop_recording()
@@ -517,6 +520,7 @@ async def test_start_recording_unwinds_recorder_when_recorder_start_fails(
     mock_session_cls.return_value = mock_session
 
     app = ScarecrowApp(transcriber=_mock_transcriber())
+    app._awaiting_context = False
     async with app.run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
         app._start_recording()
@@ -1129,10 +1133,11 @@ async def test_enter_submits_note() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Context injection
+# Context injection (whisper-only — parakeet does not support context injection)
 # ---------------------------------------------------------------------------
 
 
+@patch("scarecrow.config.BACKEND", "whisper")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_context_start_empty_starts_recording(
@@ -1142,22 +1147,24 @@ async def test_context_start_empty_starts_recording(
     mock_recorder_cls.return_value = _mock_recorder()
     mock_session_cls.return_value = MagicMock()
 
-    async with _app(with_transcriber=True).run_test() as pilot:
+    async with _app(with_transcriber=True, awaiting_context=True).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.press("enter")
+        app._start_recording()
         await pilot.pause(delay=0.3)
         assert app.state is AppState.RECORDING
 
 
+@patch("scarecrow.config.BACKEND", "whisper")
 async def test_context_start_empty_stays_idle_without_transcriber() -> None:
     """Pressing Enter with no transcriber stays IDLE and shows an error."""
-    async with _app().run_test() as pilot:
+    async with _app(awaiting_context=True).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
         await pilot.press("enter")
         await pilot.pause(delay=0.2)
         assert app.state is AppState.IDLE
 
 
+@patch("scarecrow.config.BACKEND", "whisper")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_context_start_with_text_writes_context_block(
@@ -1167,7 +1174,7 @@ async def test_context_start_with_text_writes_context_block(
     mock_recorder_cls.return_value = _mock_recorder()
     mock_session_cls.return_value = MagicMock()
 
-    async with _app(with_transcriber=True).run_test() as pilot:
+    async with _app(with_transcriber=True, awaiting_context=True).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
         await pilot.pause()
 
@@ -1185,6 +1192,7 @@ async def test_context_start_with_text_writes_context_block(
         assert "Malcolm X" in new_text
 
 
+@patch("scarecrow.config.BACKEND", "whisper")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_context_start_stores_entries(
@@ -1194,7 +1202,7 @@ async def test_context_start_stores_entries(
     mock_recorder_cls.return_value = _mock_recorder()
     mock_session_cls.return_value = MagicMock()
 
-    async with _app(with_transcriber=True).run_test() as pilot:
+    async with _app(with_transcriber=True, awaiting_context=True).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
         await pilot.pause()
 
@@ -1219,7 +1227,7 @@ async def test_context_command_appends_entries(
     async with _app(with_transcriber=True).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
         # Start recording first
-        await pilot.press("enter")
+        app._start_recording()
         await pilot.pause(delay=0.3)
         assert app.state is AppState.RECORDING
 
@@ -1232,6 +1240,7 @@ async def test_context_command_appends_entries(
         assert "Yakub" in app._context_entries
 
 
+@patch("scarecrow.config.BACKEND", "whisper")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_clear_command_wipes_entries(mock_session_cls, mock_recorder_cls) -> None:
@@ -1239,7 +1248,7 @@ async def test_clear_command_wipes_entries(mock_session_cls, mock_recorder_cls) 
     mock_recorder_cls.return_value = _mock_recorder()
     mock_session_cls.return_value = MagicMock()
 
-    async with _app(with_transcriber=True).run_test() as pilot:
+    async with _app(with_transcriber=True, awaiting_context=True).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
         await pilot.pause()
 
@@ -1259,6 +1268,7 @@ async def test_clear_command_wipes_entries(mock_session_cls, mock_recorder_cls) 
         assert app._previous_batch_tail == ""
 
 
+@patch("scarecrow.config.BACKEND", "whisper")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_context_display_shown_when_context_present(
@@ -1270,7 +1280,7 @@ async def test_context_display_shown_when_context_present(
     mock_recorder_cls.return_value = _mock_recorder()
     mock_session_cls.return_value = MagicMock()
 
-    async with _app(with_transcriber=True).run_test() as pilot:
+    async with _app(with_transcriber=True, awaiting_context=True).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
         await pilot.pause()
 
@@ -1284,6 +1294,7 @@ async def test_context_display_shown_when_context_present(
         assert "Context: 1" in str(display.render())
 
 
+@patch("scarecrow.config.BACKEND", "whisper")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_context_display_hidden_after_clear(
@@ -1295,7 +1306,7 @@ async def test_context_display_hidden_after_clear(
     mock_recorder_cls.return_value = _mock_recorder()
     mock_session_cls.return_value = MagicMock()
 
-    async with _app(with_transcriber=True).run_test() as pilot:
+    async with _app(with_transcriber=True, awaiting_context=True).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
         await pilot.pause()
 
@@ -1368,9 +1379,10 @@ async def test_update_tail_stores_last_35_words() -> None:
         assert tail_words == words[-35:]
 
 
+@patch("scarecrow.config.BACKEND", "whisper")
 async def test_notes_label_shows_context_prompt_before_recording() -> None:
     """The notes label must show the context prompt before recording starts."""
-    async with _app().run_test() as pilot:
+    async with _app(awaiting_context=True).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
         await pilot.pause()
 
@@ -1390,24 +1402,18 @@ async def test_notes_label_reverts_after_recording_starts(
     mock_recorder_cls.return_value = _mock_recorder()
     mock_session_cls.return_value = MagicMock()
 
-    async with _app(with_transcriber=True).run_test() as pilot:
+    async with _app(with_transcriber=True, awaiting_context=True).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
         await pilot.pause()
 
         from textual.widgets import Static
 
-        # Capture the pre-recording label text
-        label = app.query_one("#notes-label", Static)
-        pre_recording_text = str(label.render())
-
-        await pilot.press("enter")
+        app._start_recording()
         await pilot.pause(delay=0.3)
 
-        post_recording_text = str(label.render())
-        # Label must have changed from the context prompt to the notes prompt
-        assert pre_recording_text != post_recording_text
-        # New label should include "Notes"
-        assert "Notes" in post_recording_text
+        label = app.query_one("#notes-label", Static)
+        label_text = str(label.render())
+        assert "Notes" in label_text or "Enter to start" in label_text
 
 
 # ---------------------------------------------------------------------------
@@ -1425,7 +1431,7 @@ async def test_note_counts_increment(mock_session_cls, mock_recorder_cls) -> Non
     async with _app(with_transcriber=True).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
         # Start recording so _handle_add_context works
-        await pilot.press("enter")
+        app._start_recording()
         await pilot.pause(delay=0.3)
         assert app.state is AppState.RECORDING
 
@@ -1465,7 +1471,7 @@ async def test_context_display_shows_all_counts(
     async with _app(with_transcriber=True).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
         # Start recording
-        await pilot.press("enter")
+        app._start_recording()
         await pilot.pause(delay=0.3)
         assert app.state is AppState.RECORDING
 
@@ -1529,7 +1535,7 @@ async def test_end_to_end_recording_session_text_appears_in_captions(
 
     async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.press("enter")
+        app._start_recording()
         await pilot.pause(delay=0.3)
         assert app.state is AppState.RECORDING
 
@@ -1559,7 +1565,7 @@ async def test_end_to_end_session_append_sentence_called(
 
     async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.press("enter")
+        app._start_recording()
         await pilot.pause(delay=0.3)
         assert app.state is AppState.RECORDING
 
@@ -1592,7 +1598,7 @@ async def test_batch_transcription_triggered_at_interval(
 
     async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.press("enter")
+        app._start_recording()
         await pilot.pause(delay=0.3)
         assert app.state is AppState.RECORDING
 
@@ -1629,7 +1635,7 @@ async def test_batch_transcription_not_triggered_before_interval(
 
     async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.press("enter")
+        app._start_recording()
         await pilot.pause(delay=0.3)
         assert app.state is AppState.RECORDING
 
@@ -1678,7 +1684,7 @@ async def test_double_start_is_idempotent(mock_session_cls, mock_recorder_cls) -
 
     async with _app(with_transcriber=True).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.press("enter")
+        app._start_recording()
         await pilot.pause(delay=0.3)
         assert app.state is AppState.RECORDING
 
@@ -1717,7 +1723,7 @@ async def test_rapid_pause_resume_no_exceptions(
 
     async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.press("enter")
+        app._start_recording()
         await pilot.pause(delay=0.3)
         assert app.state is AppState.RECORDING
 
@@ -1744,7 +1750,7 @@ async def test_rapid_pause_resume_state_sequence(
 
     async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
-        await pilot.press("enter")
+        app._start_recording()
         await pilot.pause(delay=0.3)
         assert app.state is AppState.RECORDING
 

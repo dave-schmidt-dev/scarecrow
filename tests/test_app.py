@@ -246,12 +246,13 @@ async def test_pane_labels_show_model_names() -> None:
         assert "Transcript" in label_text
 
 
+@patch("scarecrow.config.BACKEND", "whisper")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_app_launches_in_idle_no_autostart(
     mock_session_cls, mock_recorder_cls
 ) -> None:
-    """App must remain in IDLE after mount even when a transcriber is ready."""
+    """App stays IDLE after mount with whisper backend (context prompt)."""
     mock_recorder_cls.return_value = _mock_recorder()
     mock_session_cls.return_value = MagicMock()
 
