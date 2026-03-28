@@ -33,7 +33,7 @@
 
 ## Auto-summarization
 - End-of-session summary written to transcript directory
-- Weight [NOTE] entries in body, list [TASK] items at end, use [CONTEXT] as background
+- Weight [NOTE] entries in body, list [TASK] items at end
 - Bullet-point format
 
 ## Obsidian sync

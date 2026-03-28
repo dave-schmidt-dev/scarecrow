@@ -24,16 +24,6 @@ Screen {
     text-style: bold;
 }
 
-/* ── Context display (below transcript, above notes label) ── */
-
-#context-display {
-    height: 1;
-    margin: 0 1;
-    padding: 0 1;
-    color: $text-muted;
-    display: none;
-}
-
 /* ── Notes input ── */
 
 #note-input {

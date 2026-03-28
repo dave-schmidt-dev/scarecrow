@@ -428,3 +428,21 @@ Scarecrow keeps a running bug ledger in this file. Append to it every time a bug
 - Fix: Removed `_batch_countdown` decrement from `_tick()`. Only the VAD poll updates the buffer display now.
 - Regression test: `tests/test_behavioral.py::test_tick_does_not_decrement_batch_countdown`
 - Notes: The tick decrement was a whisper-era concept (countdown to next fixed batch). With VAD, the display should reflect actual buffer size, not a countdown.
+
+## [BUG-20260328-flush-audio-loss]
+- Status: squashed
+- Found: 2026-03-28 (external audit)
+- Area: app (/flush command)
+- Symptom: `/flush` could silently drop audio. It first tried `_vad_transcribe()` (which may drain and submit), then unconditionally called `drain_buffer()` and submitted again. If the first submission was still in-flight, `_submit_batch_transcription()` refused the second but the audio was already drained from the buffer — lost forever.
+- Root cause: Double-drain pattern in `_handle_flush()` — two sequential drains where the second could fail to submit.
+- Fix: Single `drain_buffer()` with a busy-guard. If a batch is in-flight, skip the flush and leave audio in the buffer for the next cycle.
+- Regression test: `tests/test_behavioral.py::test_flush_does_not_lose_audio_when_batch_busy`
+
+## [BUG-20260328-portaudio-init-on-import]
+- Status: squashed
+- Found: 2026-03-28
+- Area: recorder (module imports)
+- Symptom: macOS "Python quit unexpectedly" crash dialog during test suite. CoreAudio IO thread segfaults during interpreter teardown.
+- Root cause: `import sounddevice` at module level in `recorder.py` initializes PortAudio and creates CoreAudio background threads. These native threads crash when Python's interpreter tears down after pytest finishes, even with `os._exit()`.
+- Fix: Moved `import sounddevice` and `import soundfile` to lazy imports inside `AudioRecorder.start()`. PortAudio only initializes when actually recording, never during tests.
+- Regression test: Verified by `sounddevice not in sys.modules` after importing `scarecrow.recorder` (not a formal test — validated by absence of crash reports during test runs).

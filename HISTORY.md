@@ -1,5 +1,15 @@
 # History
 
+## 2026-03-28 (audit fixes, lazy imports, /flush safety)
+
+- **Fixed /flush audio loss bug:** `/flush` was doing a double-drain (VAD then full drain) which could lose audio if a batch was already in-flight. Now does a single `drain_buffer()` with a busy check — if a batch is running, audio stays in the buffer.
+- **Lazy sounddevice/soundfile imports:** Moved `import sounddevice` and `import soundfile` from module-level to inside `AudioRecorder.start()`. Prevents PortAudio from initializing during tests, eliminating CoreAudio thread crashes entirely.
+- **Deleted stale scripts:** Removed `scripts/test_transcription.py` and `scripts/test_dual_stream.py` (dead RealtimeSTT-era code).
+- **Removed dead CSS:** Deleted `#context-display` block from `app.tcss`.
+- **Synced benchmark VAD params:** Updated `bench_librispeech.py` to match current config (600ms/30s).
+- **Added /flush tests:** 3 behavioral tests covering drain, busy-guard, and idle-noop.
+- **Added VAD/recorder tests:** drain_to_silence, buffer_seconds, empty-buffer edge case.
+
 ## 2026-03-28 (VAD tuning, /flush command, cleanup)
 
 - **VAD tuning:** `VAD_MIN_SILENCE_MS` 300→600ms (drain on real sentence-ending pauses, not mid-sentence hesitations), `VAD_MAX_BUFFER_SECONDS` 8→30s (avoid forced mid-speech splits). Reduces chunk-boundary transcription errors significantly.

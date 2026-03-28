@@ -15,7 +15,9 @@ def test_drain_buffer_returns_float32(tmp_path: Path) -> None:
     """drain_buffer must return float32 audio normalized to [-1, 1]."""
     from scarecrow.recorder import AudioRecorder
 
-    with patch("scarecrow.recorder.sd"), patch("scarecrow.recorder.sf"):
+    with patch.dict(
+        "sys.modules", {"sounddevice": MagicMock(), "soundfile": MagicMock()}
+    ):
         recorder = AudioRecorder(tmp_path / "audio.wav", sample_rate=44100)
         recorder.start()
 
@@ -38,7 +40,9 @@ def test_drain_buffer_sample_rate_is_44100(tmp_path: Path) -> None:
     """
     from scarecrow.recorder import AudioRecorder
 
-    with patch("scarecrow.recorder.sd"), patch("scarecrow.recorder.sf"):
+    with patch.dict(
+        "sys.modules", {"sounddevice": MagicMock(), "soundfile": MagicMock()}
+    ):
         recorder = AudioRecorder(tmp_path / "audio.wav", sample_rate=16000)
         recorder.start()
 
@@ -89,7 +93,9 @@ def test_callback_does_not_buffer_when_paused(tmp_path: Path) -> None:
     """Paused callback should NOT accumulate audio in the batch buffer."""
     from scarecrow.recorder import AudioRecorder
 
-    with patch("scarecrow.recorder.sd"), patch("scarecrow.recorder.sf"):
+    with patch.dict(
+        "sys.modules", {"sounddevice": MagicMock(), "soundfile": MagicMock()}
+    ):
         recorder = AudioRecorder(tmp_path / "audio.wav")
         recorder.start()
         recorder.pause()
@@ -105,7 +111,9 @@ def test_callback_buffers_when_recording(tmp_path: Path) -> None:
     """Recording callback must accumulate audio in the batch buffer."""
     from scarecrow.recorder import AudioRecorder
 
-    with patch("scarecrow.recorder.sd"), patch("scarecrow.recorder.sf"):
+    with patch.dict(
+        "sys.modules", {"sounddevice": MagicMock(), "soundfile": MagicMock()}
+    ):
         recorder = AudioRecorder(tmp_path / "audio.wav")
         recorder.start()
 
@@ -126,7 +134,9 @@ def test_drain_buffer_empties_after_drain(tmp_path: Path) -> None:
     """drain_buffer should return None on second call with no new audio."""
     from scarecrow.recorder import AudioRecorder
 
-    with patch("scarecrow.recorder.sd"), patch("scarecrow.recorder.sf"):
+    with patch.dict(
+        "sys.modules", {"sounddevice": MagicMock(), "soundfile": MagicMock()}
+    ):
         recorder = AudioRecorder(tmp_path / "audio.wav")
         recorder.start()
 
@@ -150,7 +160,9 @@ def test_peak_level_updates_on_audio(tmp_path: Path) -> None:
     """peak_level should reflect the loudest sample in the last callback."""
     from scarecrow.recorder import AudioRecorder
 
-    with patch("scarecrow.recorder.sd"), patch("scarecrow.recorder.sf"):
+    with patch.dict(
+        "sys.modules", {"sounddevice": MagicMock(), "soundfile": MagicMock()}
+    ):
         recorder = AudioRecorder(tmp_path / "audio.wav")
         recorder.start()
 
@@ -168,7 +180,9 @@ def test_peak_level_zero_when_paused(tmp_path: Path) -> None:
     """peak_level should be 0 when paused."""
     from scarecrow.recorder import AudioRecorder
 
-    with patch("scarecrow.recorder.sd"), patch("scarecrow.recorder.sf"):
+    with patch.dict(
+        "sys.modules", {"sounddevice": MagicMock(), "soundfile": MagicMock()}
+    ):
         recorder = AudioRecorder(tmp_path / "audio.wav")
         recorder.start()
         recorder.pause()
@@ -197,7 +211,9 @@ def test_drain_buffer_clears_completely(tmp_path: Path) -> None:
     """drain_buffer must return all audio and leave buffer empty — no overlap."""
     from scarecrow.recorder import AudioRecorder
 
-    with patch("scarecrow.recorder.sd"), patch("scarecrow.recorder.sf"):
+    with patch.dict(
+        "sys.modules", {"sounddevice": MagicMock(), "soundfile": MagicMock()}
+    ):
         recorder = AudioRecorder(tmp_path / "audio.wav", sample_rate=16000)
         recorder.start()
 

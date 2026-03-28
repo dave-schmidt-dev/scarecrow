@@ -32,8 +32,8 @@ DEFAULT_CHUNK_SECONDS = 15
 
 # VAD parameters matching config.py defaults
 VAD_SILENCE_THRESHOLD = 0.01
-VAD_MIN_SILENCE_MS = 300
-VAD_MAX_BUFFER_SECONDS = 8
+VAD_MIN_SILENCE_MS = 600
+VAD_MAX_BUFFER_SECONDS = 30
 
 
 # ---------------------------------------------------------------------------

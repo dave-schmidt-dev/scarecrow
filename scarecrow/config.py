@@ -11,6 +11,7 @@ SUBTYPE = "PCM_16"
 PARAKEET_MODEL = "mlx-community/parakeet-tdt-0.6b-v3"
 
 # Batch interval (seconds)
+# Seeds UI countdown display only; VAD controls actual drain timing
 BATCH_INTERVAL = 5
 
 # VAD-based chunking — tuned 2026-03-28 to reduce chunk-boundary errors:

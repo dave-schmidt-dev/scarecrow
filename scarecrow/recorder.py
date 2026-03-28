@@ -5,20 +5,23 @@ from __future__ import annotations
 import logging
 import threading
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
-import sounddevice as sd
-import soundfile as sf
 
 from scarecrow import config
+
+if TYPE_CHECKING:
+    import sounddevice as sd
+    import soundfile as sf
 
 
 class AudioRecorder:
     """Records audio from microphone to WAV file.
 
-    Also maintains an in-memory buffer of audio for batch transcription
-    and optionally feeds audio to a callback (e.g. RealtimeSTT.feed_audio).
-    Call drain_buffer() to get accumulated audio since the last drain.
+    Also maintains an in-memory buffer of audio for VAD-based batch
+    transcription. Call drain_buffer() or drain_to_silence() to get
+    accumulated audio since the last drain.
     """
 
     def __init__(
@@ -116,6 +119,9 @@ class AudioRecorder:
 
     def start(self) -> None:
         """Opens sounddevice InputStream with callback, opens SoundFile for writing."""
+        import sounddevice as sd
+        import soundfile as sf
+
         if self._recording:
             return
 

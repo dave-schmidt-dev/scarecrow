@@ -388,7 +388,9 @@ def test_audio_recorder_peak_level_property_exists(tmp_path: Path) -> None:
     """AudioRecorder must expose a peak_level property."""
     from scarecrow.recorder import AudioRecorder
 
-    with patch("scarecrow.recorder.sd"), patch("scarecrow.recorder.sf"):
+    with patch.dict(
+        "sys.modules", {"sounddevice": MagicMock(), "soundfile": MagicMock()}
+    ):
         recorder = AudioRecorder(tmp_path / "audio.wav")
         assert hasattr(recorder, "peak_level")
 
@@ -397,7 +399,9 @@ def test_audio_recorder_peak_level_starts_at_zero(tmp_path: Path) -> None:
     """AudioRecorder.peak_level must be 0.0 before any audio is received."""
     from scarecrow.recorder import AudioRecorder
 
-    with patch("scarecrow.recorder.sd"), patch("scarecrow.recorder.sf"):
+    with patch.dict(
+        "sys.modules", {"sounddevice": MagicMock(), "soundfile": MagicMock()}
+    ):
         recorder = AudioRecorder(tmp_path / "audio.wav")
         assert recorder.peak_level == 0.0
 
@@ -406,7 +410,9 @@ def test_audio_recorder_peak_level_is_float(tmp_path: Path) -> None:
     """AudioRecorder.peak_level must be a float, not an int or None."""
     from scarecrow.recorder import AudioRecorder
 
-    with patch("scarecrow.recorder.sd"), patch("scarecrow.recorder.sf"):
+    with patch.dict(
+        "sys.modules", {"sounddevice": MagicMock(), "soundfile": MagicMock()}
+    ):
         recorder = AudioRecorder(tmp_path / "audio.wav")
         assert isinstance(recorder.peak_level, float)
 
@@ -1422,3 +1428,82 @@ async def test_rapid_pause_resume_state_sequence(
         app.action_pause()
         await pilot.pause()
         assert app.state is AppState.PAUSED
+
+
+# ---------------------------------------------------------------------------
+# /f flush command tests
+# ---------------------------------------------------------------------------
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_flush_command_drains_buffer(mock_session_cls, mock_recorder_cls) -> None:
+    """_handle_flush must drain the audio buffer and submit transcription."""
+    mock_rec = _mock_recorder()
+    mock_rec.drain_buffer.return_value = np.ones(16000, dtype=np.float32)
+    mock_recorder_cls.return_value = mock_rec
+    mock_session_cls.return_value = MagicMock()
+
+    transcriber = _mock_transcriber()
+
+    async with _app(with_transcriber=True).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        app._audio_recorder = mock_rec
+        app._transcriber = transcriber
+        app.state = AppState.RECORDING
+
+        # Provide a live executor so _submit_batch_transcription can run
+        from concurrent.futures import ThreadPoolExecutor
+
+        app._batch_executor = ThreadPoolExecutor(max_workers=1)
+
+        app._handle_flush()
+        await pilot.pause(delay=0.3)
+
+        mock_rec.drain_buffer.assert_called_once()
+        transcriber.transcribe_batch.assert_called_once()
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_flush_does_not_lose_audio_when_batch_busy(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """_handle_flush must NOT drain the buffer when a batch is in-flight."""
+    from concurrent.futures import Future
+
+    mock_rec = _mock_recorder()
+    mock_recorder_cls.return_value = mock_rec
+    mock_session_cls.return_value = MagicMock()
+
+    transcriber = _mock_transcriber()
+
+    async with _app(with_transcriber=True).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        app._audio_recorder = mock_rec
+        app._transcriber = transcriber
+        app.state = AppState.RECORDING
+
+        # Inject an incomplete in-flight future
+        inflight: Future[str | None] = Future()
+        app._batch_futures = {inflight}
+
+        app._handle_flush()
+        await pilot.pause()
+
+        mock_rec.drain_buffer.assert_not_called()
+
+
+async def test_flush_noop_when_not_recording() -> None:
+    """_handle_flush must do nothing when state is IDLE."""
+    mock_rec = _mock_recorder()
+
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        app._audio_recorder = mock_rec
+        app.state = AppState.IDLE
+
+        app._handle_flush()
+        await pilot.pause()
+
+        mock_rec.drain_buffer.assert_not_called()

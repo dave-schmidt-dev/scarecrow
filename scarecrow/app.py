@@ -319,14 +319,19 @@ class ScarecrowApp(App[None]):
             self.query_one("#note-input", Input).value = ""
         if self.state is not AppState.RECORDING:
             return
-        self._vad_transcribe()
-        # If VAD didn't drain (no silence boundary), force a full drain
-        if self._audio_recorder is not None:
-            audio = self._audio_recorder.drain_buffer()
-            if audio is not None and len(audio) > 0:
-                batch_elapsed = self._batch_window_start
-                self._batch_window_start = self._elapsed
-                self._submit_batch_transcription(audio, batch_elapsed)
+        if self._audio_recorder is None or self._transcriber is None:
+            return
+
+        self._reap_batch_futures()
+        if self._batch_futures:
+            self._set_status("Batch busy; flush queued for next cycle.")
+            return
+
+        audio = self._audio_recorder.drain_buffer()
+        if audio is not None and len(audio) > 0:
+            batch_elapsed = self._batch_window_start
+            self._batch_window_start = self._elapsed
+            self._submit_batch_transcription(audio, batch_elapsed)
 
     def _show_help(self) -> None:
         """Show inline help in the transcript pane."""
