@@ -1,5 +1,12 @@
 # History
 
+## 2026-03-28 (batch transcription retry with graceful degradation)
+
+- **Added retry logic to `transcribe_batch()`:** On failure, retries up to 3 times total (1 initial + 2 retries) with a 0.5s delay between attempts before giving up.
+- **Added `consecutive_failures` property:** Tracks consecutive batch transcription failures; resets to 0 on the next successful transcription. Allows callers to detect sustained model degradation.
+- **Updated error message:** Exhausted-retries error now reads "Batch transcription failed after retries. Audio is still recording." for clearer user feedback.
+- **Added 3 tests:** `test_transcribe_batch_retries_on_failure`, `test_transcribe_batch_exhausts_retries`, `test_transcribe_batch_resets_failures_on_success`.
+
 ## 2026-03-28 (post-session FLAC compression)
 
 - **Added FLAC compression:** After recording stops, `Session.compress_audio()` reads `audio.wav` via soundfile, writes a lossless `audio.flac`, and deletes the WAV (~2:1 size reduction). Called in `cleanup_after_exit()` just before `finalize()`.

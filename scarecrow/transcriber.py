@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -11,6 +12,9 @@ import numpy as np
 from scarecrow.runtime import ModelManager
 
 log = logging.getLogger(__name__)
+
+_MAX_RETRIES = 2  # total attempts = 3 (1 initial + 2 retries)
+_RETRY_DELAY = 0.5  # seconds between retries
 
 BatchCallback = Callable[[str, int], None]
 ErrorCallback = Callable[[str, str], None]
@@ -36,6 +40,7 @@ class Transcriber:
         self._bindings = bindings or TranscriberBindings()
         self._model_manager = model_manager or ModelManager()
         self._ready = False
+        self._consecutive_failures = 0
 
     def bind(self, bindings: TranscriberBindings) -> None:
         """Attach UI/runtime callbacks."""
@@ -87,27 +92,47 @@ class Transcriber:
         """Run parakeet on a drained recorder buffer.
 
         Returns the transcribed text, empty string if nothing was recognized,
-        or None on error. The normal executor-driven path still emits the
-        callback so the UI updates via call_from_thread.
+        or None on error. Retries up to _MAX_RETRIES times before giving up.
+        The normal executor-driven path still emits the callback so the UI
+        updates via call_from_thread.
         """
-        try:
-            text = self._transcribe_parakeet(audio)
-        except Exception:
-            log.exception("Batch transcription failed")
-            self._emit_error(
-                "batch",
-                "Batch transcription failed. See debug log for the stack trace.",
-            )
-            return None
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                text = self._transcribe_parakeet(audio)
+                # Success — reset failure tracking
+                self._consecutive_failures = 0
+                if (
+                    text
+                    and emit_callback
+                    and self._bindings.on_batch_result is not None
+                ):
+                    self._bindings.on_batch_result(text, batch_elapsed)
+                return text if text else ""
+            except Exception:
+                log.exception(
+                    "Batch transcription failed (attempt %d/%d)",
+                    attempt + 1,
+                    _MAX_RETRIES + 1,
+                )
+                if attempt < _MAX_RETRIES:
+                    time.sleep(_RETRY_DELAY)
 
-        if text and emit_callback and self._bindings.on_batch_result is not None:
-            self._bindings.on_batch_result(text, batch_elapsed)
-
-        return text if text else ""
+        # All retries exhausted
+        self._consecutive_failures += 1
+        self._emit_error(
+            "batch",
+            "Batch transcription failed after retries. Audio is still recording.",
+        )
+        return None
 
     @property
     def is_ready(self) -> bool:
         return self._ready
+
+    @property
+    def consecutive_failures(self) -> int:
+        """Number of consecutive batch transcription failures."""
+        return self._consecutive_failures
 
     def _emit_error(self, source: str, message: str) -> None:
         log.error("%s: %s", source, message)

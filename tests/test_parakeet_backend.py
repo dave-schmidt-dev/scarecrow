@@ -99,14 +99,16 @@ def test_transcribe_batch_parakeet_error_emits_callback() -> None:
     )
     t._ready = True
 
-    with patch.object(
-        t, "_transcribe_parakeet", side_effect=RuntimeError("GPU exploded")
+    exc = RuntimeError("GPU exploded")
+    with (
+        patch.object(t, "_transcribe_parakeet", side_effect=exc),
+        patch("scarecrow.transcriber.time.sleep"),
     ):
         result = t.transcribe_batch(np.zeros(16000, dtype=np.float32), 0)
 
     assert result is None
     assert errors == [
-        ("batch", "Batch transcription failed. See debug log for the stack trace.")
+        ("batch", "Batch transcription failed after retries. Audio is still recording.")
     ]
 
 

@@ -50,11 +50,14 @@ def test_batch_transcription_error_emits_callback() -> None:
         )
     )
 
-    with patch.object(t, "_transcribe_parakeet", side_effect=RuntimeError("boom")):
+    with (
+        patch.object(t, "_transcribe_parakeet", side_effect=RuntimeError("boom")),
+        patch("scarecrow.transcriber.time.sleep"),
+    ):
         t.transcribe_batch(np.zeros(16000, dtype=np.float32), batch_elapsed=30)
 
     assert errors == [
-        ("batch", "Batch transcription failed. See debug log for the stack trace.")
+        ("batch", "Batch transcription failed after retries. Audio is still recording.")
     ]
 
 
@@ -189,3 +192,68 @@ def test_transcribe_batch_concurrent_calls_dont_crash() -> None:
 
     assert len(results) == 2
     assert all(r == "done" for r in results)
+
+
+def test_transcribe_batch_retries_on_failure() -> None:
+    """transcribe_batch must retry up to 3 times before giving up."""
+    call_count = 0
+
+    def failing_then_success(audio):
+        nonlocal call_count
+        call_count += 1
+        if call_count < 3:
+            raise RuntimeError("temporary failure")
+        return "recovered text"
+
+    t = Transcriber()
+    t._ready = True
+    t._model_manager = MagicMock()
+
+    with (
+        patch.object(t, "_transcribe_parakeet", side_effect=failing_then_success),
+        patch("scarecrow.transcriber.time.sleep"),
+    ):
+        result = t.transcribe_batch(
+            np.zeros(16000, dtype=np.float32), 30, emit_callback=False
+        )
+
+    assert result == "recovered text"
+    assert call_count == 3
+    assert t.consecutive_failures == 0
+
+
+def test_transcribe_batch_exhausts_retries() -> None:
+    """After all retries fail, transcribe_batch returns None and increments failures."""
+    errors: list[tuple[str, str]] = []
+
+    t = Transcriber(
+        TranscriberBindings(on_error=lambda source, msg: errors.append((source, msg)))
+    )
+    t._ready = True
+    t._model_manager = MagicMock()
+
+    with (
+        patch.object(t, "_transcribe_parakeet", side_effect=RuntimeError("permanent")),
+        patch("scarecrow.transcriber.time.sleep"),
+    ):
+        result = t.transcribe_batch(
+            np.zeros(16000, dtype=np.float32), 30, emit_callback=False
+        )
+
+    assert result is None
+    assert t.consecutive_failures == 1
+    assert len(errors) == 1
+    assert "after retries" in errors[0][1]
+
+
+def test_transcribe_batch_resets_failures_on_success() -> None:
+    """A successful transcription must reset the consecutive failure count."""
+    t = Transcriber()
+    t._ready = True
+    t._model_manager = MagicMock()
+    t._consecutive_failures = 5
+
+    with patch.object(t, "_transcribe_parakeet", return_value="hello"):
+        t.transcribe_batch(np.zeros(16000, dtype=np.float32), 30, emit_callback=False)
+
+    assert t.consecutive_failures == 0
