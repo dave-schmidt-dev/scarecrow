@@ -29,9 +29,10 @@ Scarecrow keeps a persistent bug ledger in [BUGS.md](BUGS.md). Future fixes must
 
 ```bash
 git clone <repo-url> && cd scarecrow
-python3 scripts/sync_env.py
-python scripts/setup.py   # show parakeet config info + alias setup
+python3 scripts/setup.py   # checks prereqs, installs deps, shows launch options
 ```
+
+> **Maintainer note:** `scripts/setup.py` is the first thing new users run. Keep it in sync with README.md and pyproject.toml — if you change requirements, launch methods, or architecture, update the setup script too.
 
 **Which launch method to use:**
 - **iTerm2 users (recommended):** Use the iTerm2 profile — it handles font sizing, auto-close, and calls the venv binary directly.
@@ -95,6 +96,7 @@ sc          # launch Scarecrow (auto-starts recording)
 **Commands** (type at the start of your note, then press Enter):
 - `/task` or `/t` — submit note tagged `[TASK]`
 - `/flush` or `/f` — force-flush the audio buffer (transcribe immediately)
+- `/context` or `/c` — add background context (spelling, names — improves summary accuracy, not surfaced directly)
 - no prefix — submit note tagged `[NOTE]` (default)
 
 **Help:**
@@ -105,7 +107,7 @@ sc          # launch Scarecrow (auto-starts recording)
 The TUI shows:
 - **Info bar** — recording state (`REC` / `PAUSED`), mic indicator with level label (quiet/low/med/high), elapsed time, word count, buffer/batch countdown, and an audio level meter (▁▂▃▄▅▆▇█) with color coding (green/yellow/red) using a log scale with peak-hold decay
 - **Transcript pane** — batch transcription output with timestamped dividers (scrollable); every session begins with a `Session Start: YYYY-MM-DD HH:MM:SS` line and ends with a `Session End: YYYY-MM-DD HH:MM:SS` line
-- **Notes pane** — text input for inline annotations; `/task` or `/t` prefix tags as `[TASK]`; plain text defaults to `[NOTE]`; notes are written to the transcript pane and transcript file with a wall-clock timestamp
+- **Notes pane** — text input for inline annotations; `/task` or `/t` prefix tags as `[TASK]`; plain text defaults to `[NOTE]`; `/context` or `/c` provides background info for the summarizer; notes are written to the transcript pane and transcript file with a wall-clock timestamp
 - **Footer** — keybindings
 
 ### Pause behavior
@@ -136,6 +138,22 @@ On a clean quit, Scarecrow routes shutdown through `app.cleanup_after_exit()` to
 
 Ctrl+C uses the same cleanup path, so the final buffered batch is flushed before the session closes.
 
+### Auto-summarization
+
+When a session ends, Scarecrow generates `summary.md` in the session directory using a local LLM (Nemotron-3-Nano via llama-server). The summary includes:
+- Prose summary of the transcript with `/note` entries woven in naturally
+- `/task` entries listed as a Markdown checklist at the bottom
+- Token and word count footer for context window tuning
+
+`/context` entries provide background information (names, spelling, domain terms) that improves summary quality without appearing in the output.
+
+Summarization requires a Nemotron GGUF model in the HuggingFace cache. Scarecrow starts and stops llama-server automatically, or reuses an existing one if already running.
+
+If summarization fails, `summary.md` contains error details and a retry command:
+```bash
+python3 scripts/resummarize.py ~/recordings/<session-dir>
+```
+
 ### Startup output
 
 On launch, Scarecrow prints:
@@ -161,6 +179,7 @@ recordings/
   2026-03-24_07-48-36/
     audio.wav            # full recording (16kHz PCM16)
     transcript.jsonl     # JSON Lines transcript — one event per line
+    summary.md           # LLM-generated session summary (auto-created on shutdown)
 ```
 
 ### Transcript format (JSON Lines)
@@ -253,6 +272,7 @@ scarecrow/
   recorder.py        # sounddevice audio capture + WAV writing
   runtime.py         # HF offline bootstrap, parakeet model manager
   session.py         # timestamped session dirs + transcript files
+  summarizer.py      # LLM summarization via local llama-server
   transcriber.py     # VAD-based parakeet-mlx batch transcription
   app.tcss           # TUI stylesheet
 assets/
@@ -260,7 +280,8 @@ assets/
 bin/
   scarecrow          # wrapper script (sets PYTHONPATH, bypasses UF_HIDDEN)
 scripts/
-  setup.py           # parakeet config info + alias setup
+  setup.py           # bootstrap: checks prereqs, installs deps, shows config + launch options
+  resummarize.py     # re-run summarization on an existing session
   sync_env.py        # uv sync + editable-install repair
   repair_venv.py     # standalone .pth repair/validation
 examples/
@@ -275,6 +296,7 @@ tests/
   test_repo_policy.py    # repo policy enforcement tests
   test_session.py        # session/file management tests
   test_setup.py          # setup script tests
+  test_summarizer.py     # summarizer unit tests
   test_startup.py        # startup smoke tests (imports, .pth, HF offline, model load)
   test_transcriber.py    # batch transcription tests
 ```

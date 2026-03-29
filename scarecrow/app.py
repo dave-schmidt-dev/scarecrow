@@ -15,6 +15,7 @@ from concurrent.futures import (
 )
 from datetime import datetime
 from enum import Enum, auto
+from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
 from rich.markup import escape
@@ -157,13 +158,15 @@ class ScarecrowApp(App[None]):
         self._transcriber: Transcriber | None = transcriber
         self._status_message: str = ""
         self._status_is_error = False
+        self._session_name: str = ""
         self._shutdown_summary = ""
+        self._summary_path: Path | None = None
         self._batch_executor: ThreadPoolExecutor | None = None
         self._batch_futures: set[Future[str | None]] = set()
         self._batch_window_start: int = 0
         self._shutdown_lock = threading.RLock()
         self._ignore_batch_results = False
-        self._note_counts: dict[str, int] = {"TASK": 0, "NOTE": 0}
+        self._note_counts: dict[str, int] = {"TASK": 0, "NOTE": 0, "CONTEXT": 0}
         self._recording_start_time: float | None = None
         self._disk_warn_shown: bool = False
         self._session_disk_warn_shown: bool = False
@@ -219,7 +222,9 @@ class ScarecrowApp(App[None]):
         with contextlib.suppress(NoMatches):
             label = self.query_one("#notes-label", Static)
             label.update(
-                "Notes  [dim](/t task  /mn name  /f flush  /help · Enter)[/dim]"
+                "Notes  [dim]"
+                "(/t task  /c context  /mn name  /f flush  /help · Enter)"
+                "[/dim]"
             )
 
     def _preflight_check(self) -> bool:
@@ -277,6 +282,8 @@ class ScarecrowApp(App[None]):
         return getattr(self, "_reactive_state", AppState.IDLE)
 
     def _set_status(self, message: str, *, error: bool = False) -> None:
+        if not message and not error and self._session_name:
+            message = f"Session: {self._session_name}"
         self._status_message = message
         self._status_is_error = error
         self._sync_info_bar()
@@ -365,6 +372,7 @@ class ScarecrowApp(App[None]):
 
         try:
             self._session.rename(name)
+            self._session_name = name
             self._set_status(f"Session: {name}")
             # Update the audio recorder's output path so stop() returns correct path
             if self._audio_recorder is not None:
@@ -381,6 +389,8 @@ class ScarecrowApp(App[None]):
             "[bold]Commands:[/bold]\n"
             "  /task, /t [dim]<text>[/dim]   "
             "Add a task note\n"
+            "  /context, /c [dim]<text>[/dim]  "
+            "Add background context (spelling, names — aids summary, not displayed)\n"
             "  /mn [dim]<name>[/dim]         "
             "Name this session\n"
             "  /flush, /f          "
@@ -906,6 +916,8 @@ class ScarecrowApp(App[None]):
                     if include_ui:
                         self._show_error(f"Could not shut down transcriber: {exc}")
 
+            session_dir = self._session.session_dir if self._session else None
+
             if self._session is not None:
                 try:
                     self._session.append_event(
@@ -933,6 +945,19 @@ class ScarecrowApp(App[None]):
                 finally:
                     self._session = None
 
+                # Auto-summarize (non-fatal)
+                if session_dir is not None:
+                    try:
+                        print("  Generating summary…", flush=True)
+                        from scarecrow.summarizer import summarize_session
+
+                        result = summarize_session(session_dir)
+                        if result:
+                            log.info("Summary: %s", result)
+                            self._summary_path = result
+                    except Exception:
+                        log.exception("Auto-summarization failed (non-fatal)")
+
             try:
                 self.state = AppState.IDLE
             except Exception:
@@ -943,6 +968,8 @@ class ScarecrowApp(App[None]):
     _NOTE_PREFIXES: ClassVar[dict[str, str]] = {
         "/task": "TASK",
         "/t": "TASK",
+        "/context": "CONTEXT",
+        "/c": "CONTEXT",
     }
 
     def _submit_note(self) -> None:
@@ -1014,6 +1041,7 @@ class ScarecrowApp(App[None]):
         for label, key in [
             ("Tasks", "TASK"),
             ("Notes", "NOTE"),
+            ("Context", "CONTEXT"),
         ]:
             count = self._note_counts.get(key, 0)
             if count > 0:

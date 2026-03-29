@@ -1,40 +1,23 @@
-# Open Issues
-
-## Transcript accuracy
-- VAD silence threshold (0.01 RMS) may need tuning for noisy environments
-- LibriSpeech benchmark (3 min, normalized WER): parakeet 18.4% on chunked audio; parakeet is perfect (0% WER) on individual utterances — gap is from chunk boundary artifacts
-
-## Accessibility
-- Screen reader support blocked on Textual framework (planned but not yet shipped)
-- Monitor Textual releases for accessibility API; integrate when available
-
-## Setup script
-- Needs testing end-to-end with a fresh clone
-
----
-
 # Roadmap
-
-## Parakeet model investigation
-- Investigate alternative parakeet models for improved accuracy
-- Compare WER across different model sizes (0.6B vs larger variants)
-- Evaluate accuracy/speed/memory tradeoffs on M5 Max hardware
-- Test with domain-specific audio (meetings, podcasts, dictation)
 
 ## System audio recording
 - Capture system/app audio (meetings, calls, podcasts) in addition to mic input
+- Combine system audio and mic audio into a single session for full meeting/call recording
 - macOS options: BlackHole virtual audio device, Loopback, or ScreenCaptureKit API
-- Could mix or record separately from mic input
+- Could mix into one stream or record as separate channels
 
 ## Diarization
 - Speaker identification/labeling in transcripts ("Speaker A", "Speaker B")
 - Explore pyannote-audio or NeMo diarization models as a post-processing layer
 - Would pair well with system audio for meeting transcription
 
-## Auto-summarization
-- End-of-session summary written to transcript directory
-- Weight [NOTE] entries in body, list [TASK] items at end
-- Bullet-point format
+## Auto-summarization (in progress)
+- Local LLM summarization on shutdown via llama-server + Nemotron-3-Nano — implemented
+- Prompt handles [NOTE], [TASK], [CONTEXT] tags — implemented
+- Manual re-run via scripts/resummarize.py — implemented
+- Needs end-to-end testing with real recordings
+- Context window: 128K floor, 512K cap — no memory cost on short sessions (Mamba-2 linear scaling). Monitor token usage in summary footers to tune.
+- Future: configurable model selection, streaming progress output
 
 ## Obsidian sync
 - Push transcripts and summaries to an Obsidian vault
@@ -45,5 +28,3 @@
 ## Daily/weekly reporting
 - Aggregate summaries across sessions
 
-## Branding
-- Logo/emoticon — small SVG/PNG of a scarecrow inspired by Wizard of Oz

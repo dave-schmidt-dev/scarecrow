@@ -35,3 +35,13 @@ DIVIDER_INTERVAL = 60
 
 # Storage
 DEFAULT_RECORDINGS_DIR = Path.home() / "recordings"
+
+# Summarizer (local LLM via llama-server)
+SUMMARIZER_MODEL_PATTERN = "*Nemotron*Nano*GGUF"
+SUMMARIZER_SERVER_ALIAS = "scarecrow-summarizer"
+SUMMARIZER_PORT_RANGE = (8100, 8999)
+SUMMARIZER_SERVER_TIMEOUT = 180  # seconds to wait for server readiness
+SUMMARIZER_MAX_RETRIES = 2
+SUMMARIZER_OUTPUT_BUDGET = 4096  # max tokens for summary output
+SUMMARIZER_MIN_CTX = 131072  # 128K floor — no memory cost on short sessions (Mamba-2)
+SUMMARIZER_CHARS_PER_TOKEN = 4  # rough heuristic for token estimation

@@ -98,6 +98,8 @@ def main() -> None:
             logging.getLogger(__name__).exception("Finally: failed to clean up app")
         if app._shutdown_summary:
             print(app._shutdown_summary, flush=True)
+        if getattr(app, "_summary_path", None):
+            print(f"  Summary: {app._summary_path}", flush=True)
         print("  Done.", flush=True)
         print(flush=True)
         print("  Press Enter to close (auto-close in 30s)…", flush=True)

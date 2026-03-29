@@ -1,5 +1,15 @@
 # History
 
+## 2026-03-29 (auto-summarization, /context command, setup script overhaul)
+
+- **Auto-summarization on shutdown:** New `scarecrow/summarizer.py` generates `summary.md` in each session directory using a local LLM (Nemotron-3-Nano 30B via llama-server). Manages server lifecycle automatically — checks for a running server first, starts one if needed, stops it after. Dynamic context sizing (128K floor, 512K cap) with Mamba-2 linear scaling. Structured output: executive summary, key point bullets, task checklist. Footer includes model name, transcript/summary word counts, and token usage for tuning.
+- **`/context` (`/c`) command:** Add background context (spelling hints, participant names, domain terms) that feeds into the summarizer's system prompt without being surfaced in the summary. Session name from `/mn` also automatically feeds as context.
+- **`/mn` session name persists in status bar:** Previously cleared on next flush; now stored separately and restored when transient status messages clear.
+- **`scripts/resummarize.py`:** Standalone CLI to regenerate `summary.md` for any session directory. Error summaries include the retry command.
+- **Setup script overhaul:** `scripts/setup.py` now checks Python 3.12+, verifies `uv` is installed, runs `sync_env.py`, installs git hooks, and shows launch options. README updated with maintainer note to keep it in sync.
+- **Closed issues:** Transcript accuracy (improved with silence threshold tuning), accessibility (upstream Textual dependency), setup script testing (verified end-to-end in fresh venv).
+- **30 new tests** in `test_summarizer.py` covering GGUF discovery, context sizing, prompt construction, server lifecycle, LLM call retries, and end-to-end mocked flows.
+
 ## 2026-03-29 (fix audio pops: move disk I/O out of PortAudio callback)
 
 - **Fixed audio pops/clicks:** The PortAudio realtime callback was writing to a WAV file via `soundfile.write()`, causing buffer underruns when disk I/O stalled. Moved all disk writes to a dedicated `wav-writer` thread. The callback now only enqueues data to a bounded `queue.Queue` (zero blocking, zero disk I/O). Peak/RMS computation stays in the callback (fast, no I/O).
