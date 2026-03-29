@@ -219,7 +219,7 @@ class ScarecrowApp(App[None]):
         with contextlib.suppress(NoMatches):
             label = self.query_one("#notes-label", Static)
             label.update(
-                "Notes  [dim](/t task  /f flush  /help · Enter to submit)[/dim]"
+                "Notes  [dim](/t task  /mn name  /f flush  /help · Enter)[/dim]"
             )
 
     def _preflight_check(self) -> bool:
@@ -342,6 +342,37 @@ class ScarecrowApp(App[None]):
             self._batch_window_start = self._elapsed
             self._submit_batch_transcription(audio, batch_elapsed)
 
+    def _handle_meeting_name(self, raw: str) -> None:
+        """Rename the current session with a meeting name."""
+        with contextlib.suppress(NoMatches):
+            self.query_one("#note-input", Input).value = ""
+
+        # Strip the command prefix
+        name = ""
+        for prefix in ("/mn ", "/meeting "):
+            if raw.lower().startswith(prefix):
+                name = raw[len(prefix) :].strip()
+                break
+        else:
+            return
+
+        if not name:
+            return
+
+        if self._session is None:
+            self._set_status("No active session to rename.", error=True)
+            return
+
+        try:
+            self._session.rename(name)
+            self._set_status(f"Session: {name}")
+            # Update the audio recorder's output path so stop() returns correct path
+            if self._audio_recorder is not None:
+                self._audio_recorder._output_path = self._session.audio_path
+        except Exception as exc:
+            log.exception("Failed to rename session")
+            self._show_error(f"Could not rename session: {exc}")
+
     def _show_help(self) -> None:
         """Show inline help in the transcript pane."""
         with contextlib.suppress(NoMatches):
@@ -350,6 +381,8 @@ class ScarecrowApp(App[None]):
             "[bold]Commands:[/bold]\n"
             "  /task, /t [dim]<text>[/dim]   "
             "Add a task note\n"
+            "  /mn [dim]<name>[/dim]         "
+            "Name this session\n"
             "  /flush, /f          "
             "Force-flush the audio buffer now\n"
             "  /help, /h, ?        "
@@ -889,12 +922,8 @@ class ScarecrowApp(App[None]):
                     self._session.write_end_header()
                 except Exception:
                     log.exception("Failed to write session end header")
-                try:
-                    flac_path = self._session.compress_audio()
-                    if flac_path:
-                        log.info("Audio compressed to %s", flac_path)
-                except Exception:
-                    log.exception("Failed to compress audio")
+                # FLAC compression disabled — keeping WAV for audio quality audit.
+                # Re-enable by restoring the compress_audio() call here.
                 try:
                     self._session.finalize()
                 except Exception as exc:
@@ -1006,6 +1035,9 @@ class ScarecrowApp(App[None]):
             return
         if lower in ("/flush", "/f"):
             self._handle_flush()
+            return
+        if lower.startswith("/mn ") or lower.startswith("/meeting "):
+            self._handle_meeting_name(raw)
             return
         self._submit_note()
 

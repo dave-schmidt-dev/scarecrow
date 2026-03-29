@@ -294,6 +294,54 @@ def test_final_audio_path_falls_back_to_wav(tmp_path: Path) -> None:
     session.finalize()
 
 
+def test_rename_session(tmp_path: Path) -> None:
+    """rename() must rename the session directory and update paths."""
+    session = Session(base_dir=tmp_path)
+    old_dir = session.session_dir
+
+    session.rename("Huddle with Mike")
+
+    assert not old_dir.exists()
+    assert session.session_dir.exists()
+    assert "huddle-with-mike" in session.session_dir.name
+    assert old_dir.name in session.session_dir.name  # timestamp preserved
+    session.finalize()
+
+
+def test_rename_writes_event(tmp_path: Path) -> None:
+    """rename() must write a session_renamed event."""
+    session = Session(base_dir=tmp_path)
+    session.rename("My Meeting")
+    session.finalize()
+
+    events = [
+        json.loads(line)
+        for line in session.transcript_path.read_text().strip().splitlines()
+    ]
+    renamed = [e for e in events if e["type"] == "session_renamed"]
+    assert len(renamed) == 1
+    assert renamed[0]["name"] == "My Meeting"
+    assert renamed[0]["slug"] == "my-meeting"
+
+
+def test_rename_slug_sanitization(tmp_path: Path) -> None:
+    """rename() must sanitize special characters in the name."""
+    session = Session(base_dir=tmp_path)
+    session.rename("Q4 Planning: Budget & Goals!!!")
+
+    assert "q4-planning-budget-goals" in session.session_dir.name
+    session.finalize()
+
+
+def test_rename_empty_name_is_noop(tmp_path: Path) -> None:
+    """rename() with empty name must not rename."""
+    session = Session(base_dir=tmp_path)
+    old_dir = session.session_dir
+    session.rename("")
+    assert session.session_dir == old_dir
+    session.finalize()
+
+
 def test_append_event_handles_open_failure(tmp_path: Path) -> None:
     """append_event must catch OSError from open() and set write_failed."""
     from unittest.mock import patch

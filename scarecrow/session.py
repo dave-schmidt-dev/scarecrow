@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -72,6 +73,37 @@ class Session:
         except OSError:
             log.exception("Failed to write to transcript file")
             self._write_failed = True
+
+    def rename(self, name: str) -> None:
+        """Rename the session directory by appending a slugified name."""
+        slug = re.sub(r"[^a-z0-9-]", "", name.lower().replace(" ", "-"))
+        slug = re.sub(r"-+", "-", slug).strip("-")[:60]
+        if not slug:
+            return
+
+        # Close transcript file before rename
+        if self._transcript_file is not None:
+            self._transcript_file.flush()
+            self._transcript_file.close()
+            self._transcript_file = None
+
+        # Rename directory
+        timestamp_part = self._session_dir.name
+        new_name = f"{timestamp_part}_{slug}"
+        new_dir = self._session_dir.parent / new_name
+        self._session_dir.rename(new_dir)
+        self._session_dir = new_dir
+
+        # Write rename event (lazy open will reopen transcript at new path)
+        self.append_event(
+            {
+                "type": "session_renamed",
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "name": name,
+                "slug": slug,
+                "session_dir": str(self._session_dir),
+            }
+        )
 
     def compress_audio(self) -> Path | None:
         """Compress audio.wav to audio.flac (lossless).

@@ -30,6 +30,7 @@ REQUIRED_FIELDS: dict[str, set[str]] = {
     "warning": {"type", "elapsed", "timestamp", "text"},
     "recording_start": {"type", "elapsed", "timestamp"},
     "session_metrics": {"type", "elapsed", "timestamp", "word_count"},
+    "session_renamed": {"type", "timestamp", "name", "slug", "session_dir"},
 }
 
 # ---------------------------------------------------------------------------

@@ -2151,3 +2151,26 @@ async def test_resume_event_written_on_unpause(tmp_path: Path) -> None:
     assert re.match(pattern, ev["timestamp"]), (
         f"resume timestamp {ev['timestamp']!r} does not match ISO 8601"
     )
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_mn_command_renames_session(mock_session_cls, mock_recorder_cls) -> None:
+    """The /mn command must call session.rename() with the provided name."""
+    mock_rec = _mock_recorder()
+    mock_recorder_cls.return_value = mock_rec
+    mock_session = MagicMock()
+    mock_session_cls.return_value = mock_session
+
+    app = ScarecrowApp(transcriber=_mock_transcriber())
+    app._preflight_check = lambda: True  # type: ignore[method-assign]
+    async with app.run_test() as pilot:
+        app._start_recording()
+        await pilot.pause(delay=0.3)
+
+        input_widget = app.query_one("#note-input", Input)
+        input_widget.value = "/mn Standup with Team"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        mock_session.rename.assert_called_once_with("Standup with Team")

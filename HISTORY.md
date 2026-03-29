@@ -1,5 +1,10 @@
 # History
 
+## 2026-03-28 (/mn session naming, disable FLAC)
+
+- **`/mn` command:** Type `/mn Huddle with Mike` to name the current session. Renames the session directory to `2026-03-28_15-30-00_huddle-with-mike/`. Writes a `session_renamed` event to the JSONL transcript. Also available as `/meeting`.
+- **Disabled FLAC compression:** WAV files are now kept after shutdown (was converting to FLAC). `Session.compress_audio()` still exists but is not called, pending audio quality audit.
+
 ## 2026-03-28 (low-priority audit fixes)
 
 - **Schema version:** `session_start` event now includes `schema_version: 1` for forward compatibility.

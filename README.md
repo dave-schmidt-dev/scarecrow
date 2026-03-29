@@ -159,7 +159,7 @@ Each recording session creates a timestamped directory:
 ```
 recordings/
   2026-03-24_07-48-36/
-    audio.flac           # full recording (16kHz PCM16, lossless FLAC)
+    audio.wav            # full recording (16kHz PCM16)
     transcript.jsonl     # JSON Lines transcript — one event per line
 ```
 
@@ -181,7 +181,7 @@ Event types: `session_start`, `session_end`, `transcript`, `divider`, `pause`, `
 
 ### Audio format
 
-Audio is recorded as WAV during the session (raw PCM in the audio callback with zero CPU overhead), then losslessly compressed to FLAC on shutdown (~2:1 size reduction, ~0.9 MB/min). The WAV is deleted after successful compression. If compression fails, the WAV is kept.
+Audio is recorded and kept as WAV (raw PCM in the audio callback, zero CPU overhead). The session retains `audio.wav` after shutdown. Lossless FLAC compression (~2:1 size reduction, ~0.9 MB/min) is available via `Session.compress_audio()` but is currently disabled to allow audio quality auditing.
 
 ## Development
 
