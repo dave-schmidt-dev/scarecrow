@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -11,14 +10,20 @@ import pytest
 
 from scarecrow import config
 from scarecrow.summarizer import (
-    LlamaServer,
     _build_prompt,
     _compute_ctx_size,
     _discover_gguf,
     _estimate_tokens,
-    _find_running_server,
+    _generate,
+    _model_name_from_gguf,
     _write_error_summary,
     summarize_session,
+)
+
+_real_gguf = _discover_gguf()
+_skip_no_model = pytest.mark.skipif(
+    _real_gguf is None,
+    reason="Nemotron GGUF not found in HuggingFace cache",
 )
 
 # ---------------------------------------------------------------------------
@@ -67,7 +72,6 @@ def test_discover_gguf_skips_download_in_progress(tmp_path: Path) -> None:
 
 
 def test_discover_gguf_returns_none_empty_cache(tmp_path: Path) -> None:
-    # No models dir at all
     with patch("scarecrow.summarizer.Path.home", return_value=tmp_path):
         result = _discover_gguf()
 
@@ -86,11 +90,10 @@ def test_estimate_tokens() -> None:
 
 def test_compute_ctx_size_minimum() -> None:
     result = _compute_ctx_size(1)
-    assert result == config.SUMMARIZER_MIN_CTX  # 32768
+    assert result == config.SUMMARIZER_MIN_CTX
 
 
 def test_compute_ctx_size_scales_up() -> None:
-    # 150000 input tokens + 500 overhead + output budget > min ctx (128K)
     result = _compute_ctx_size(150000)
     expected_needed = 150000 + 500 + config.SUMMARIZER_OUTPUT_BUDGET
     assert result >= expected_needed
@@ -167,271 +170,53 @@ def test_build_prompt_session_name_as_context() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Server Lifecycle (mocked)
+# In-Process Generation (mocked)
 # ---------------------------------------------------------------------------
 
 
-def test_llama_server_start_calls_popen(tmp_path: Path) -> None:
+def test_generate_loads_model_and_returns_text(tmp_path: Path) -> None:
     gguf = tmp_path / "model.gguf"
     gguf.touch()
-    server = LlamaServer(gguf_path=gguf, port=8200, ctx_size=8192)
 
-    with patch("subprocess.Popen") as mock_popen:
-        mock_popen.return_value = MagicMock()
-        server.start()
+    mock_llm = MagicMock()
+    mock_llm.create_chat_completion.return_value = {
+        "choices": [{"message": {"content": "Generated summary"}}],
+        "usage": {"total_tokens": 300},
+    }
 
-    mock_popen.assert_called_once()
-    call_args = mock_popen.call_args
-    cmd = call_args[0][0]
-    assert "llama-server" in cmd
-    assert "--model" in cmd
-    assert str(gguf) in cmd
-    assert "--port" in cmd
-    assert "8200" in cmd
-    assert "--ctx-size" in cmd
-    assert "8192" in cmd
+    with patch("llama_cpp.Llama", return_value=mock_llm) as mock_cls:
+        text, tokens = _generate(gguf, "system prompt", "user content", 8192)
+
+    assert text == "Generated summary"
+    assert tokens == 300
+    mock_cls.assert_called_once_with(
+        model_path=str(gguf),
+        n_ctx=8192,
+        n_gpu_layers=-1,
+        flash_attn=True,
+        verbose=False,
+    )
+    mock_llm.create_chat_completion.assert_called_once()
+    call_kw = mock_llm.create_chat_completion.call_args[1]
+    messages = call_kw["messages"]
+    assert any(m["role"] == "system" for m in messages)
+    assert any(m["role"] == "user" for m in messages)
 
 
-def test_llama_server_stop_terminates(tmp_path: Path) -> None:
+def test_generate_cleans_up_on_error(tmp_path: Path) -> None:
     gguf = tmp_path / "model.gguf"
     gguf.touch()
-    server = LlamaServer(gguf_path=gguf, port=8200, ctx_size=8192)
 
-    mock_proc = MagicMock()
-    mock_proc.wait.return_value = 0
-    server._process = mock_proc
+    mock_llm = MagicMock()
+    mock_llm.create_chat_completion.side_effect = RuntimeError("OOM")
 
-    server.stop()
+    with (
+        patch("llama_cpp.Llama", return_value=mock_llm),
+        pytest.raises(RuntimeError, match="OOM"),
+    ):
+        _generate(gguf, "system", "user", 8192)
 
-    mock_proc.terminate.assert_called_once()
-    mock_proc.wait.assert_called_once_with(timeout=10)
-    assert server._process is None
-
-
-def test_llama_server_stop_kills_on_timeout(tmp_path: Path) -> None:
-    gguf = tmp_path / "model.gguf"
-    gguf.touch()
-    server = LlamaServer(gguf_path=gguf, port=8200, ctx_size=8192)
-
-    mock_proc = MagicMock()
-    mock_proc.wait.side_effect = [
-        subprocess.TimeoutExpired(cmd="llama-server", timeout=10),
-        0,
-    ]
-    server._process = mock_proc
-
-    server.stop()
-
-    mock_proc.terminate.assert_called_once()
-    mock_proc.kill.assert_called_once()
-    assert server._process is None
-
-
-# ---------------------------------------------------------------------------
-# Running Server Detection
-# ---------------------------------------------------------------------------
-
-
-def test_find_running_server_returns_port() -> None:
-    mock_proc = MagicMock()
-    mock_proc.info = {
-        "name": "llama-server",
-        "cmdline": ["llama-server", "--port", "8150", "--model", "nemotron.gguf"],
-    }
-
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.json.return_value = {"data": [{"id": "nemotron-nano-30b"}]}
-
-    import sys
-
-    mock_psutil_module = MagicMock()
-    mock_psutil_module.process_iter.return_value = [mock_proc]
-    mock_psutil_module.NoSuchProcess = type("NoSuchProcess", (Exception,), {})
-    mock_psutil_module.AccessDenied = type("AccessDenied", (Exception,), {})
-
-    mock_httpx_module = MagicMock()
-    mock_httpx_module.get.return_value = mock_resp
-
-    original_psutil = sys.modules.get("psutil")
-    original_httpx = sys.modules.get("httpx")
-    try:
-        sys.modules["psutil"] = mock_psutil_module
-        sys.modules["httpx"] = mock_httpx_module
-        result = _find_running_server()
-    finally:
-        if original_psutil is None:
-            sys.modules.pop("psutil", None)
-        else:
-            sys.modules["psutil"] = original_psutil
-        if original_httpx is None:
-            sys.modules.pop("httpx", None)
-        else:
-            sys.modules["httpx"] = original_httpx
-
-    assert result == 8150
-
-
-def test_find_running_server_no_psutil() -> None:
-    import sys
-
-    original = sys.modules.get("psutil")
-    sys.modules["psutil"] = None  # type: ignore[assignment]
-    try:
-        result = _find_running_server()
-    finally:
-        if original is None:
-            sys.modules.pop("psutil", None)
-        else:
-            sys.modules["psutil"] = original
-
-    assert result is None
-
-
-def test_find_running_server_no_matching_model() -> None:
-    mock_proc = MagicMock()
-    mock_proc.info = {
-        "name": "llama-server",
-        "cmdline": ["llama-server", "--port", "8150"],
-    }
-
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.json.return_value = {"data": [{"id": "some-other-model"}]}
-
-    import sys
-
-    mock_psutil_module = MagicMock()
-    mock_psutil_module.process_iter.return_value = [mock_proc]
-    mock_psutil_module.NoSuchProcess = type("NoSuchProcess", (Exception,), {})
-    mock_psutil_module.AccessDenied = type("AccessDenied", (Exception,), {})
-
-    mock_httpx_module = MagicMock()
-    mock_httpx_module.get.return_value = mock_resp
-
-    original_psutil = sys.modules.get("psutil")
-    original_httpx = sys.modules.get("httpx")
-    try:
-        sys.modules["psutil"] = mock_psutil_module
-        sys.modules["httpx"] = mock_httpx_module
-        result = _find_running_server()
-    finally:
-        if original_psutil is None:
-            sys.modules.pop("psutil", None)
-        else:
-            sys.modules["psutil"] = original_psutil
-        if original_httpx is None:
-            sys.modules.pop("httpx", None)
-        else:
-            sys.modules["httpx"] = original_httpx
-
-    assert result is None
-
-
-# ---------------------------------------------------------------------------
-# LLM Call (mocked)
-# ---------------------------------------------------------------------------
-
-
-def _make_llm_response(
-    text: str, total_tokens: int = 100, status_code: int = 200
-) -> MagicMock:
-    mock_resp = MagicMock()
-    mock_resp.status_code = status_code
-    mock_resp.text = ""
-    mock_resp.json.return_value = {
-        "choices": [{"message": {"content": text}}],
-        "usage": {"total_tokens": total_tokens},
-        "model": "test-model",
-    }
-    mock_resp.raise_for_status = MagicMock()
-    return mock_resp
-
-
-def test_call_llm_success() -> None:
-    import sys
-
-    from scarecrow.summarizer import _call_llm
-
-    mock_httpx = MagicMock()
-    mock_httpx.post.return_value = _make_llm_response("Great summary", 250)
-    mock_httpx.TimeoutException = type("TimeoutException", (Exception,), {})
-    mock_httpx.ConnectError = type("ConnectError", (Exception,), {})
-
-    original = sys.modules.get("httpx")
-    try:
-        sys.modules["httpx"] = mock_httpx
-        text, _tokens, _model = _call_llm(8200, "system", "user content")
-    finally:
-        if original is None:
-            sys.modules.pop("httpx", None)
-        else:
-            sys.modules["httpx"] = original
-
-    assert text == "Great summary"
-    assert _tokens == 250
-
-
-def test_call_llm_retries_on_500() -> None:
-    import sys
-
-    from scarecrow.summarizer import _call_llm
-
-    error_resp = MagicMock()
-    error_resp.status_code = 500
-    error_resp.text = "Internal server error"
-    error_resp.raise_for_status = MagicMock()
-
-    success_resp = _make_llm_response("Retry succeeded", 100)
-
-    mock_httpx = MagicMock()
-    mock_httpx.post.side_effect = [error_resp, success_resp]
-    mock_httpx.TimeoutException = type("TimeoutException", (Exception,), {})
-    mock_httpx.ConnectError = type("ConnectError", (Exception,), {})
-
-    original = sys.modules.get("httpx")
-    try:
-        sys.modules["httpx"] = mock_httpx
-        with patch("scarecrow.summarizer.time.sleep"):
-            text, _tokens, _model = _call_llm(8200, "system", "user content")
-    finally:
-        if original is None:
-            sys.modules.pop("httpx", None)
-        else:
-            sys.modules["httpx"] = original
-
-    assert text == "Retry succeeded"
-    assert mock_httpx.post.call_count == 2
-
-
-def test_call_llm_exhausts_retries() -> None:
-    import sys
-
-    from scarecrow.summarizer import _call_llm
-
-    error_resp = MagicMock()
-    error_resp.status_code = 500
-    error_resp.text = "Internal server error"
-    error_resp.raise_for_status = MagicMock()
-
-    mock_httpx = MagicMock()
-    mock_httpx.post.return_value = error_resp
-    mock_httpx.TimeoutException = type("TimeoutException", (Exception,), {})
-    mock_httpx.ConnectError = type("ConnectError", (Exception,), {})
-
-    original = sys.modules.get("httpx")
-    try:
-        sys.modules["httpx"] = mock_httpx
-        with (
-            patch("scarecrow.summarizer.time.sleep"),
-            pytest.raises(RuntimeError),
-        ):
-            _call_llm(8200, "system", "user content")
-    finally:
-        if original is None:
-            sys.modules.pop("httpx", None)
-        else:
-            sys.modules["httpx"] = original
+    # Model should still be cleaned up (del llm runs in finally)
 
 
 # ---------------------------------------------------------------------------
@@ -479,18 +264,11 @@ def test_summarize_session_success(tmp_path: Path) -> None:
     fake_gguf.parent.mkdir(parents=True)
     fake_gguf.touch()
 
-    mock_server = MagicMock()
-    mock_server.wait_ready.return_value = True
-    mock_server.port = 8200
-
     with (
-        patch("scarecrow.summarizer._find_running_server", return_value=None),
         patch("scarecrow.summarizer._discover_gguf", return_value=fake_gguf),
-        patch("scarecrow.summarizer._pick_port", return_value=8200),
-        patch("scarecrow.summarizer.LlamaServer", return_value=mock_server),
         patch(
-            "scarecrow.summarizer._call_llm",
-            return_value=("Summary text here", 500, "nemotron-nano"),
+            "scarecrow.summarizer._generate",
+            return_value=("Summary text here", 500),
         ),
     ):
         result = summarize_session(tmp_path)
@@ -504,10 +282,6 @@ def test_summarize_session_success(tmp_path: Path) -> None:
     assert "words transcribed" in content
     assert "summarized in" in content
     assert "500 tokens used" in content
-
-    mock_server.start.assert_called_once()
-    mock_server.wait_ready.assert_called_once()
-    mock_server.stop.assert_called_once()
 
 
 def test_summarize_session_no_transcript(tmp_path: Path) -> None:
@@ -525,10 +299,7 @@ def test_summarize_session_no_gguf(tmp_path: Path) -> None:
     ]
     _write_transcript(tmp_path, events)
 
-    with (
-        patch("scarecrow.summarizer._find_running_server", return_value=None),
-        patch("scarecrow.summarizer._discover_gguf", return_value=None),
-    ):
+    with patch("scarecrow.summarizer._discover_gguf", return_value=None):
         result = summarize_session(tmp_path)
 
     assert result is not None
@@ -537,28 +308,126 @@ def test_summarize_session_no_gguf(tmp_path: Path) -> None:
     assert "download" in content.lower()
 
 
-def test_summarize_session_server_timeout(tmp_path: Path) -> None:
-    events = [
-        {"type": "transcript", "text": "Some speech here."},
-    ]
+def test_summarize_session_generate_error(tmp_path: Path) -> None:
+    """summarize_session writes an error summary when _generate raises."""
+    events = [{"type": "transcript", "text": "Some speech here."}]
     _write_transcript(tmp_path, events)
 
     fake_gguf = tmp_path / "model.gguf"
     fake_gguf.touch()
 
-    mock_server = MagicMock()
-    mock_server.wait_ready.return_value = False
-    mock_server.port = 8200
-
     with (
-        patch("scarecrow.summarizer._find_running_server", return_value=None),
         patch("scarecrow.summarizer._discover_gguf", return_value=fake_gguf),
-        patch("scarecrow.summarizer._pick_port", return_value=8200),
-        patch("scarecrow.summarizer.LlamaServer", return_value=mock_server),
+        patch(
+            "scarecrow.summarizer._generate",
+            side_effect=RuntimeError("Metal OOM"),
+        ),
     ):
         result = summarize_session(tmp_path)
 
     assert result is not None
     content = result.read_text(encoding="utf-8")
     assert "failed" in content.lower()
-    mock_server.stop.assert_called_once()
+
+
+def test_summarize_session_empty_speech(tmp_path: Path) -> None:
+    """Sessions with only metadata events produce an error summary."""
+    events = [
+        {"type": "session_start", "timestamp": "2026-01-01T10:00:00"},
+        {"type": "session_end", "timestamp": "2026-01-01T10:01:00"},
+    ]
+    _write_transcript(tmp_path, events)
+
+    result = summarize_session(tmp_path)
+
+    assert result is not None
+    content = result.read_text(encoding="utf-8")
+    assert "No transcribed speech" in content
+
+
+# ---------------------------------------------------------------------------
+# Model name extraction
+# ---------------------------------------------------------------------------
+
+
+def test_model_name_from_gguf_extracts_repo() -> None:
+    path = Path(
+        "/cache/models--unsloth--Nemotron-3-Nano-30B-A3B-GGUF/snapshots/abc/model.gguf"
+    )
+    assert _model_name_from_gguf(path) == "Nemotron-3-Nano-30B-A3B"
+
+
+def test_model_name_from_gguf_fallback() -> None:
+    path = Path("/some/random/path/mymodel.gguf")
+    assert _model_name_from_gguf(path) == "mymodel"
+
+
+# ---------------------------------------------------------------------------
+# Integration tests (require real GGUF model on disk)
+# ---------------------------------------------------------------------------
+
+
+@_skip_no_model
+def test_generate_returns_text_from_real_model() -> None:
+    """_generate loads the real GGUF and produces a non-empty response."""
+    assert _real_gguf is not None
+    text, tokens = _generate(
+        _real_gguf,
+        system_prompt="Reply with exactly: OK",
+        user_content="Say OK.",
+        ctx_size=2048,
+    )
+    assert isinstance(text, str)
+    assert len(text) > 0
+    assert isinstance(tokens, int)
+    assert tokens > 0
+
+
+@_skip_no_model
+def test_generate_respects_system_prompt() -> None:
+    """The model follows the system prompt instruction."""
+    assert _real_gguf is not None
+    text, _ = _generate(
+        _real_gguf,
+        system_prompt=(
+            "You are a test helper. Respond with ONLY the single "
+            "word 'PINEAPPLE'. No other text."
+        ),
+        user_content="Go.",
+        ctx_size=2048,
+    )
+    assert "PINEAPPLE" in text.upper()
+
+
+@_skip_no_model
+def test_summarize_session_end_to_end(tmp_path: Path) -> None:
+    """Full pipeline: transcript on disk -> summary.md with real model."""
+    events = [
+        {"type": "session_start", "timestamp": "2026-01-01T10:00:00"},
+        {
+            "type": "transcript",
+            "text": (
+                "Today we decided to migrate the database from "
+                "PostgreSQL to SQLite for the embedded use case."
+            ),
+        },
+        {
+            "type": "transcript",
+            "text": "Alice will handle the schema conversion by Friday.",
+        },
+        {"type": "note", "tag": "TASK", "text": "Convert schema to SQLite"},
+        {"type": "session_end", "timestamp": "2026-01-01T10:05:00"},
+    ]
+    _write_transcript(tmp_path, events)
+
+    result = summarize_session(tmp_path)
+
+    assert result is not None
+    assert result.name == "summary.md"
+    content = result.read_text(encoding="utf-8")
+    # Must contain actual summary content, not an error
+    assert "failed" not in content.lower()
+    # Footer with stats
+    assert "Generated by Scarecrow" in content
+    assert "words transcribed" in content
+    assert "tokens used" in content

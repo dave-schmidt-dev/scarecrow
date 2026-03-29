@@ -195,12 +195,6 @@ def test_peak_level_zero_when_paused(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Bug: editable install breaks when run from outside project directory
-# (Homebrew Python skips _scarecrow.pth, import fails)
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
 # Bug: drain_buffer overlap caused duplicate words in batch transcripts
 # The 2s overlap meant the same words appeared at end of one batch and
 # start of the next. drain_buffer must clear completely.
@@ -265,21 +259,3 @@ def test_hf_warning_suppressed() -> None:
     # Import __main__ which sets the env var at module level
     importlib.import_module("scarecrow.__main__")
     assert os.environ.get("HF_HUB_DISABLE_IMPLICIT_TOKEN") == "1"
-
-
-def test_scarecrow_importable_from_outside_project_dir() -> None:
-    """scarecrow must be importable without the project dir on sys.path."""
-    import subprocess
-    import sys
-
-    from scarecrow.env_health import ensure_editable_install_visible
-
-    ensure_editable_install_visible("scarecrow")
-
-    result = subprocess.run(
-        [sys.executable, "-c", "from scarecrow.__main__ import main"],
-        capture_output=True,
-        text=True,
-        cwd="/tmp",
-    )
-    assert result.returncode == 0, f"Import failed from /tmp: {result.stderr}"

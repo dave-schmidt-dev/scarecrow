@@ -1380,6 +1380,10 @@ async def test_batch_transcription_triggered_at_interval(
         await pilot.pause(delay=0.3)
         assert app.state is AppState.RECORDING
 
+        # Pause the VAD poll timer so it doesn't race with our manual call
+        if app._batch_timer is not None:
+            app._batch_timer.pause()
+
         submit_calls: list[bool] = []
         original_submit = app._submit_batch_transcription
 
@@ -1880,11 +1884,11 @@ def test_all_silent_buffer_does_not_accumulate(tmp_path: Path) -> None:
     ):
         recorder = AudioRecorder(tmp_path / "audio.wav")
 
-    # Inject all-silent chunks (> 0.5 s so the 0.5s guard passes)
-    # At 16kHz with 1600-sample chunks, 6 chunks = 0.6 s
+    # Inject all-silent chunks (> 0.75s so the VAD_MIN_SILENCE_MS guard passes)
+    # At 16kHz with 1600-sample chunks, 8 chunks = 0.8s
     silent_chunk = np.zeros((1600, 1), dtype="int16")
     with recorder._buffer_lock:
-        for _ in range(6):
+        for _ in range(8):
             recorder._audio_chunks.append(silent_chunk.copy())
             recorder._chunk_energies.append(0.0)
 

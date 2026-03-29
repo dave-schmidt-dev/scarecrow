@@ -52,12 +52,11 @@ def check_uv():
 
 
 def install_deps():
-    """Run sync_env.py to install deps and repair the editable install."""
+    """Run uv sync to install deps."""
     print("INSTALLING DEPENDENCIES")
     print("-" * 40)
-    sync_script = PROJECT_ROOT / "scripts" / "sync_env.py"
     result = subprocess.run(
-        [sys.executable, str(sync_script)],
+        ["uv", "sync", "--no-editable"],
         cwd=PROJECT_ROOT,
         check=False,
     )
@@ -65,7 +64,7 @@ def install_deps():
         print("  ✗ Dependency install failed (see output above)")
         print()
         return False
-    print("  ✓ Dependencies installed and editable install validated")
+    print("  ✓ Dependencies installed")
     print()
     return True
 
@@ -109,7 +108,7 @@ def explain_architecture():
     print("with a 30-second hard max for continuous speech.")
     print()
     print("Backend: parakeet-mlx (Apple Silicon GPU)")
-    print("Model:   mlx-community/parakeet-tdt-0.6b-v3")
+    print("Model:   mlx-community/parakeet-tdt-1.1b")
     print("Requires: macOS with Apple Silicon + microphone access")
     print()
 
@@ -127,9 +126,6 @@ def setup_alias():
     print()
     print("  cp examples/scarecrow-iterm-profile.json \\")
     print("     ~/Library/Application\\ Support/iTerm2/DynamicProfiles/scarecrow.json")
-    print()
-    print("Avoid 'uv run' in aliases — it can re-trigger the macOS UF_HIDDEN")
-    print("flag on the editable-install .pth file.")
     print()
 
 

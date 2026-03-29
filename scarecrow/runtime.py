@@ -8,6 +8,7 @@ import threading
 import warnings
 
 from scarecrow import config
+from scarecrow.config import Config
 
 log = logging.getLogger(__name__)
 
@@ -22,9 +23,10 @@ def configure_runtime_environment() -> None:
 class ModelManager:
     """Owns Parakeet model bootstrap."""
 
-    def __init__(self) -> None:
+    def __init__(self, cfg: Config | None = None) -> None:
         self._parakeet_model = None
         self._lock = threading.Lock()
+        self._cfg = cfg or config.config
 
     def prepare(self) -> None:
         """Initialize runtime state."""
@@ -37,7 +39,7 @@ class ModelManager:
             if self._parakeet_model is None:
                 from parakeet_mlx import from_pretrained
 
-                self._parakeet_model = from_pretrained(config.PARAKEET_MODEL)
+                self._parakeet_model = from_pretrained(self._cfg.PARAKEET_MODEL)
             return self._parakeet_model
 
     def release_models(self) -> None:

@@ -2,76 +2,13 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
-import random
-import socket
-import subprocess
-import time
 from pathlib import Path
 
 from scarecrow import config
 
 log = logging.getLogger(__name__)
-
-
-def _find_running_server() -> int | None:
-    try:
-        import psutil
-    except ImportError:
-        return None
-
-    try:
-        import httpx
-
-        for proc in psutil.process_iter(["name", "cmdline"]):
-            try:
-                name = proc.info.get("name") or ""
-                cmdline = proc.info.get("cmdline") or []
-                cmdline_str = " ".join(cmdline)
-                if "llama-server" not in name and "llama-server" not in cmdline_str:
-                    continue
-
-                # Extract --port from cmdline
-                port: int | None = None
-                for i, arg in enumerate(cmdline):
-                    if arg == "--port" and i + 1 < len(cmdline):
-                        with contextlib.suppress(ValueError):
-                            port = int(cmdline[i + 1])
-                        break
-
-                if port is None:
-                    continue
-
-                # Verify it's responsive and serves the right model
-                try:
-                    resp = httpx.get(f"http://127.0.0.1:{port}/v1/models", timeout=5)
-                    if resp.status_code != 200:
-                        continue
-                    data = resp.json()
-                    models = data.get("data", [])
-                    for model in models:
-                        model_id = model.get("id", "")
-                        nemotron_match = "nemotron" in model_id.lower()
-                        alias_match = model_id == config.SUMMARIZER_SERVER_ALIAS
-                        if nemotron_match or alias_match:
-                            log.info(
-                                "Found running llama-server on port %d (model %r)",
-                                port,
-                                model_id,
-                            )
-                            return port
-                except Exception:
-                    continue
-
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-
-    except Exception:
-        log.exception("Error while searching for running llama-server")
-
-    return None
 
 
 def _discover_gguf() -> Path | None:
@@ -232,146 +169,40 @@ def _build_prompt(events: list[dict]) -> tuple[str, str]:
     return system_prompt, user_content
 
 
-class LlamaServer:
-    """Manages a llama-server subprocess for local LLM inference."""
+def _generate(
+    gguf_path: Path,
+    system_prompt: str,
+    user_content: str,
+    ctx_size: int,
+) -> tuple[str, int]:
+    """Load model in-process and generate a chat completion.
 
-    def __init__(
-        self,
-        gguf_path: Path,
-        port: int,
-        ctx_size: int,
-        log_dir: Path | None = None,
-    ) -> None:
-        self._gguf_path = gguf_path
-        self._port = port
-        self._ctx_size = ctx_size
-        self._log_dir = log_dir
-        self._process: subprocess.Popen | None = None
-        self._log_fh = None
+    Returns (generated_text, total_tokens).
+    """
+    from llama_cpp import Llama
 
-    @property
-    def port(self) -> int:
-        return self._port
-
-    def start(self) -> None:
-        log_file = (
-            self._log_dir / "llama-server.log" if self._log_dir else subprocess.DEVNULL
+    llm = Llama(
+        model_path=str(gguf_path),
+        n_ctx=ctx_size,
+        n_gpu_layers=-1,
+        flash_attn=True,
+        verbose=False,
+    )
+    try:
+        response = llm.create_chat_completion(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            max_tokens=config.SUMMARIZER_OUTPUT_BUDGET,
+            temperature=0.3,
         )
-        cmd = [
-            "llama-server",
-            "--model",
-            str(self._gguf_path),
-            "--alias",
-            config.SUMMARIZER_SERVER_ALIAS,
-            "--port",
-            str(self._port),
-            "--ctx-size",
-            str(self._ctx_size),
-            "--flash-attn",
-            "on",
-            "--reasoning-budget",
-            "8192",
-            "--jinja",
-        ]
-        if isinstance(log_file, Path):
-            fh = open(log_file, "w")  # noqa: SIM115
-            self._log_fh = fh
-        else:
-            fh = subprocess.DEVNULL
-            self._log_fh = None
-        self._process = subprocess.Popen(cmd, stdout=fh, stderr=fh)
-
-    def wait_ready(self, timeout: int | None = None) -> bool:
-        import httpx
-
-        if timeout is None:
-            timeout = config.SUMMARIZER_SERVER_TIMEOUT
-        url = f"http://127.0.0.1:{self._port}/health"
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            try:
-                resp = httpx.get(url, timeout=5)
-                if resp.status_code == 200:
-                    return True
-            except (httpx.ConnectError, httpx.TimeoutException):
-                pass
-            if self._process and self._process.poll() is not None:
-                return False
-            time.sleep(2)
-        return False
-
-    def stop(self) -> None:
-        if self._process is None:
-            return
-        self._process.terminate()
-        try:
-            self._process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            self._process.kill()
-            self._process.wait(timeout=5)
-        self._process = None
-        if self._log_fh is not None:
-            self._log_fh.close()
-            self._log_fh = None
-
-
-def _pick_port() -> int:
-    low, high = config.SUMMARIZER_PORT_RANGE
-    for _ in range(3):
-        port = random.randint(low, high)
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                sock.bind(("127.0.0.1", port))
-            return port
-        except OSError:
-            continue
-    raise RuntimeError(
-        f"Could not find a free port in range "
-        f"{config.SUMMARIZER_PORT_RANGE} after 3 attempts"
-    )
-
-
-def _call_llm(port: int, system_prompt: str, user_content: str) -> tuple[str, int, str]:
-    import httpx
-
-    url = f"http://127.0.0.1:{port}/v1/chat/completions"
-    body = {
-        "model": config.SUMMARIZER_SERVER_ALIAS,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ],
-        "max_tokens": config.SUMMARIZER_OUTPUT_BUDGET,
-        "temperature": 0.3,
-    }
-
-    last_exc: Exception | None = None
-    for attempt in range(config.SUMMARIZER_MAX_RETRIES + 1):
-        try:
-            resp = httpx.post(url, json=body, timeout=300)
-            if resp.status_code >= 500:
-                raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
-            resp.raise_for_status()
-            data = resp.json()
-            text = data["choices"][0]["message"]["content"]
-            total_tokens = data.get("usage", {}).get("total_tokens", 0)
-            model_name = data.get("model", "unknown")
-            return text, total_tokens, model_name
-        except (httpx.TimeoutException, httpx.ConnectError, RuntimeError) as exc:
-            last_exc = exc
-            log.warning(
-                "LLM call attempt %d/%d failed: %s",
-                attempt + 1,
-                config.SUMMARIZER_MAX_RETRIES + 1,
-                exc,
-            )
-            if attempt < config.SUMMARIZER_MAX_RETRIES:
-                time.sleep(2)
-
-    raise RuntimeError(
-        f"LLM call failed after {config.SUMMARIZER_MAX_RETRIES + 1} "
-        f"attempts: {last_exc}"
-    )
+        text = response["choices"][0]["message"]["content"]
+        usage = response.get("usage", {})
+        total_tokens = usage.get("total_tokens", 0)
+        return text, total_tokens
+    finally:
+        del llm
 
 
 def _write_error_summary(session_dir: Path, error_msg: str) -> Path:
@@ -392,10 +223,10 @@ def summarize_session(session_dir: Path) -> Path | None:
     """Generate summary.md for a completed session.
 
     Reads transcript.jsonl from session_dir, builds a prompt from the events,
-    finds or starts a local llama-server running Nemotron, calls the LLM, and
-    writes summary.md. Returns the path to summary.md on success, or a path to
-    an error summary on failure. Returns None only if an unexpected error occurs
-    before any output can be written.
+    loads a local GGUF model in-process via llama-cpp-python, generates a
+    summary, and writes summary.md. Returns the path to summary.md on success,
+    or a path to an error summary on failure. Returns None only if an unexpected
+    error occurs before any output can be written.
     """
     try:
         transcript_path = session_dir / "transcript.jsonl"
@@ -413,68 +244,39 @@ def summarize_session(session_dir: Path) -> Path | None:
         input_tokens = _estimate_tokens(system_prompt + user_content)
         ctx_size = _compute_ctx_size(input_tokens)
 
-        # 1. Check for running server FIRST
-        port = _find_running_server()
-        server = None
-        gguf_model_name: str | None = None
-
-        if port is None:
-            # 2. Discover model
-            gguf = _discover_gguf()
-            if gguf is None:
-                return _write_error_summary(
-                    session_dir,
-                    "Nemotron GGUF model not found in ~/.cache/huggingface/hub/. "
-                    "Download it first: "
-                    "huggingface-cli download unsloth/Nemotron-3-Nano-30B-A3B-GGUF",
-                )
-
-            # Derive real model name from GGUF path
-            gguf_model_name = _model_name_from_gguf(gguf)
-
-            # 3. Start server
-            port = _pick_port()
-            server = LlamaServer(gguf, port, ctx_size, log_dir=session_dir)
-            log.info("Starting llama-server on port %d (ctx %d)", port, ctx_size)
-            server.start()
-
-            if not server.wait_ready():
-                server.stop()
-                return _write_error_summary(
-                    session_dir,
-                    f"llama-server failed to become ready within "
-                    f"{config.SUMMARIZER_SERVER_TIMEOUT}s. "
-                    f"Check {session_dir / 'llama-server.log'} for details.",
-                )
-
-        try:
-            log.info("Calling LLM for summarization...")
-            summary_text, total_tokens, api_model = _call_llm(
-                port, system_prompt, user_content
+        gguf = _discover_gguf()
+        if gguf is None:
+            return _write_error_summary(
+                session_dir,
+                "Nemotron GGUF model not found in ~/.cache/huggingface/hub/. "
+                "Download it first: "
+                "huggingface-cli download unsloth/Nemotron-3-Nano-30B-A3B-GGUF",
             )
 
-            # Prefer GGUF-derived name; fall back to API response
-            model_label = gguf_model_name or api_model
-            transcript_words = len(user_content.split())
-            summary_words = len(summary_text.split())
-            footer = (
-                f"\n\n---\n"
-                f"*Generated by Scarecrow · "
-                f"model: {model_label} · "
-                f"{transcript_words} words transcribed, "
-                f"summarized in {summary_words} words · "
-                f"{total_tokens} tokens used · "
-                f"ctx {ctx_size}*\n"
-            )
-            summary_text += footer
+        model_name = _model_name_from_gguf(gguf)
+        log.info("Loading %s (ctx %d) for summarization...", model_name, ctx_size)
 
-            summary_path = session_dir / "summary.md"
-            summary_path.write_text(summary_text, encoding="utf-8")
-            log.info("Summary written to %s", summary_path)
-            return summary_path
-        finally:
-            if server is not None:
-                server.stop()
+        summary_text, total_tokens = _generate(
+            gguf, system_prompt, user_content, ctx_size
+        )
+
+        transcript_words = len(user_content.split())
+        summary_words = len(summary_text.split())
+        footer = (
+            f"\n\n---\n"
+            f"*Generated by Scarecrow · "
+            f"model: {model_name} · "
+            f"{transcript_words} words transcribed, "
+            f"summarized in {summary_words} words · "
+            f"{total_tokens} tokens used · "
+            f"ctx {ctx_size}*\n"
+        )
+        summary_text += footer
+
+        summary_path = session_dir / "summary.md"
+        summary_path.write_text(summary_text, encoding="utf-8")
+        log.info("Summary written to %s", summary_path)
+        return summary_path
 
     except Exception:
         log.exception("Summarization failed")

@@ -1,5 +1,17 @@
 # History
 
+## 2026-03-29 (code review: simplify infra, in-process LLM, model upgrade)
+
+- **Fix PortAudio segfaults properly:** Added `atexit` handler in `tests/conftest.py` to terminate PortAudio before interpreter teardown. Removed SIGSEGV-as-success hack and per-node behavioral test isolation from the test runner.
+- **Tests off pre-commit:** Moved test suite from pre-commit to pre-push only. Pre-commit now runs lint/format/vulture only (<2s).
+- **In-process LLM summarization:** Replaced llama-server subprocess lifecycle (~150 lines: `LlamaServer`, `_pick_port`, `_find_running_server`, `_call_llm`, httpx dependency) with ~20-line `_generate()` using `llama-cpp-python` in-process. Added `llama-cpp-python>=0.3` to dependencies.
+- **Deleted editable-install workarounds:** Removed `env_health.py`, `repair_venv.py`, `sync_env.py`, `bin/scarecrow` wrapper, `test_env_health.py`, and all UF_HIDDEN references. Setup now uses `uv sync --no-editable`.
+- **VAD benchmark sweep:** `bench_librispeech.py` now accepts `--sweep`, `--sweep-param`, `--sweep-start/stop/step`, `--model`, and per-parameter CLI flags. Prints comparison table with WER, RTF, chunk count, and GPU usage.
+- **Model upgrade to parakeet-tdt-1.1b:** WER drops from 2.7% to 1.6% on LibriSpeech test-clean (best config). RTF still 0.010x, +700 MB GPU (trivial on 128GB).
+- **VAD tuning from benchmarks:** `VAD_MIN_SILENCE_MS` 600→750ms based on sweep data (both models plateau at 750ms).
+- **Shutdown refactor:** `cleanup_after_exit()` rewritten from 80-line nested try/except to 11 named idempotent `_cleanup_*` steps with independent error handling.
+- **Config dataclass:** `config.py` globals replaced with `Config` dataclass. Module-level aliases for backward compatibility. Constructors accept optional `Config` parameter for testability.
+
 ## 2026-03-29 (auto-summarization, /context command, setup script overhaul)
 
 - **Auto-summarization on shutdown:** New `scarecrow/summarizer.py` generates `summary.md` in each session directory using a local LLM (Nemotron-3-Nano 30B via llama-server). Manages server lifecycle automatically — checks for a running server first, starts one if needed, stops it after. Dynamic context sizing (128K floor, 512K cap) with Mamba-2 linear scaling. Structured output: executive summary, key point bullets, task checklist. Footer includes model name, transcript/summary word counts, and token usage for tuning.

@@ -10,6 +10,11 @@ fixed-interval chunking for controlled comparison.
 
 Usage:
     uv run python benchmarks/bench_librispeech.py [--minutes N] [--vad]
+
+VAD parameter tuning:
+    uv run python benchmarks/bench_librispeech.py --vad --min-silence-ms 300
+    uv run python benchmarks/bench_librispeech.py --vad --min-silence-ms 600
+    uv run python benchmarks/bench_librispeech.py --sweep   # compare configurations
 """
 
 from __future__ import annotations
@@ -196,10 +201,10 @@ def summarize_resources(snapshots: list[ResourceSnapshot]) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def make_parakeet():
+def make_parakeet(model_id: str = "mlx-community/parakeet-tdt-1.1b"):
     from parakeet_mlx import from_pretrained
 
-    return from_pretrained("mlx-community/parakeet-tdt-0.6b-v3")
+    return from_pretrained(model_id)
 
 
 def transcribe_parakeet(model, audio: np.ndarray) -> str:
@@ -237,8 +242,31 @@ class BenchmarkResult:
     resources: dict
 
 
-def vad_split(audio: np.ndarray, sample_rate: int = 16000) -> list[np.ndarray]:
+@dataclass
+class VADConfig:
+    """VAD parameters for benchmarking. Defaults match config.py."""
+
+    silence_threshold: float = VAD_SILENCE_THRESHOLD
+    min_silence_ms: int = VAD_MIN_SILENCE_MS
+    max_buffer_seconds: int = VAD_MAX_BUFFER_SECONDS
+
+    @property
+    def label(self) -> str:
+        return (
+            f"thresh={self.silence_threshold} "
+            f"silence={self.min_silence_ms}ms "
+            f"max={self.max_buffer_seconds}s"
+        )
+
+
+def vad_split(
+    audio: np.ndarray,
+    sample_rate: int = 16000,
+    vad: VADConfig | None = None,
+) -> list[np.ndarray]:
     """Split audio at silence boundaries, mimicking recorder VAD logic."""
+    if vad is None:
+        vad = VADConfig()
     block_size = 512  # ~32ms at 16kHz, typical PortAudio callback size
     n_blocks = len(audio) // block_size
 
@@ -250,9 +278,9 @@ def vad_split(audio: np.ndarray, sample_rate: int = 16000) -> list[np.ndarray]:
         energies.append(rms)
 
     min_silence_blocks = max(
-        1, int(VAD_MIN_SILENCE_MS / 1000 * sample_rate / block_size)
+        1, int(vad.min_silence_ms / 1000 * sample_rate / block_size)
     )
-    max_buffer_blocks = int(VAD_MAX_BUFFER_SECONDS * sample_rate / block_size)
+    max_buffer_blocks = int(vad.max_buffer_seconds * sample_rate / block_size)
 
     chunks = []
     chunk_start = 0
@@ -261,10 +289,10 @@ def vad_split(audio: np.ndarray, sample_rate: int = 16000) -> list[np.ndarray]:
         blocks_in_chunk = i - chunk_start + 1
 
         # Check if we have a silence run ending at block i
-        if energies[i] < VAD_SILENCE_THRESHOLD:
+        if energies[i] < vad.silence_threshold:
             silent_run = 0
             for j in range(i, chunk_start - 1, -1):
-                if energies[j] < VAD_SILENCE_THRESHOLD:
+                if energies[j] < vad.silence_threshold:
                     silent_run += 1
                 else:
                     break
@@ -304,17 +332,17 @@ def run_benchmark(
     model,
     chunk_seconds: int,
     *,
-    use_vad: bool = False,
+    vad: VADConfig | None = None,
 ) -> BenchmarkResult:
     """Transcribe audio in chunks, simulating real-time batching."""
     sample_rate = 16000
     total_audio_s = len(audio) / sample_rate
     backend = "parakeet"
 
-    if use_vad:
-        audio_chunks = vad_split(audio, sample_rate)
+    if vad is not None:
+        audio_chunks = vad_split(audio, sample_rate, vad)
         n_chunks = len(audio_chunks)
-        chunk_label = f"{n_chunks} VAD chunks"
+        chunk_label = f"{n_chunks} VAD chunks ({vad.label})"
     else:
         chunk_samples = chunk_seconds * sample_rate
         n_chunks = max(1, len(audio) // chunk_samples)
@@ -422,6 +450,55 @@ def run_benchmark(
 # ---------------------------------------------------------------------------
 
 
+def _sweep_configs(
+    sweep_range: tuple[int, int, int] = (300, 800, 50),
+    sweep_param: str = "silence",
+    threshold: float = VAD_SILENCE_THRESHOLD,
+    silence_ms: int = VAD_MIN_SILENCE_MS,
+    max_buffer: int = VAD_MAX_BUFFER_SECONDS,
+) -> list[VADConfig]:
+    """Generate sweep configs across a single parameter."""
+    start, stop, step = sweep_range
+    configs = []
+    for val in range(start, stop + 1, step):
+        if sweep_param == "silence":
+            configs.append(
+                VADConfig(
+                    silence_threshold=threshold,
+                    min_silence_ms=val,
+                    max_buffer_seconds=max_buffer,
+                )
+            )
+        elif sweep_param == "max-buffer":
+            configs.append(
+                VADConfig(
+                    silence_threshold=threshold,
+                    min_silence_ms=silence_ms,
+                    max_buffer_seconds=val,
+                )
+            )
+    return configs
+
+
+def _print_sweep_table(results: list[tuple[VADConfig, BenchmarkResult]]) -> None:
+    """Print a comparison table from sweep results."""
+    print(f"\n{'=' * 80}")
+    print("  VAD PARAMETER SWEEP RESULTS")
+    print(f"{'=' * 80}")
+    print(f"  {'Config':<45} {'WER':>7} {'RTF':>7} {'Chunks':>7} {'GPU MB':>7}")
+    print(f"  {'-' * 45} {'-' * 7} {'-' * 7} {'-' * 7} {'-' * 7}")
+    for vad_cfg, result in results:
+        gpu = result.resources.get("gpu_peak_mb", 0)
+        n_chunks = len(result.chunk_results)
+        print(
+            f"  {vad_cfg.label:<45} {result.wer:>6.1%} "
+            f"{result.rtf:>7.3f} {n_chunks:>7} {gpu:>7.0f}"
+        )
+    print()
+    best = min(results, key=lambda x: x[1].wer)
+    print(f"  Best WER: {best[1].wer:.1%} — {best[0].label}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Benchmark parakeet-mlx on LibriSpeech"
@@ -443,6 +520,60 @@ def main():
         action="store_true",
         help="Use VAD-based silence chunking instead of fixed intervals",
     )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="mlx-community/parakeet-tdt-1.1b",
+        help="Parakeet model ID (default: 1.1B)",
+    )
+    parser.add_argument(
+        "--silence-threshold",
+        type=float,
+        default=VAD_SILENCE_THRESHOLD,
+        help=f"VAD silence RMS threshold (default: {VAD_SILENCE_THRESHOLD})",
+    )
+    parser.add_argument(
+        "--min-silence-ms",
+        type=int,
+        default=VAD_MIN_SILENCE_MS,
+        help=f"Minimum silence duration in ms (default: {VAD_MIN_SILENCE_MS})",
+    )
+    parser.add_argument(
+        "--max-buffer-seconds",
+        type=int,
+        default=VAD_MAX_BUFFER_SECONDS,
+        help=f"Max buffer before hard drain (default: {VAD_MAX_BUFFER_SECONDS})",
+    )
+    parser.add_argument(
+        "--sweep",
+        action="store_true",
+        help="Run a sweep across min-silence-ms values",
+    )
+    parser.add_argument(
+        "--sweep-start",
+        type=int,
+        default=300,
+        help="Sweep start for min-silence-ms (default: 300)",
+    )
+    parser.add_argument(
+        "--sweep-stop",
+        type=int,
+        default=800,
+        help="Sweep stop for min-silence-ms (default: 800)",
+    )
+    parser.add_argument(
+        "--sweep-step",
+        type=int,
+        default=50,
+        help="Sweep step (default: 50)",
+    )
+    parser.add_argument(
+        "--sweep-param",
+        type=str,
+        default="silence",
+        choices=["silence", "max-buffer"],
+        help="Which parameter to sweep (default: silence)",
+    )
     args = parser.parse_args()
 
     if not LIBRISPEECH_ROOT.exists():
@@ -458,25 +589,36 @@ def main():
         f"Built {actual_s:.0f}s ({actual_s / 60:.1f}m) audio stream from "
         f"LibriSpeech test-clean"
     )
-    if args.vad:
-        chunks_preview = vad_split(audio)
-        print(
-            f"Chunking: VAD (silence threshold={VAD_SILENCE_THRESHOLD}, "
-            f"min silence={VAD_MIN_SILENCE_MS}ms, max={VAD_MAX_BUFFER_SECONDS}s) "
-            f"→ {len(chunks_preview)} chunks"
+
+    print(f"\nLoading model: {args.model}")
+    model = make_parakeet(args.model)
+
+    if args.sweep:
+        configs = _sweep_configs(
+            sweep_range=(args.sweep_start, args.sweep_stop, args.sweep_step),
+            sweep_param=args.sweep_param,
+            threshold=args.silence_threshold,
+            silence_ms=args.min_silence_ms,
+            max_buffer=args.max_buffer_seconds,
         )
+        results = []
+        for cfg in configs:
+            result = run_benchmark(audio, reference, model, args.chunk, vad=cfg)
+            results.append((cfg, result))
+        _print_sweep_table(results)
+    elif args.vad:
+        vad_cfg = VADConfig(
+            silence_threshold=args.silence_threshold,
+            min_silence_ms=args.min_silence_ms,
+            max_buffer_seconds=args.max_buffer_seconds,
+        )
+        chunks_preview = vad_split(audio, vad=vad_cfg)
+        print(f"Chunking: VAD ({vad_cfg.label}) → {len(chunks_preview)} chunks")
+        run_benchmark(audio, reference, model, args.chunk, vad=vad_cfg)
     else:
         print(f"Chunking: fixed {args.chunk}s")
+        run_benchmark(audio, reference, model, args.chunk)
 
-    print("\nLoading parakeet model...")
-    model = make_parakeet()
-    run_benchmark(
-        audio,
-        reference,
-        model,
-        args.chunk,
-        use_vad=args.vad,
-    )
     del model
     gc.collect()
 

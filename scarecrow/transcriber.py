@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from scarecrow.config import Config
 from scarecrow.runtime import ModelManager
 
 log = logging.getLogger(__name__)
@@ -36,9 +37,10 @@ class Transcriber:
         bindings: TranscriberBindings | None = None,
         *,
         model_manager: ModelManager | None = None,
+        cfg: Config | None = None,
     ) -> None:
         self._bindings = bindings or TranscriberBindings()
-        self._model_manager = model_manager or ModelManager()
+        self._model_manager = model_manager or ModelManager(cfg=cfg)
         self._ready = False
         self._consecutive_failures = 0
 

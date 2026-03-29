@@ -1,10 +1,16 @@
 """Session management — timestamped directories and transcript files."""
 
+from __future__ import annotations
+
 import json
 import logging
 import re
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from scarecrow.config import Config
 
 log = logging.getLogger(__name__)
 
@@ -12,9 +18,17 @@ log = logging.getLogger(__name__)
 class Session:
     """Manages a recording session's files."""
 
-    def __init__(self, base_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        base_dir: Path | None = None,
+        *,
+        cfg: Config | None = None,
+    ) -> None:
         if base_dir is None:
-            base_dir = Path("recordings")
+            if cfg is not None:
+                base_dir = cfg.DEFAULT_RECORDINGS_DIR
+            else:
+                base_dir = Path("recordings")
 
         now = datetime.now()
         timestamp = now.strftime("%Y-%m-%d_%H-%M-%S")

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from scarecrow import config
+from scarecrow.config import Config
 
 if TYPE_CHECKING:
     import sounddevice as sd
@@ -30,11 +31,14 @@ class AudioRecorder:
         self,
         output_path: Path,
         sample_rate: int = 16000,
-        channels: int = config.CHANNELS,
+        channels: int | None = None,
+        *,
+        cfg: Config | None = None,
     ) -> None:
+        _cfg = cfg or config.config
         self._output_path = output_path
         self._sample_rate = sample_rate
-        self._channels = channels
+        self._channels = channels if channels is not None else _cfg.CHANNELS
 
         self._stream: sd.InputStream | None = None
         self._sound_file: sf.SoundFile | None = None
@@ -59,9 +63,10 @@ class AudioRecorder:
 
         # Writer thread: pulls audio from queue, writes to SoundFile
         self._write_queue: queue.Queue[tuple[str, np.ndarray] | None] = queue.Queue(
-            maxsize=config.WRITER_QUEUE_SIZE,
+            maxsize=_cfg.WRITER_QUEUE_SIZE,
         )
         self._writer_thread: threading.Thread | None = None
+        self._cfg = _cfg
 
     def _callback(
         self,
@@ -172,7 +177,7 @@ class AudioRecorder:
             mode="w",
             samplerate=self._sample_rate,
             channels=self._channels,
-            subtype=config.SUBTYPE,
+            subtype=self._cfg.SUBTYPE,
         )
 
         # Clear any stale queue items and start the writer thread
@@ -227,9 +232,9 @@ class AudioRecorder:
 
     def drain_to_silence(
         self,
-        silence_threshold: float = config.VAD_SILENCE_THRESHOLD,
-        min_silence_ms: int = config.VAD_MIN_SILENCE_MS,
-        max_buffer_seconds: float = config.VAD_MAX_BUFFER_SECONDS,
+        silence_threshold: float | None = None,
+        min_silence_ms: int | None = None,
+        max_buffer_seconds: float | None = None,
     ) -> np.ndarray | None:
         """Drain audio up to the most recent silence boundary.
 
@@ -240,6 +245,13 @@ class AudioRecorder:
 
         Returns None if the buffer is too short to act on.
         """
+        if silence_threshold is None:
+            silence_threshold = self._cfg.VAD_SILENCE_THRESHOLD
+        if min_silence_ms is None:
+            min_silence_ms = self._cfg.VAD_MIN_SILENCE_MS
+        if max_buffer_seconds is None:
+            max_buffer_seconds = self._cfg.VAD_MAX_BUFFER_SECONDS
+
         with self._buffer_lock:
             if not self._audio_chunks:
                 return None

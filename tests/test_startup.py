@@ -3,12 +3,10 @@
 These tests guard against the classes of failure that have burned us in
 production but slipped past unit tests:
 
-1. ModuleNotFoundError when running the `scarecrow` console script because
-   the editable-install .pth file has the macOS UF_HIDDEN flag set.
-2. 55-second startup delays because HF Hub makes network requests instead of
+1. 55-second startup delays because HF Hub makes network requests instead of
    loading cached models offline.
-3. The console-script entry point (`main`) not being importable at all.
-4. `Transcriber` not being constructable without crashing on import.
+2. The console-script entry point (`main`) not being importable at all.
+3. `Transcriber` not being constructable without crashing on import.
 """
 
 from __future__ import annotations
@@ -18,6 +16,8 @@ import os
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 # ---------------------------------------------------------------------------
 # 1. Package importability
@@ -118,16 +118,8 @@ def test_main_calls_preload_batch_model() -> None:
 
 
 def test_main_module_importable_from_outside_project(tmp_path: Path) -> None:
-    """Importing scarecrow.__main__.main must succeed when cwd is NOT the project root.
-
-    Reproduces the Homebrew-Python / hidden-.pth bug: the editable install
-    path was not on sys.path when launched from an arbitrary directory.
-    """
+    """scarecrow.__main__.main must import when cwd is not the project root."""
     import subprocess
-
-    from scarecrow.env_health import ensure_editable_install_visible
-
-    ensure_editable_install_visible("scarecrow")
 
     result = subprocess.run(
         [sys.executable, "-c", "from scarecrow.__main__ import main; main.__name__"],
@@ -197,9 +189,6 @@ def test_transcriber_prepare_sets_is_ready() -> None:
     t.shutdown(timeout=0)
 
 
-import pytest  # noqa: E402  (after helpers so the flag check above works)
-
-
 def test_main_handles_preload_batch_model_failure() -> None:
     """main() must handle preload_batch_model() failures with a clean exit."""
     from scarecrow import __main__
@@ -238,76 +227,3 @@ def test_transcriber_prepare_with_real_model() -> None:
     # preload_batch_model should not raise when parakeet_mlx is available
     t.preload_batch_model()
     t.shutdown()
-
-
-# ---------------------------------------------------------------------------
-# 5. .pth file not hidden (macOS UF_HIDDEN flag)
-# ---------------------------------------------------------------------------
-
-_UF_HIDDEN = 0x8000  # macOS chflags "hidden" bit
-
-
-def _find_scarecrow_pth() -> Path | None:
-    """Locate _scarecrow.pth in the active site-packages, if present."""
-    import site
-
-    for sp in site.getsitepackages():
-        candidate = Path(sp) / "_scarecrow.pth"
-        if candidate.exists():
-            return candidate
-    # Also check site.getusersitepackages() (editable installs in user env)
-    user_site = Path(site.getusersitepackages())
-    candidate = user_site / "_scarecrow.pth"
-    if candidate.exists():
-        return candidate
-    return None
-
-
-def test_pth_file_exists_in_site_packages() -> None:
-    """_scarecrow.pth must exist in site-packages for the editable install to work.
-
-    If this file is absent the `scarecrow` command will fail with
-    ModuleNotFoundError when run outside the project directory.
-    """
-    pth = _find_scarecrow_pth()
-    assert pth is not None, (
-        "_scarecrow.pth not found in any site-packages directory.  "
-        "Run `uv sync` or `pip install -e .` to create it."
-    )
-
-
-def test_pth_file_not_hidden() -> None:
-    """_scarecrow.pth must be repairable if the macOS UF_HIDDEN flag is set.
-
-    On this macOS environment, the hidden flag is re-applied by the OS
-    on files inside .venv (a dot-prefixed directory).  The test verifies
-    that clear_hidden_flag can repair it and that the import works after.
-    """
-    from scarecrow.env_health import clear_hidden_flag
-
-    pth = _find_scarecrow_pth()
-    if pth is None:
-        pytest.skip("_scarecrow.pth not found — run uv sync first")
-
-    clear_hidden_flag(pth)
-    st_flags = os.stat(pth).st_flags
-    assert (st_flags & _UF_HIDDEN) == 0, (
-        f"{pth} has the macOS UF_HIDDEN flag set (st_flags={st_flags:#x}).  "
-        "Run: chflags nohidden " + str(pth)
-    )
-
-
-def test_pth_file_points_to_project_root() -> None:
-    """_scarecrow.pth must point to a directory that contains the scarecrow package."""
-    pth = _find_scarecrow_pth()
-    if pth is None:
-        pytest.skip("_scarecrow.pth not found — run uv sync first")
-
-    content = pth.read_text(encoding="utf-8").strip()
-    project_path = Path(content)
-    assert project_path.exists(), (
-        f"_scarecrow.pth points to {content!r} which does not exist"
-    )
-    assert (project_path / "scarecrow").is_dir(), (
-        f"_scarecrow.pth points to {content!r} but no scarecrow/ package found there"
-    )

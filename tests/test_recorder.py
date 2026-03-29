@@ -217,8 +217,8 @@ def test_drain_to_silence_drains_at_silence_boundary(
     recorder.start()
 
     # Inject loud chunks followed by silent ones.
-    # VAD_MIN_SILENCE_MS=600ms; at 16000 Hz with 1600-sample chunks (0.1s each),
-    # min_silent_chunks = ceil(600ms / 100ms) = 6.  We need 7 loud + 6 silent
+    # VAD_MIN_SILENCE_MS=750ms; at 16000 Hz with 1600-sample chunks (0.1s each),
+    # min_silent_chunks = ceil(750ms / 100ms) = 8.  We need 7 loud + 8 silent
     # so the silence boundary is found mid-buffer (silence_end > 0).
     loud_chunk = np.full((1600, 1), 16000, dtype="int16")
     silent_chunk = np.zeros((1600, 1), dtype="int16")
@@ -227,7 +227,7 @@ def test_drain_to_silence_drains_at_silence_boundary(
         for _ in range(7):
             recorder._audio_chunks.append(loud_chunk.copy())
             recorder._chunk_energies.append(0.5)  # loud — well above threshold
-        for _ in range(6):
+        for _ in range(8):
             recorder._audio_chunks.append(silent_chunk.copy())
             recorder._chunk_energies.append(0.0)  # silent — below threshold
 

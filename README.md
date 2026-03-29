@@ -8,7 +8,7 @@ Always-recording TUI for transcription and inline notes.
 
 Scarecrow uses parakeet-mlx for accurate batch transcription. You can attach timestamped notes inline by typing prefix commands (`/task`) or plain text. Audio and transcripts are saved per-session.
 
-**Backend:** parakeet-mlx (Parakeet TDT 0.6B v3) on Apple Silicon GPU — VAD-based chunking (drains at speech pauses), ~0.006x RTF, <1W GPU power draw
+**Backend:** parakeet-mlx (Parakeet TDT 1.1B) on Apple Silicon GPU — VAD-based chunking (drains at 750ms speech pauses), ~0.010x RTF
 
 ## Bug Tracking
 
@@ -37,21 +37,6 @@ python3 scripts/setup.py   # checks prereqs, installs deps, shows launch options
 **Which launch method to use:**
 - **iTerm2 users (recommended):** Use the iTerm2 profile — it handles font sizing, auto-close, and calls the venv binary directly.
 - **Everyone else:** Add a shell alias pointing to `.venv/bin/scarecrow` (see Shell alias section below).
-- **Avoid `uv run` in aliases** — it can re-trigger the macOS `UF_HIDDEN` flag on the editable-install `.pth` file.
-
-### Virtualenv health
-
-This project uses an editable install inside `.venv`. On this macOS setup, the editable-install path file can occasionally be recreated with the `UF_HIDDEN` flag during environment rebuilds, which breaks `import scarecrow` outside the project root.
-
-Use these helpers instead of raw ad-hoc repairs:
-
-```bash
-python3 scripts/sync_env.py                 # uv sync + editable-install repair + import validation
-python3 scripts/repair_venv.py              # repair/check existing .venv without syncing
-python3 scripts/sync_env.py --reinstall-package scarecrow
-```
-
-If you still choose to run `uv sync` directly, follow it with `python3 scripts/repair_venv.py`.
 
 ### iTerm2 profile (recommended)
 
@@ -62,7 +47,7 @@ cp examples/scarecrow-iterm-profile.json \
    ~/Library/Application\ Support/iTerm2/DynamicProfiles/scarecrow.json
 ```
 
-Edit the file to update the path to your scarecrow project (replace `$HOME/path/to/scarecrow` with the actual path). The profile calls the venv binary directly instead of `uv run` to avoid the macOS `UF_HIDDEN` flag issue that `uv run` can trigger on the editable-install `.pth` file.
+Edit the file to update the path to your scarecrow project (replace `$HOME/path/to/scarecrow` with the actual path).
 
 Then add this alias to `~/.zshrc`:
 
@@ -80,7 +65,6 @@ If you don't use iTerm2, add to `~/.zshrc` (or `~/.bashrc`):
 alias sc="/path/to/scarecrow/.venv/bin/scarecrow"
 ```
 
-Avoid `uv run` in the alias — it can re-trigger the macOS `UF_HIDDEN` flag on the editable-install `.pth` file, breaking the import. If you must use `uv run`, prefix it with `chflags nohidden /path/to/scarecrow/.venv/lib/python3.12/site-packages/_scarecrow.pth 2>/dev/null;`.
 
 ## Usage
 
@@ -147,7 +131,7 @@ When a session ends, Scarecrow generates `summary.md` in the session directory u
 
 `/context` entries provide background information (names, spelling, domain terms) that improves summary quality without appearing in the output.
 
-Summarization requires a Nemotron GGUF model in the HuggingFace cache. Scarecrow starts and stops llama-server automatically, or reuses an existing one if already running.
+Summarization requires a Nemotron GGUF model in the HuggingFace cache and `llama-cpp-python` (installed automatically). The model is loaded in-process — no server needed.
 
 If summarization fails, `summary.md` contains error details and a retry command:
 ```bash
@@ -164,7 +148,7 @@ The parakeet model is preloaded during the prepare phase before the TUI launches
 
 ### Architecture
 
-Scarecrow uses parakeet-mlx as its sole transcription engine. A 16kHz audio stream is buffered and fed to the model using VAD-based chunking — audio drains at natural speech pauses (600ms+ silence) with a 30-second hard max for continuous speech, polled every 150ms. No subprocesses — everything runs in a single process.
+Scarecrow uses parakeet-mlx as its sole transcription engine. A 16kHz audio stream is buffered and fed to the model using VAD-based chunking — audio drains at natural speech pauses (750ms+ silence) with a 30-second hard max for continuous speech, polled every 150ms. Audio capture, transcription, and the TUI all run in a single process.
 
 Inline notes are typed in the notes pane and submitted with Enter. The tag is determined by an optional prefix at the start of the text: `/task` or `/t` for `[TASK]`, or no prefix for `[NOTE]`. Each note is written to the transcript pane and the transcript file with a wall-clock timestamp and tag prefix. Notes work in any app state (recording, paused, or idle).
 
@@ -205,13 +189,13 @@ Audio is recorded and kept as WAV (raw PCM in the audio callback, zero CPU overh
 ## Development
 
 ```bash
-python3 scripts/sync_env.py          # install deps + repair editable install
-bash scripts/run_test_suite.sh       # run tests (isolated stable groups, including setup regressions)
+uv sync --no-editable                # install deps
+bash scripts/run_test_suite.sh       # run tests
 uv run ruff check scarecrow/ tests/  # lint
 uv run vulture scarecrow/ vulture_whitelist.py  # dead code check
 ```
 
-**Do not run `pytest` directly** — always use `bash scripts/run_test_suite.sh`. The Textual async tests trigger a native segfault during interpreter teardown when run in a single pytest process. The suite runner isolates each test file (and each behavioral test node) in its own subprocess to avoid this.
+**Do not run `pytest` directly** — always use `bash scripts/run_test_suite.sh`. The suite runner isolates each test file in its own subprocess to handle PortAudio teardown cleanly.
 
 Pre-commit hooks run ruff (lint + format) and vulture automatically.
 
@@ -230,8 +214,8 @@ The hooks enforce these repo rules:
 - fail the commit if `README.md`, `HISTORY.md`, or `BUGS.md` is missing
 - fail the commit if staged code changes do not include an update to `HISTORY.md`
 - fail the commit if `BUGS.md` contains a squashed bug without a regression test reference
-- run `ruff`, `pytest`, and `vulture` on pre-commit
-- run the full `pytest` suite again on pre-push
+- run `ruff` and `vulture` on pre-commit
+- run the full test suite on pre-push
 
 ## Troubleshooting
 
@@ -248,15 +232,6 @@ If the mic fails to open, grant Terminal or iTerm2 microphone access:
 
 **System Settings > Privacy & Security > Microphone** — enable the terminal app you use.
 
-### Virtualenv repair
-
-If `import scarecrow` fails after running `uv sync` directly (e.g., the editable-install `.pth` file gets the `UF_HIDDEN` flag set):
-
-```bash
-python3 scripts/sync_env.py      # uv sync + repair + import validation
-python3 scripts/repair_venv.py   # repair/check only, no sync
-```
-
 ### Debug logs
 
 Detailed error output is written to `~/.cache/scarecrow/debug.log`. Check this file if Scarecrow exits unexpectedly or transcription stops producing output.
@@ -268,28 +243,22 @@ scarecrow/
   __main__.py        # entry point, model preloading, startup output
   app.py             # Textual TUI, batch transcription scheduling, notes pane
   config.py          # audio settings, parakeet model config, defaults
-  env_health.py      # editable-install .pth repair (macOS UF_HIDDEN)
   recorder.py        # sounddevice audio capture + WAV writing
   runtime.py         # HF offline bootstrap, parakeet model manager
   session.py         # timestamped session dirs + transcript files
-  summarizer.py      # LLM summarization via local llama-server
+  summarizer.py      # LLM summarization via llama-cpp-python (in-process)
   transcriber.py     # VAD-based parakeet-mlx batch transcription
   app.tcss           # TUI stylesheet
 assets/
   scarecrow-icon.svg # app icon
-bin/
-  scarecrow          # wrapper script (sets PYTHONPATH, bypasses UF_HIDDEN)
 scripts/
   setup.py           # bootstrap: checks prereqs, installs deps, shows config + launch options
   resummarize.py     # re-run summarization on an existing session
-  sync_env.py        # uv sync + editable-install repair
-  repair_venv.py     # standalone .pth repair/validation
 examples/
   scarecrow-iterm-profile.json  # iTerm2 dynamic profile template
 tests/
   test_app.py            # TUI integration tests
   test_behavioral.py     # behavioral contract tests
-  test_env_health.py     # editable-install repair tests
   test_integration.py    # real-model pipeline tests
   test_recorder.py       # audio recorder unit tests
   test_regressions.py    # regression tests for fixed bugs
@@ -297,6 +266,6 @@ tests/
   test_session.py        # session/file management tests
   test_setup.py          # setup script tests
   test_summarizer.py     # summarizer unit tests
-  test_startup.py        # startup smoke tests (imports, .pth, HF offline, model load)
+  test_startup.py        # startup smoke tests (imports, HF offline, model load)
   test_transcriber.py    # batch transcription tests
 ```

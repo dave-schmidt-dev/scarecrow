@@ -27,6 +27,7 @@ from textual.reactive import reactive
 from textual.widgets import Footer, Input, RichLog, Static
 
 from scarecrow import config
+from scarecrow.config import Config
 from scarecrow.recorder import AudioRecorder
 from scarecrow.session import Session
 from scarecrow.transcriber import TranscriberBindings
@@ -151,8 +152,11 @@ class ScarecrowApp(App[None]):
     def __init__(
         self,
         transcriber: Transcriber | None = None,
+        *,
+        cfg: Config | None = None,
     ) -> None:
         super().__init__()
+        self._cfg = cfg or config.config
         self._session: Session | None = None
         self._audio_recorder: AudioRecorder | None = None
         self._transcriber: Transcriber | None = transcriber
@@ -171,14 +175,14 @@ class ScarecrowApp(App[None]):
         self._disk_warn_shown: bool = False
         self._session_disk_warn_shown: bool = False
         self._circuit_breaker_shown: bool = False
-        self._last_divider_elapsed: int = -config.DIVIDER_INTERVAL
+        self._last_divider_elapsed: int = -self._cfg.DIVIDER_INTERVAL
         # Paragraph accumulator: join consecutive batch results on one block
         self._current_paragraph: str = ""
         self._paragraph_line_count: int = 0
 
     def compose(self) -> ComposeResult:
         yield InfoBar(id="info-bar")
-        model_label = config.PARAKEET_MODEL.split("/")[-1]
+        model_label = self._cfg.PARAKEET_MODEL.split("/")[-1]
         interval_label = "VAD"
         yield Static(
             f"Transcript  [dim]({model_label} · {interval_label})[/dim]",
@@ -527,7 +531,8 @@ class ScarecrowApp(App[None]):
         include_ui: bool = True,
     ) -> None:
         elapsed = batch_elapsed if batch_elapsed is not None else self._elapsed
-        show_divider = (elapsed - self._last_divider_elapsed) >= config.DIVIDER_INTERVAL
+        divider_gap = elapsed - self._last_divider_elapsed
+        show_divider = divider_gap >= self._cfg.DIVIDER_INTERVAL
         divider = None
         if show_divider and self._session is not None:
             divider = self._transcript_divider(elapsed, self._session.transcript_path)
@@ -686,7 +691,7 @@ class ScarecrowApp(App[None]):
         self._bind_callbacks()
         self._ignore_batch_results = False
         try:
-            self._session = Session(base_dir=config.DEFAULT_RECORDINGS_DIR)
+            self._session = Session(base_dir=self._cfg.DEFAULT_RECORDINGS_DIR)
         except Exception as exc:
             log.exception("Failed to create recording session directory")
             self._show_error(f"Could not create session: {exc}")
@@ -694,7 +699,8 @@ class ScarecrowApp(App[None]):
 
         self._audio_recorder = AudioRecorder(
             output_path=self._session.audio_path,
-            sample_rate=config.SAMPLE_RATE,
+            sample_rate=self._cfg.SAMPLE_RATE,
+            cfg=self._cfg,
         )
 
         try:
@@ -715,7 +721,7 @@ class ScarecrowApp(App[None]):
             return
 
         self._batch_timer = self.set_interval(
-            config.VAD_POLL_INTERVAL_MS / 1000,
+            self._cfg.VAD_POLL_INTERVAL_MS / 1000,
             self._on_vad_poll,
         )
         self._recording_start_time = time.monotonic()
@@ -798,7 +804,7 @@ class ScarecrowApp(App[None]):
                     }
                 )
             self._batch_countdown = BATCH_INTERVAL_SECONDS
-            self._last_divider_elapsed = -config.DIVIDER_INTERVAL
+            self._last_divider_elapsed = -self._cfg.DIVIDER_INTERVAL
             self._set_status("")
             self._sync_info_bar()
 
@@ -860,108 +866,149 @@ class ScarecrowApp(App[None]):
             if not needs_cleanup:
                 return
 
-            if hasattr(self, "_tick_timer"):
-                self._tick_timer.pause()
-            if hasattr(self, "_batch_timer"):
-                self._batch_timer.pause()
-
-            if self._audio_recorder is not None:
-                try:
-                    self._audio_recorder.stop()
-                except Exception as exc:
-                    log.exception("Failed to stop audio recorder")
-                    if include_ui:
-                        self._show_error(f"Could not stop audio recorder: {exc}")
-
-            try:
-                self._ignore_batch_results = True
-                batch_workers_finished, captured = self._wait_for_batch_workers()
-                for text in captured:
-                    self._record_transcript(text, include_ui=include_ui)
-                if batch_workers_finished:
-                    self._flush_final_batch(include_ui=include_ui)
-                else:
-                    log.warning(
-                        "Skipping final batch flush because a batch worker "
-                        "is still running after shutdown timeout"
-                    )
-                    if include_ui:
-                        self._show_error(
-                            "Batch worker timed out during shutdown; "
-                            "skipping final transcript flush."
-                        )
-            except BaseException as exc:
-                if isinstance(exc, KeyboardInterrupt):
-                    log.warning(
-                        "KeyboardInterrupt during batch flush; continuing cleanup"
-                    )
-                else:
-                    log.exception(
-                        "Failed while flushing batch transcription during shutdown"
-                    )
-                if include_ui and isinstance(exc, Exception):
-                    self._show_error(f"Could not flush final transcript batch: {exc}")
-            finally:
-                self._audio_recorder = None
-
-            if self._batch_executor is not None:
-                self._batch_executor.shutdown(wait=False, cancel_futures=False)
-                self._batch_executor = None
-
-            if self._transcriber is not None and self._transcriber.is_ready:
-                try:
-                    self._transcriber.shutdown(timeout=5)
-                except Exception as exc:
-                    log.exception("Failed to shut down transcriber")
-                    if include_ui:
-                        self._show_error(f"Could not shut down transcriber: {exc}")
-
+            # Capture session_dir before any step can clear _session.
             session_dir = self._session.session_dir if self._session else None
 
-            if self._session is not None:
+            steps = [
+                ("pause_timers", self._cleanup_pause_timers),
+                ("stop_recorder", lambda: self._cleanup_stop_recorder(include_ui)),
+                ("flush_audio", lambda: self._cleanup_flush_audio(include_ui)),
+                ("clear_recorder", self._cleanup_clear_recorder),
+                ("shutdown_executor", self._cleanup_shutdown_executor),
+                (
+                    "shutdown_transcriber",
+                    lambda: self._cleanup_shutdown_transcriber(include_ui),
+                ),
+                ("session_metrics", self._cleanup_session_metrics),
+                ("session_end_header", self._cleanup_session_end_header),
+                (
+                    "session_finalize",
+                    lambda: self._cleanup_session_finalize(include_ui),
+                ),
+                ("auto_summarize", lambda: self._cleanup_auto_summarize(session_dir)),
+                ("reset_state", self._cleanup_reset_state),
+            ]
+            for name, step in steps:
                 try:
-                    self._session.append_event(
-                        {
-                            "type": "session_metrics",
-                            "elapsed": self._elapsed,
-                            "timestamp": datetime.now().isoformat(timespec="seconds"),
-                            "word_count": self._word_count,
-                        }
+                    step()
+                except Exception:
+                    log.exception("Cleanup step %s failed", name)
+
+    def _cleanup_pause_timers(self) -> None:
+        if hasattr(self, "_tick_timer"):
+            self._tick_timer.pause()
+        if hasattr(self, "_batch_timer"):
+            self._batch_timer.pause()
+
+    def _cleanup_stop_recorder(self, include_ui: bool) -> None:
+        if self._audio_recorder is None:
+            return
+        try:
+            self._audio_recorder.stop()
+        except Exception as exc:
+            log.exception("Failed to stop audio recorder")
+            if include_ui:
+                self._show_error(f"Could not stop audio recorder: {exc}")
+
+    def _cleanup_flush_audio(self, include_ui: bool) -> None:
+        """Wait for in-flight batch workers and flush the final audio buffer.
+
+        Catches BaseException so that KeyboardInterrupt during flush does not
+        abort the remaining cleanup steps — the finally clause in the caller's
+        loop still clears _audio_recorder via _cleanup_clear_recorder.
+        """
+        try:
+            self._ignore_batch_results = True
+            batch_workers_finished, captured = self._wait_for_batch_workers()
+            for text in captured:
+                self._record_transcript(text, include_ui=include_ui)
+            if batch_workers_finished:
+                self._flush_final_batch(include_ui=include_ui)
+            else:
+                log.warning(
+                    "Skipping final batch flush because a batch worker "
+                    "is still running after shutdown timeout"
+                )
+                if include_ui:
+                    self._show_error(
+                        "Batch worker timed out during shutdown; "
+                        "skipping final transcript flush."
                     )
-                except Exception:
-                    log.exception("Failed to write session metrics")
-                try:
-                    self._session.write_end_header()
-                except Exception:
-                    log.exception("Failed to write session end header")
-                # FLAC compression disabled — keeping WAV for audio quality audit.
-                # Re-enable by restoring the compress_audio() call here.
-                try:
-                    self._session.finalize()
-                except Exception as exc:
-                    log.exception("Failed to finalize session")
-                    if include_ui:
-                        self._show_error(f"Could not finalize session: {exc}")
-                finally:
-                    self._session = None
+        except BaseException as exc:
+            if isinstance(exc, KeyboardInterrupt):
+                log.warning("KeyboardInterrupt during batch flush; continuing cleanup")
+            else:
+                log.exception(
+                    "Failed while flushing batch transcription during shutdown"
+                )
+            if include_ui and isinstance(exc, Exception):
+                self._show_error(f"Could not flush final transcript batch: {exc}")
 
-                # Auto-summarize (non-fatal)
-                if session_dir is not None:
-                    try:
-                        print("  Generating summary…", flush=True)
-                        from scarecrow.summarizer import summarize_session
+    def _cleanup_clear_recorder(self) -> None:
+        self._audio_recorder = None
 
-                        result = summarize_session(session_dir)
-                        if result:
-                            log.info("Summary: %s", result)
-                            self._summary_path = result
-                    except Exception:
-                        log.exception("Auto-summarization failed (non-fatal)")
+    def _cleanup_shutdown_executor(self) -> None:
+        if self._batch_executor is not None:
+            self._batch_executor.shutdown(wait=False, cancel_futures=False)
+            self._batch_executor = None
 
-            try:
-                self.state = AppState.IDLE
-            except Exception:
-                self._reactive_state = AppState.IDLE
+    def _cleanup_shutdown_transcriber(self, include_ui: bool) -> None:
+        if self._transcriber is None or not self._transcriber.is_ready:
+            return
+        try:
+            self._transcriber.shutdown(timeout=5)
+        except Exception as exc:
+            log.exception("Failed to shut down transcriber")
+            if include_ui:
+                self._show_error(f"Could not shut down transcriber: {exc}")
+
+    def _cleanup_session_metrics(self) -> None:
+        if self._session is None:
+            return
+        self._session.append_event(
+            {
+                "type": "session_metrics",
+                "elapsed": self._elapsed,
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "word_count": self._word_count,
+            }
+        )
+
+    def _cleanup_session_end_header(self) -> None:
+        if self._session is None:
+            return
+        self._session.write_end_header()
+
+    def _cleanup_session_finalize(self, include_ui: bool) -> None:
+        if self._session is None:
+            return
+        # FLAC compression disabled — keeping WAV for audio quality audit.
+        # Re-enable by restoring the compress_audio() call here.
+        try:
+            self._session.finalize()
+        except Exception as exc:
+            log.exception("Failed to finalize session")
+            if include_ui:
+                self._show_error(f"Could not finalize session: {exc}")
+        finally:
+            self._session = None
+
+    def _cleanup_auto_summarize(self, session_dir) -> None:
+        if session_dir is None:
+            return
+        print("  Generating summary…", flush=True)
+        from scarecrow.summarizer import summarize_session
+
+        result = summarize_session(session_dir)
+        if result:
+            log.info("Summary: %s", result)
+            self._summary_path = result
+
+    def _cleanup_reset_state(self) -> None:
+        try:
+            self.state = AppState.IDLE
+        except Exception:
+            self._reactive_state = AppState.IDLE
 
     _MAX_CONSECUTIVE_FAILURES: ClassVar[int] = 3
 

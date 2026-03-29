@@ -9,6 +9,7 @@ dependencies = [
     "sounddevice",
     "soundfile",
     "numpy",
+    "llama-cpp-python>=0.3",
 ]
 
 [project.scripts]

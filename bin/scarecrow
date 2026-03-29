@@ -1,6 +1,0 @@
-#!/bin/bash
-# Wrapper that ensures the project root is on PYTHONPATH regardless of
-# macOS UF_HIDDEN flag state on the editable-install .pth file.
-SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-export PYTHONPATH="${SCRIPT_DIR}:${PYTHONPATH:-}"
-exec "${SCRIPT_DIR}/.venv/bin/python" -m scarecrow "$@"
