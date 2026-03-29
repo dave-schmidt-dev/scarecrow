@@ -4,11 +4,26 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 from pathlib import Path
 
 from scarecrow import config
 
 log = logging.getLogger(__name__)
+
+
+def _sync_to_obsidian(
+    summary_path: Path, session_name: str, vault: Path | None
+) -> None:
+    """Copy summary to Obsidian vault if configured."""
+    if vault is None or not vault.is_dir():
+        return
+    dest = vault / f"{session_name}.md"
+    try:
+        shutil.copy2(summary_path, dest)
+        log.info("Summary synced to Obsidian: %s", dest)
+    except OSError:
+        log.warning("Failed to sync summary to Obsidian", exc_info=True)
 
 
 def _discover_gguf() -> Path | None:
@@ -79,39 +94,25 @@ _IGNORED_EVENT_TYPES = frozenset(
 )
 
 _SYSTEM_PROMPT_BASE = (
-    "You are a meeting/recording summarizer. "
-    "You will receive a transcript with interleaved notes.\n\n"
-    "Output format (use this exact structure):\n\n"
-    "1. **Executive Summary** — 1-3 short paragraphs giving a high-level "
-    "overview of what was discussed, decided, or accomplished.\n\n"
-    "2. **Key Points** — a bulleted list of the most important points, "
-    "decisions, and highlights ONLY. Consolidate related ideas into single "
-    "bullets. Do NOT go line-by-line through the transcript — extract and "
-    "synthesize the key themes. For a short recording (under 1000 words), "
-    "3-5 bullets is usually enough. Scale up proportionally for longer "
-    "recordings.\n\n"
-    "3. **Tasks** — if any [TASK] entries exist, list ALL of them at the "
-    "bottom under a `## Tasks` heading as a Markdown checklist: "
-    "`- [ ] task text`. If there are no tasks, omit this section.\n\n"
-    "CRITICAL RULES:\n"
-    "- ONLY include information that is explicitly stated in the transcript. "
-    "Do not infer, guess, embellish, add logical conclusions, or fill in "
-    "gaps. If the transcript is unclear or incomplete, summarize what was "
-    "actually said, not what was probably meant.\n"
-    "- You MAY correct obvious transcription typos, especially for proper "
-    "nouns that were garbled by speech-to-text (use context clues and any "
-    "[CONTEXT] entries to get names and terms right). But do NOT add any "
-    "information, characterizations, or conclusions beyond what was said.\n"
-    "- [NOTE] entries are the user's own observations made during recording. "
-    "Weave them naturally into the executive summary or key points wherever "
-    "they are relevant — do NOT create a separate notes section. Treat them "
-    "as first-person insights that enrich the surrounding discussion.\n"
-    "- [CONTEXT] entries are background information (spelling hints, "
-    "participant names, domain terms). Use them ONLY to improve spelling "
-    "and naming accuracy. Do NOT surface context as standalone items, do "
-    "NOT mention that context was provided, and do NOT add any information "
-    "from context that the speakers did not actually discuss.\n"
-    "- Use ## for section headings. Keep the summary concise."
+    "Summarize the transcript below. Use ONLY information explicitly stated "
+    "in the transcript. Fix obvious speech-to-text typos for names and terms.\n\n"
+    "Use this exact output structure:\n\n"
+    "## Summary\n"
+    "1-3 short paragraphs: what was discussed, decided, or accomplished.\n\n"
+    "## Key Points\n"
+    "- Bulleted list of important points, decisions, and highlights.\n"
+    "- Synthesize related ideas into single bullets.\n"
+    "- Short recordings: 3-5 bullets. Scale up for longer ones.\n\n"
+    "## Action Items\n"
+    "- [ ] Each action item as a Markdown checkbox.\n"
+    "Include every [TASK] entry verbatim, plus any commitments or follow-ups "
+    'from the conversation (e.g. "I\'ll send that over", "we need to update '
+    'the docs"). Omit this section if there are none.\n\n'
+    "Tag handling:\n"
+    "- [NOTE]: User observations. Weave into Summary or Key Points naturally.\n"
+    "- [TASK]: Copy verbatim into Action Items.\n"
+    "- [CONTEXT]: Spelling hints and background. Use to fix names and terms "
+    "only. Never surface as standalone content."
 )
 
 
@@ -226,7 +227,9 @@ def _write_error_summary(session_dir: Path, error_msg: str) -> Path:
     return summary_path
 
 
-def summarize_session(session_dir: Path) -> Path | None:
+def summarize_session(
+    session_dir: Path, *, obsidian_dir: Path | None = None
+) -> Path | None:
     """Generate summary.md for a completed session.
 
     Reads transcript.jsonl from session_dir, builds a prompt from the events,
@@ -283,6 +286,10 @@ def summarize_session(session_dir: Path) -> Path | None:
         summary_path = session_dir / "summary.md"
         summary_path.write_text(summary_text, encoding="utf-8")
         log.info("Summary written to %s", summary_path)
+
+        vault = obsidian_dir
+        _sync_to_obsidian(summary_path, session_dir.name, vault)
+
         return summary_path
 
     except Exception:

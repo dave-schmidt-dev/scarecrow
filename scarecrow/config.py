@@ -50,6 +50,18 @@ class Config:
         default_factory=lambda: Path.home() / "recordings"
     )
 
+    # Obsidian sync — copy summaries to vault
+    OBSIDIAN_VAULT_DIR: Path | None = field(
+        default_factory=lambda: (
+            Path.home()
+            / "Library"
+            / "Mobile Documents"
+            / "iCloud~md~obsidian"
+            / "Documents"
+            / "Transcriptions Summaries"
+        )
+    )
+
     # Summarizer (local LLM via llama-cpp-python, in-process)
     SUMMARIZER_MODEL_PATTERN: str = "*Nemotron*Nano*GGUF"
     SUMMARIZER_OUTPUT_BUDGET: int = 4096  # max tokens for summary output
@@ -82,3 +94,4 @@ SUMMARIZER_MODEL_PATTERN = config.SUMMARIZER_MODEL_PATTERN
 SUMMARIZER_OUTPUT_BUDGET = config.SUMMARIZER_OUTPUT_BUDGET
 SUMMARIZER_MIN_CTX = config.SUMMARIZER_MIN_CTX
 SUMMARIZER_CHARS_PER_TOKEN = config.SUMMARIZER_CHARS_PER_TOKEN
+OBSIDIAN_VAULT_DIR = config.OBSIDIAN_VAULT_DIR

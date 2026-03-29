@@ -667,7 +667,10 @@ async def test_flush_final_batch_writes_to_transcript_file(tmp_path: Path) -> No
     transcriber = _mock_transcriber()
     transcriber.transcribe_batch.return_value = "final transcribed text"
 
-    async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
+    from scarecrow.config import Config
+
+    cfg = Config(DEFAULT_RECORDINGS_DIR=tmp_path, OBSIDIAN_VAULT_DIR=None)
+    async with ScarecrowApp(transcriber=transcriber, cfg=cfg).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
         await pilot.pause(delay=0.2)
         app._session = real_session
@@ -699,7 +702,10 @@ async def test_flush_final_batch_disables_async_callback_path(tmp_path: Path) ->
 
     transcriber.transcribe_batch.side_effect = fake_batch
 
-    async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
+    from scarecrow.config import Config
+
+    cfg = Config(DEFAULT_RECORDINGS_DIR=tmp_path, OBSIDIAN_VAULT_DIR=None)
+    async with ScarecrowApp(transcriber=transcriber, cfg=cfg).run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
         await pilot.pause(delay=0.2)
         app._session = real_session
@@ -729,7 +735,10 @@ def test_ctrl_c_cleanup_after_exit_flushes_and_finalizes(tmp_path: Path) -> None
     mock_transcriber = _mock_transcriber()
     mock_transcriber.transcribe_batch.return_value = "ctrl c text"
 
-    app = ScarecrowApp(transcriber=mock_transcriber)
+    from scarecrow.config import Config
+
+    cfg = Config(DEFAULT_RECORDINGS_DIR=tmp_path, OBSIDIAN_VAULT_DIR=None)
+    app = ScarecrowApp(transcriber=mock_transcriber, cfg=cfg)
     app._audio_recorder = mock_recorder
     app._session = real_session
     app._reactive_state = AppState.RECORDING
@@ -855,7 +864,10 @@ def test_wait_for_batch_workers_captures_completed_text(tmp_path: Path) -> None:
 
     transcriber.transcribe_batch.side_effect = slow_batch
 
-    app = ScarecrowApp(transcriber=transcriber)
+    from scarecrow.config import Config
+
+    cfg = Config(DEFAULT_RECORDINGS_DIR=tmp_path, OBSIDIAN_VAULT_DIR=None)
+    app = ScarecrowApp(transcriber=transcriber, cfg=cfg)
     app._audio_recorder = mock_recorder
     app._session = real_session
     app._reactive_state = AppState.RECORDING

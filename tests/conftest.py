@@ -9,6 +9,9 @@ teardown, eliminating the race.
 from __future__ import annotations
 
 import atexit
+from unittest.mock import patch
+
+import pytest
 
 
 def _terminate_portaudio() -> None:
@@ -22,3 +25,16 @@ def _terminate_portaudio() -> None:
 
 
 atexit.register(_terminate_portaudio)
+
+
+@pytest.fixture(autouse=True)
+def _no_summarizer():
+    """Prevent the real summarization engine from running during tests.
+
+    Patches at the source module so the cleanup flow in app.py is still
+    exercised — only the heavy GGUF model loading is skipped.  Summarizer
+    unit tests are unaffected because they import the function at module
+    level before this fixture activates.
+    """
+    with patch("scarecrow.summarizer.summarize_session", return_value=None):
+        yield

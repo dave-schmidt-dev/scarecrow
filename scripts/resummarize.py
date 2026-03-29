@@ -35,10 +35,11 @@ def main() -> int:
         print(f"No transcript.jsonl in {session_dir}", file=sys.stderr)
         return 1
 
+    from scarecrow.config import OBSIDIAN_VAULT_DIR
     from scarecrow.summarizer import summarize_session
 
     print(f"Summarizing {session_dir}...")
-    result = summarize_session(session_dir)
+    result = summarize_session(session_dir, obsidian_dir=OBSIDIAN_VAULT_DIR)
     if result:
         print(f"Summary written to {result}")
         return 0

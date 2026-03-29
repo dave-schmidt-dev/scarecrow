@@ -1031,7 +1031,9 @@ class ScarecrowApp(App[None]):
         print("  Generating summary…", flush=True)
         from scarecrow.summarizer import summarize_session
 
-        result = summarize_session(session_dir)
+        result = summarize_session(
+            session_dir, obsidian_dir=self._cfg.OBSIDIAN_VAULT_DIR
+        )
         if result:
             log.info("Summary: %s", result)
             self._summary_path = result
