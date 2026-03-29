@@ -699,7 +699,7 @@ class ScarecrowApp(App[None]):
 
         self._audio_recorder = AudioRecorder(
             output_path=self._session.audio_path,
-            sample_rate=self._cfg.SAMPLE_RATE,
+            sample_rate=self._cfg.RECORDING_SAMPLE_RATE,
             cfg=self._cfg,
         )
 
@@ -881,6 +881,7 @@ class ScarecrowApp(App[None]):
                 ),
                 ("session_metrics", self._cleanup_session_metrics),
                 ("session_end_header", self._cleanup_session_end_header),
+                ("compress_audio", self._cleanup_compress_audio),
                 (
                     "session_finalize",
                     lambda: self._cleanup_session_finalize(include_ui),
@@ -979,11 +980,13 @@ class ScarecrowApp(App[None]):
             return
         self._session.write_end_header()
 
+    def _cleanup_compress_audio(self) -> None:
+        if self._session is not None:
+            self._session.compress_audio()
+
     def _cleanup_session_finalize(self, include_ui: bool) -> None:
         if self._session is None:
             return
-        # FLAC compression disabled — keeping WAV for audio quality audit.
-        # Re-enable by restoring the compress_audio() call here.
         try:
             self._session.finalize()
         except Exception as exc:

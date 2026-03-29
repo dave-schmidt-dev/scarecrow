@@ -19,6 +19,12 @@
 - Context window: 128K floor, 512K cap — no memory cost on short sessions (Mamba-2 linear scaling). Monitor token usage in summary footers to tune.
 - Future: configurable model selection, streaming progress output
 
+## Live captions (speculative)
+- Short-buffer preview via Parakeet, replaced by VAD-final text
+- Parakeet at 0.010x RTF makes less than 1s preview latency feasible
+- Speculative text visually distinct from committed transcript
+- No Apple Speech dependency — pure Parakeet path
+
 ## Obsidian sync
 - Push transcripts and summaries to an Obsidian vault
 

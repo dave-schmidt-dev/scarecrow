@@ -213,7 +213,10 @@ def test_drain_to_silence_drains_at_silence_boundary(
     output_path: Path, mock_sd, mock_sf
 ) -> None:
     """drain_to_silence must return audio up to the silence boundary."""
-    recorder = AudioRecorder(output_path)
+    from scarecrow.config import Config
+
+    cfg = Config(SAMPLE_RATE=16000, RECORDING_SAMPLE_RATE=16000)
+    recorder = AudioRecorder(output_path, sample_rate=16000, cfg=cfg)
     recorder.start()
 
     # Inject loud chunks followed by silent ones.
@@ -243,7 +246,10 @@ def test_buffer_seconds_reflects_buffered_audio(
     output_path: Path, mock_sd, mock_sf
 ) -> None:
     """buffer_seconds must return the correct duration based on buffered audio."""
-    recorder = AudioRecorder(output_path)
+    from scarecrow.config import Config
+
+    cfg = Config(SAMPLE_RATE=16000, RECORDING_SAMPLE_RATE=16000)
+    recorder = AudioRecorder(output_path, sample_rate=16000, cfg=cfg)
     recorder.start()
 
     # Inject 1600 samples at 16000 Hz = 0.1 seconds
@@ -265,7 +271,10 @@ def test_drain_to_silence_uses_ceil_for_silence_chunks(
     non-even chunk sizes. With 1700-sample chunks at 16kHz, 600ms silence
     requires ceil(9600/1700)=6 chunks, not floor(9600/1700)=5.
     """
-    recorder = AudioRecorder(output_path)
+    from scarecrow.config import Config
+
+    cfg = Config(SAMPLE_RATE=16000, RECORDING_SAMPLE_RATE=16000)
+    recorder = AudioRecorder(output_path, sample_rate=16000, cfg=cfg)
     recorder.start()
 
     # Use 1700-sample chunks (non-even division with 600ms silence at 16kHz)

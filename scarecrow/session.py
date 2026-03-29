@@ -125,7 +125,7 @@ class Session:
         Returns FLAC path or None on failure.
 
         Note: reads the entire WAV into memory for compression. For a 2-hour
-        session at 16kHz mono, this is ~230 MB. Acceptable on current hardware
+        session at 48kHz mono, this is ~690 MB. Acceptable on current hardware
         but could be switched to streaming compression if needed.
         """
         import soundfile as sf

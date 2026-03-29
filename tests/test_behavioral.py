@@ -1877,12 +1877,14 @@ def test_all_silent_buffer_does_not_accumulate(tmp_path: Path) -> None:
     """
     from unittest.mock import MagicMock, patch
 
+    from scarecrow.config import Config
     from scarecrow.recorder import AudioRecorder
 
+    cfg = Config(SAMPLE_RATE=16000, RECORDING_SAMPLE_RATE=16000)
     with patch.dict(
         "sys.modules", {"sounddevice": MagicMock(), "soundfile": MagicMock()}
     ):
-        recorder = AudioRecorder(tmp_path / "audio.wav")
+        recorder = AudioRecorder(tmp_path / "audio.wav", sample_rate=16000, cfg=cfg)
 
     # Inject all-silent chunks (> 0.75s so the VAD_MIN_SILENCE_MS guard passes)
     # At 16kHz with 1600-sample chunks, 8 chunks = 0.8s

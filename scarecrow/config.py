@@ -17,6 +17,7 @@ class Config:
 
     # Audio settings
     SAMPLE_RATE: int = 16000  # 16kHz — required by parakeet-mlx
+    RECORDING_SAMPLE_RATE: int = 48000  # 48kHz recording; downsampled to 16kHz for STT
     CHANNELS: int = 1
     SUBTYPE: str = "PCM_16"
 
@@ -38,8 +39,8 @@ class Config:
     VAD_POLL_INTERVAL_MS: int = 150  # how often to check for silence
 
     # Writer thread queue size (bounded to prevent unbounded memory growth)
-    # ~12.5 seconds of audio at 16kHz with 1024-sample blocks
-    WRITER_QUEUE_SIZE: int = 200
+    # ~12.5 seconds of audio at 48kHz with 1024-sample blocks
+    WRITER_QUEUE_SIZE: int = 600
 
     # Minimum seconds between transcript dividers
     DIVIDER_INTERVAL: int = 60
@@ -65,6 +66,7 @@ config = Config()
 # continues to work unchanged.
 # ---------------------------------------------------------------------------
 SAMPLE_RATE = config.SAMPLE_RATE
+RECORDING_SAMPLE_RATE = config.RECORDING_SAMPLE_RATE
 CHANNELS = config.CHANNELS
 SUBTYPE = config.SUBTYPE
 PARAKEET_MODEL = config.PARAKEET_MODEL

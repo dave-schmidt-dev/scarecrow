@@ -12,9 +12,9 @@ Scarecrow uses parakeet-mlx for accurate batch transcription. You can attach tim
 
 ## Bug Tracking
 
-Scarecrow keeps a persistent bug ledger in [BUGS.md](BUGS.md). Future fixes must follow these rules:
+Bug entries live inline in [HISTORY.md](HISTORY.md) under their date heading as `### [BUG-...]` sections. Future fixes must follow these rules:
 
-- Append a `BUGS.md` entry whenever a bug is found, investigated, worked around, or fixed.
+- Add a `### [BUG-]` entry under the current date in `HISTORY.md` whenever a bug is found, investigated, worked around, or fixed.
 - A bug is not considered squashed until a regression test exists for the exact failing logic path and that test passes.
 - Do not rely on heavily mocked alternate paths to declare a bug fixed.
 - Record temporary mitigations as workarounds until the root cause is actually fixed.
@@ -199,7 +199,7 @@ uv run vulture scarecrow/ vulture_whitelist.py  # dead code check
 
 Pre-commit hooks run ruff (lint + format) and vulture automatically.
 
-When fixing bugs, update `BUGS.md` and add or extend the matching regression test in the same change.
+When fixing bugs, add a `### [BUG-]` entry under the current date in `HISTORY.md` and add or extend the matching regression test in the same change.
 
 ### Git hooks
 
@@ -211,9 +211,9 @@ uv run pre-commit install --hook-type pre-commit --hook-type pre-push
 
 The hooks enforce these repo rules:
 
-- fail the commit if `README.md`, `HISTORY.md`, or `BUGS.md` is missing
+- fail the commit if `README.md` or `HISTORY.md` is missing
 - fail the commit if staged code changes do not include an update to `HISTORY.md`
-- fail the commit if `BUGS.md` contains a squashed bug without a regression test reference
+- fail the commit if `HISTORY.md` contains a squashed `### [BUG-]` entry without a regression test reference
 - run `ruff` and `vulture` on pre-commit
 - run the full test suite on pre-push
 

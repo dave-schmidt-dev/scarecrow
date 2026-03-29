@@ -30,7 +30,7 @@ class AudioRecorder:
     def __init__(
         self,
         output_path: Path,
-        sample_rate: int = 16000,
+        sample_rate: int = config.config.RECORDING_SAMPLE_RATE,
         channels: int | None = None,
         *,
         cfg: Config | None = None,
@@ -38,6 +38,7 @@ class AudioRecorder:
         _cfg = cfg or config.config
         self._output_path = output_path
         self._sample_rate = sample_rate
+        self._stt_sample_rate = _cfg.SAMPLE_RATE
         self._channels = channels if channels is not None else _cfg.CHANNELS
 
         self._stream: sd.InputStream | None = None
@@ -211,9 +212,16 @@ class AudioRecorder:
         self._stream.start()
 
     def _finalize_audio(self, chunks: list[np.ndarray]) -> np.ndarray:
-        """Concatenate int16 chunks → float32."""
+        """Concatenate int16 chunks → float32, downsampled to STT rate if needed."""
         combined = np.concatenate(chunks, axis=0).squeeze()
-        return combined.astype(np.float32) / 32768.0
+        audio = combined.astype(np.float32) / 32768.0
+        if self._sample_rate != self._stt_sample_rate:
+            duration = len(audio) / self._sample_rate
+            new_length = int(duration * self._stt_sample_rate)
+            old_times = np.linspace(0, duration, num=len(audio), endpoint=False)
+            new_times = np.linspace(0, duration, num=new_length, endpoint=False)
+            audio = np.interp(new_times, old_times, audio).astype(np.float32)
+        return audio
 
     def drain_buffer(self) -> np.ndarray | None:
         """Return accumulated audio since last drain, or None if empty.

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from scarecrow import config as _config_module
 from scarecrow.config import Config
 from scarecrow.runtime import ModelManager
 
@@ -41,6 +42,7 @@ class Transcriber:
     ) -> None:
         self._bindings = bindings or TranscriberBindings()
         self._model_manager = model_manager or ModelManager(cfg=cfg)
+        self._cfg = cfg or _config_module.config
         self._ready = False
         self._consecutive_failures = 0
 
@@ -75,7 +77,7 @@ class Transcriber:
         mel = get_logmel(audio_mx, model.preprocessor_config)
         result = model.generate(mel)[0]
         wall = time.perf_counter() - t0
-        audio_s = len(audio) / 16000
+        audio_s = len(audio) / self._cfg.SAMPLE_RATE
         log.debug(
             "parakeet: %.1fs audio → %.0fms wall (RTF %.4f)",
             audio_s,

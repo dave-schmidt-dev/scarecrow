@@ -1,5 +1,7 @@
 # History
 
+Bug entries are inline under their date heading. A squashed bug must reference a regression test.
+
 ## 2026-03-29 (code review: simplify infra, in-process LLM, model upgrade)
 
 - **Fix PortAudio segfaults properly:** Added `atexit` handler in `tests/conftest.py` to terminate PortAudio before interpreter teardown. Removed SIGSEGV-as-success hack and per-node behavioral test isolation from the test runner.
@@ -31,6 +33,13 @@
 - **Queue overflow handling:** If the disk is too slow and the queue fills (200 items, ~12.5s), the callback drops the frame and sets `_disk_write_failed`. The transcription buffer still gets the audio.
 - **Added `WRITER_QUEUE_SIZE = 200` to config.py.**
 - **4 new tests:** writer flush on stop, disk error handling, queue overflow warning, stop-without-start safety.
+
+### [BUG-20260329-disk-io-in-callback]
+- Status: squashed
+- Symptom: Persistent pops/clicks in recorded audio. Audible on playback regardless of FLAC vs WAV.
+- Root cause: The PortAudio realtime audio callback (`_callback_inner`) wrote audio to a WAV file via `soundfile.write()` on every invocation. When the disk write stalled (macOS flushing, Spotlight indexing, etc.), the callback returned late and PortAudio dropped the next buffer, producing audible pops. This is a well-known real-time audio anti-pattern — disk I/O must never happen on the audio thread. Missed by 3 prior code audits that focused on thread safety (lock correctness) and error handling rather than real-time audio design constraints.
+- Fix: Moved all disk I/O to a dedicated `wav-writer` thread. The callback now enqueues audio chunks to a bounded `queue.Queue` via `put_nowait` (zero blocking). The writer thread pulls from the queue and writes to SoundFile. The callback retains only peak/RMS computation and in-memory buffer append (both fast, no I/O). Queue overflow sets `_disk_write_failed` and drops the frame (transcription buffer still gets it). `stop()` sends a sentinel, joins the writer thread (5s timeout), and has a safety-net file close.
+- Regression test: `tests/test_recorder.py::test_writer_thread_flushes_on_stop`, `tests/test_recorder.py::test_writer_thread_handles_disk_error`, `tests/test_recorder.py::test_full_queue_sets_warning`, `tests/test_recorder.py::test_stop_without_start_is_safe`
 
 ## 2026-03-28 (/mn session naming, disable FLAC)
 
@@ -156,10 +165,101 @@
 - **Benchmark results (3 min, 15s fixed chunks, normalized WER):** Parakeet 18.7% WER / 0.006x RTF / 50% CPU / 1.5 GB RSS / 2.2 GB GPU. Whisper 3.6% WER / 0.30x RTF / 400% CPU / 3.5 GB RSS. Parakeet ~47x faster. Individual utterance accuracy is perfect (0% WER) — chunked WER is from boundary artifacts.
 - **GPU power draw:** ~45-50mW idle between chunks, 400-900mW during transcription bursts. Under 1W peak — negligible battery impact.
 
+### [BUG-20260328-overlap-zero-slice-repeats-audio]
+- Status: squashed
+- Symptom: With parakeet backend (overlap_ms=0), every batch contained ALL previous audio, causing the entire transcript to repeat and word count to grow exponentially (~4000 words in 1:39).
+- Root cause: `audio[-0:]` in numpy returns the entire array, not an empty slice. When `overlap_samples=0`, `drain_buffer()` set `_overlap_tail = audio[-0:]` (the full buffer) and prepended it to every subsequent drain.
+- Fix: Skip overlap logic entirely when `_overlap_samples == 0`.
+- Regression test: `tests/test_behavioral.py::test_append_transcript_no_divider_without_session`
+
+### [BUG-20260328-buffer-time-jitter]
+- Status: squashed
+- Symptom: Buffer time counter in InfoBar was non-linear — incrementing, then decrementing, then incrementing — instead of smoothly reflecting actual buffer duration.
+- Root cause: Two competing updaters. The 1-second `_tick()` timer decremented `_batch_countdown` by 1 every second (leftover from whisper's fixed-interval batch timer). The VAD poll (every 150ms) set `_batch_countdown` to the actual `buffer_seconds`. Between polls, the tick would subtract 1, then the next poll would correct it, causing visible jitter.
+- Fix: Removed `_batch_countdown` decrement from `_tick()`. Only the VAD poll updates the buffer display now.
+- Regression test: `tests/test_behavioral.py::test_tick_does_not_decrement_batch_countdown`
+
+### [BUG-20260328-flush-audio-loss]
+- Status: squashed
+- Symptom: `/flush` could silently drop audio. It first tried `_vad_transcribe()` (which may drain and submit), then unconditionally called `drain_buffer()` and submitted again. If the first submission was still in-flight, `_submit_batch_transcription()` refused the second but the audio was already drained from the buffer — lost forever.
+- Root cause: Double-drain pattern in `_handle_flush()` — two sequential drains where the second could fail to submit.
+- Fix: Single `drain_buffer()` with a busy-guard. If a batch is in-flight, skip the flush and leave audio in the buffer for the next cycle.
+- Regression test: `tests/test_behavioral.py::test_flush_does_not_lose_audio_when_batch_busy`
+
+### [BUG-20260328-portaudio-init-on-import]
+- Status: squashed
+- Symptom: macOS "Python quit unexpectedly" crash dialog during test suite. CoreAudio IO thread segfaults during interpreter teardown.
+- Root cause: `import sounddevice` at module level in `recorder.py` initializes PortAudio and creates CoreAudio background threads. These native threads crash when Python's interpreter tears down after pytest finishes, even with `os._exit()`.
+- Fix: Moved `import sounddevice` and `import soundfile` to lazy imports inside `AudioRecorder.start()`. PortAudio only initializes when actually recording, never during tests.
+- Regression test: `tests/test_startup.py::test_scarecrow_recorder_does_not_import_sounddevice`
+
+### [BUG-20260328-preload-model-unhandled]
+- Status: squashed
+- Symptom: If parakeet model loading fails (MLX OOM, native abort, download failure), the process exits with an unhandled exception traceback instead of a user-facing error message.
+- Root cause: `main()` wrapped `prepare()` in try/except but left `preload_batch_model()` unguarded.
+- Fix: Wrapped `preload_batch_model()` in try/except with user-facing error message and clean `sys.exit(1)`.
+- Regression test: `tests/test_startup.py::test_main_handles_preload_batch_model_failure`
+
+### [BUG-20260328-session-io-crash-startup]
+- Status: squashed
+- Symptom: Disk-full or permission errors during session creation crash startup before `_show_error()` runs. Also, `append_sentence()` left `open()` failures uncaught.
+- Root cause: `_start_recording()` created `Session(...)` outside its try block; `Session.__init__()` does `mkdir()` + header write. `append_sentence()` called `open()` before the try block.
+- Fix: Wrapped Session creation in try/except in `_start_recording()`. Moved `open()` inside the try block in `append_sentence()`.
+- Regression test: `tests/test_behavioral.py::test_start_recording_handles_session_creation_failure`, `tests/test_session.py::test_append_sentence_handles_open_failure`
+
+### [BUG-20260328-shutdown-late-callback-race]
+- Status: squashed
+- Symptom: In-flight batch results could be duplicated during shutdown — worker's `_on_batch_result` callback lands via `call_from_thread` after `cleanup_after_exit` already wrote the captured text directly.
+- Root cause: `_ignore_batch_results` was set after `_wait_for_batch_workers()` completed, leaving a window for the worker's callback to fire.
+- Fix: Set `_ignore_batch_results = True` before calling `_wait_for_batch_workers()`.
+- Regression test: `tests/test_behavioral.py::test_ignore_batch_results_set_before_wait`
+
+### [BUG-20260328-final-flush-error-lost]
+- Status: squashed
+- Symptom: If `_flush_final_batch()` fails during shutdown, the error is routed through `call_from_thread` which raises `RuntimeError` on the app thread; `_post_to_ui` logs it but the user never sees the message.
+- Root cause: `_flush_final_batch()` relied on the `on_error` callback path instead of handling errors locally.
+- Fix: Wrapped `transcribe_batch()` call in `_flush_final_batch()` with try/except; errors are now shown via `_show_error()` directly.
+- Regression test: `tests/test_behavioral.py::test_flush_final_batch_handles_transcription_error`
+
+### [BUG-20260328-drain-silence-floor-division]
+- Status: squashed
+- Symptom: `drain_to_silence()` could drain on less than the configured `VAD_MIN_SILENCE_MS` with non-even chunk sizes.
+- Root cause: Floor division for `min_silent_chunks` underestimates: e.g., 9600//1700=5 chunks (531ms) instead of ceil(9600/1700)=6 chunks (637ms) for 600ms silence.
+- Fix: Changed to ceiling division: `-(-min_silence_samples // denom)`.
+- Regression test: `tests/test_recorder.py::test_drain_to_silence_uses_ceil_for_silence_chunks`
+
+### [BUG-20260328-pause-resume-device-loss]
+- Status: squashed
+- Symptom: If the audio device is disconnected during pause/resume, `stream.stop()`/`stream.start()` raises an exception that propagates out of `action_pause()`, crashing the app.
+- Root cause: No exception handling around `_audio_recorder.pause()` and `_audio_recorder.resume()` in `action_pause()`.
+- Fix: Wrapped both calls in try/except with logging and error status display.
+- Regression test: `tests/test_behavioral.py::test_pause_handles_stream_stop_failure`, `tests/test_behavioral.py::test_resume_handles_stream_start_failure`
+
+### [BUG-20260328-richlog-markup-injection]
+- Status: squashed
+- Symptom: User note text or transcript text containing Rich markup tags could inject styling into the transcript pane (RichLog has `markup=True`).
+- Root cause: User input and model output were rendered into RichLog without escaping.
+- Fix: Applied `rich.markup.escape()` to user note text in `_submit_note()` and transcript text in `_record_transcript()`.
+- Regression test: `tests/test_behavioral.py::test_note_submission_writes_to_richlog`
+
+### [BUG-20260328-real-model-test-crashes]
+- Status: squashed
+- Symptom: `pytest.importorskip("parakeet_mlx")` imports the module, triggering native CoreAudio/MLX crashes and macOS "Python quit unexpectedly" dialogs.
+- Root cause: `importorskip` actually imports the module to check availability. On this machine, importing `parakeet_mlx` initializes MLX which can cause native aborts during interpreter teardown.
+- Fix: Replaced `importorskip` with `@pytest.mark.skipif(not importlib.util.find_spec("parakeet_mlx"), ...)` which probes without importing. Also fixed `test_get_parakeet_model_thread_safety` to mock via `sys.modules` instead of importing parakeet_mlx.
+- Regression test: `tests/test_startup.py::test_scarecrow_recorder_does_not_import_sounddevice`, `tests/test_parakeet_backend.py::test_parakeet_model_lazy_import`
+
 ## 2026-03-27 (docs update: open bugs and TODO refresh)
 
 - Added BUG-20260327-parakeet-batch-newlines to BUGS.md: RichLog.write() creates newlines per batch, causing noisy transcript pane at 5-second intervals.
 - Refreshed TODO.md with parakeet branch status, GPU findings, and known limitations.
+
+### [BUG-20260327-parakeet-batch-newlines]
+- Status: squashed
+- Symptom: With the parakeet backend (5-second batch windows), each batch result appears on its own line in the transcript pane, creating excessive vertical noise.
+- Root cause: Textual's `RichLog.write()` always appends a new line. There is no API to update or append to the last written line.
+- Fix: Track `_current_paragraph` and `_paragraph_line_count` in the app. On each batch result, splice out the previous paragraph's rendered lines from `RichLog.lines`, clear the line cache, and write the updated combined paragraph. Paragraph resets on dividers, notes, warnings, and pause markers.
+- Regression test: `tests/test_behavioral.py::test_append_transcript_no_divider_without_session`
 
 ## 2026-03-27 (test independence: whisper tests patch BACKEND explicitly)
 
@@ -358,6 +458,80 @@
 - Marked BUG-20260324-quit-drops-final-batch as squashed; updated stale-manual-scripts entry.
 - Added regression tests for: in-flight batch text capture, session finalize under interrupt, transcriber shutdown timeout, batch executor cleanup, on_unmount safety.
 
+### [BUG-20260325-inflight-batch-text-lost]
+- Status: squashed
+- Symptom: Quitting while a batch tick was in progress silently lost the in-flight batch worker's transcribed text. The text was produced by `transcribe_batch` but the callback routed through `call_from_thread` deferred the write past `session.finalize()`.
+- Root cause: `_wait_for_batch_workers` called `future.result()` but discarded the return value. The futures were typed as `Future[None]` despite holding `str | None`.
+- Fix: `_wait_for_batch_workers` now returns captured text from completed futures. `cleanup_after_exit` writes captured text to the session before flushing and finalizing. `_ignore_batch_results` is set immediately after capture to prevent duplicate writes from the deferred callback path.
+- Regression test: `tests/test_behavioral.py::test_wait_for_batch_workers_captures_completed_text`
+
+### [BUG-20260325-realtime-shutdown-no-timeout]
+- Status: squashed
+- Symptom: `cleanup_after_exit` called `transcriber.shutdown(timeout=None)`, which joined the realtime worker thread with no timeout. If live model inference hung, shutdown blocked indefinitely.
+- Root cause: Batch workers had a 10s timeout but the realtime worker had none.
+- Fix: Changed `transcriber.shutdown(timeout=None)` to `transcriber.shutdown(timeout=5)` in `cleanup_after_exit`.
+- Regression test: `tests/test_behavioral.py::test_cleanup_after_exit_uses_timeout_for_transcriber_shutdown`
+
+### [BUG-20260325-executor-leak-normal-path]
+- Status: squashed
+- Symptom: In the normal (non-timeout) quit path, the batch executor was not shut down during `cleanup_after_exit`. It was deferred to `on_unmount` or Python's atexit, which could block process exit if a thread was still idle in the pool.
+- Root cause: `_batch_executor.shutdown()` was only called in the timeout path of `_wait_for_batch_workers`.
+- Fix: `cleanup_after_exit` now explicitly shuts down the batch executor after the flush/wait phase, in all paths.
+- Regression test: `tests/test_behavioral.py::test_cleanup_after_exit_shuts_down_batch_executor`
+
+### [BUG-20260325-session-finalize-reentrant]
+- Status: squashed
+- Symptom: If `KeyboardInterrupt` fired between `self._transcript_file.close()` and `self._transcript_file = None` in `finalize()`, a subsequent `append_sentence` could reopen the file and write after the session was logically closed.
+- Root cause: `Session` used the file handle as both the "open" flag and the "finalized" flag.
+- Fix: Added a `_finalized` boolean flag set at the top of `finalize()`. `append_sentence` returns immediately if `_finalized` is True.
+- Regression test: `tests/test_behavioral.py::test_session_finalize_idempotent_after_interrupt`
+
+### [BUG-20260325-private-worker-attribute-access]
+- Status: squashed
+- Symptom: `cleanup_after_exit` accessed `self._transcriber._worker` (private attribute) to check if the transcriber needed cleanup. Fragile coupling to transcriber internals.
+- Root cause: No public API to query whether the transcriber has an active worker thread.
+- Fix: Added `Transcriber.has_active_worker` public property. Updated `cleanup_after_exit` to use it.
+- Regression test: `tests/test_behavioral.py::test_cleanup_after_exit_is_idempotent_for_normal_quit`
+
+### [BUG-20260325-policy-manual-bypass]
+- Status: squashed
+- Symptom: A BUGS.md entry with "manual only" regression test bypassed the policy check because the check did not recognize "manual" as an invalid test reference.
+- Root cause: `check_bugs_regression_refs()` only checked for "pending", "none", "n/a" substrings.
+- Fix: Added `"manual" in value` to the rejection condition.
+- Regression test: `tests/test_repo_policy.py::test_check_bugs_regression_refs_rejects_manual_only`
+
+### [BUG-20260325-live-pane-call-from-thread]
+- Status: squashed
+- Symptom: Live pane showed "Listening…" but never displayed any Apple Speech recognition output, despite the captioner receiving and processing audio.
+- Root cause: `_on_realtime_update` and `_on_realtime_stabilized` routed through `_post_to_ui`, which calls `call_from_thread`. Apple Speech callbacks fire on the app's main thread; Textual's `call_from_thread` raises `RuntimeError` when called from the app's own thread. `_post_to_ui` caught the error, logged it, and silently dropped every live caption update.
+- Fix: Removed the `_post_to_ui` indirection from both captioner callbacks; both callbacks now call their respective UI methods directly. (Component removed in 2026-03-27 UI rehaul.)
+- Regression test: `tests/test_app.py::test_transcriber_error_surfaces_in_ui`
+
+### [BUG-20260325-live-pane-clears-on-isFinal]
+- Status: squashed
+- Symptom: Live pane text cleared periodically mid-speech — partial text vanished and no new text appeared until the 55s rotation timer fired.
+- Root cause: Apple's Speech framework fires `isFinal` when it detects a pause in speech, terminating the `SFSpeechRecognitionTask`. The captioner handled `isFinal` but never started a new recognition task. Audio continued flowing into the dead request, but no results were delivered until the 55s rotation.
+- Fix: When `isFinal` fires and `self._request is request`, immediately start a new recognition session. (Component removed in 2026-03-27 UI rehaul.)
+- Regression test: `tests/test_app.py::test_app_launches`
+
+### [BUG-20260325-live-pane-fills-and-clears]
+- Status: squashed
+- Symptom: Live pane filled with text then cleared rather than scrolling. Text never accumulated — each cycle replaced rather than appended.
+- Root cause: Apple's `formattedString()` returns the entire session text since the session started, not just the latest words. This growing blob filled the pane; when `isFinal` fired, it committed as one huge stable entry and the next session started fresh, appearing to clear the pane.
+- Fix: Incremental commit in the result handler. When uncommitted words exceed `_COMMIT_THRESHOLD` (10), the settled portion is flushed; only `_PARTIAL_TAIL` (4) words remain as unstable partial. (Component removed in 2026-03-27 UI rehaul.)
+- Regression test: `tests/test_app.py::test_app_launches`
+
+### [BUG-20260325-live-captioner-isfinal-reentrancy]
+- Status: squashed
+- Symptom: After fixing the dead-session bug, live captions showed a few words, hung briefly, then cleared and repeated — never accumulating text.
+- Root cause: The natural-isFinal restart called `_start_recognition_session()` directly from inside the existing task's result handler callback. Creating a new `recognitionTaskWithRequest_resultHandler_` while inside another task's result handler is a reentrancy problem in Apple's Speech framework.
+- Fix: Result handler now sets a `_needs_restart` flag instead of restarting inline. `tick()` was split into `_pump_runloop()` + `_tick_body()`; `_tick_body()` checks `_needs_restart` after the NSRunLoop pump returns and starts the new session there. (Component removed in 2026-03-27 UI rehaul.)
+- Regression test: `tests/test_app.py::test_app_launches`
+
+### [BUG-20260325-live-pane-scroll-resets-at-boundary]
+- Status: won't fix
+- Symptom: Live pane scrolls correctly for ~9 stable lines, then on the 10th committed line the pane clears and resets to show only the latest caption — scrolling stops and history is lost from view.
+
 ## 2026-03-24 (shutdown and setup follow-up)
 
 - Routed Ctrl+C cleanup through `app.cleanup_after_exit()` so the final buffered batch is flushed to the session transcript before shutdown completes.
@@ -386,3 +560,178 @@
 - Added `tests/test_env_health.py` to lock in the `.pth` hidden-flag remediation path and updated the README to prefer `python3 scripts/sync_env.py` over raw `uv sync`.
 - Added repo-managed pre-commit and pre-push policy enforcement for required docs, HISTORY updates on code changes, BUGS regression-test references, and validation commands.
 - Post-refactor audit: guarded `_on_audio` callback in recorder to prevent silent PortAudio thread death; added `threading.Lock` to `ModelManager` for batch model lazy-init thread safety; fixed pause/resume wiping live pane history; fixed int16 abs overflow in peak level; added platform guards to `env_health.py`; removed phantom `requests` dependency; rewrote stale manual scripts to use current API; cleaned up dead mock setup and inconsistent async test patterns; added fixture existence guard to integration test. Six new BUGS.md entries with matching regression tests.
+
+### [BUG-20260324-quit-drops-final-batch]
+- Status: squashed
+- Symptom: Quitting can lose the final buffered speech window because the transcript file closes before the last batch is transcribed.
+- Root cause: `_stop_recording()` stopped the recorder and finalized the session without draining/transcribing the final recorder buffer or waiting for in-flight batch workers. In-flight batch worker results were captured via `call_from_thread` callbacks that deferred past `session.finalize()`, silently losing text.
+- Fix: Shutdown now captures return values from in-flight batch futures directly and writes them to the session transcript before finalize. `_wait_for_batch_workers` returns captured text alongside the completion status.
+- Regression test: `tests/test_behavioral.py::test_stop_recording_flushes_final_batch_before_finalize`, `tests/test_behavioral.py::test_stop_recording_waits_for_inflight_batch_before_finalize`, `tests/test_behavioral.py::test_wait_for_batch_workers_captures_completed_text`
+
+### [BUG-20260324-startup-unwind-leak]
+- Status: squashed
+- Symptom: If the recorder starts successfully and the transcriber then fails to begin, the mic stream and WAV handle stay open until process exit.
+- Root cause: `_start_recording()` discarded `_audio_recorder` and `_session` references on startup failure without calling `stop()` / `finalize()`.
+- Fix: Startup failure now explicitly stops the recorder and finalizes the session before surfacing the error.
+- Regression test: `tests/test_behavioral.py::test_start_recording_unwinds_recorder_when_recorder_start_fails`
+
+### [BUG-20260324-overlapping-batch-workers]
+- Status: squashed
+- Symptom: Batch transcriptions can overlap on the shared batch model, and a second batch tick can drain/drop audio while the first batch is still running.
+- Root cause: Each tick launched an untracked background worker, and `transcribe_batch()` had no lock around shared batch-model inference.
+- Fix: The app now allows only one in-flight batch worker, preserves audio when a tick lands while batch work is already running, and `Transcriber.transcribe_batch()` serializes access to the shared batch model.
+- Regression test: `tests/test_behavioral.py::test_batch_transcription_not_triggered_before_interval`, `tests/test_transcriber.py::test_transcribe_batch_concurrent_calls_dont_crash`
+
+### [BUG-20260324-vad-failure-session-fatal]
+- Status: squashed
+- Symptom: A single transient VAD failure permanently stops live transcription for the rest of the session.
+- Root cause: `_run_worker()` set `_stop_event` and exited on any VAD exception.
+- Fix: VAD failures now emit an error, reset VAD/transient speech state, and continue processing future audio.
+- Regression test: `tests/test_transcriber.py::test_vad_failure_resets_and_recovers`
+
+### [BUG-20260324-brittle-whisper-test-patch]
+- Status: squashed
+- Symptom: Tests intended to mock Whisper model loading can still hit the real model loader and become flaky or crash.
+- Root cause: Tests patched `faster_whisper.WhisperModel` instead of the already-imported `scarecrow.runtime.WhisperModel` symbol used by `ModelManager`.
+- Fix: Updated tests to patch `scarecrow.runtime.WhisperModel`, which is the actual symbol dereferenced during prepare/startup. (Superseded by whisper removal — faster-whisper no longer exists in the codebase. The patching discipline is preserved in parakeet-era tests.)
+- Regression test: `tests/test_transcriber.py::test_prepare_sets_is_ready`, `tests/test_startup.py::test_transcriber_prepare_sets_is_ready`
+
+### [BUG-20260324-full-suite-native-crash]
+- Status: squashed
+- Symptom: `pytest` can segfault partway through the full suite even though the same test files pass when run in smaller groups.
+- Root cause: The repository relied on one long-lived pytest process to run the entire Textual/native-extension mix, which is unstable on this environment.
+- Fix: Added `scripts/run_test_suite.sh` plus `scripts/run_pytest_file.py` so the suite runs in sanitized subprocesses; `test_behavioral.py` is further split to one test node per process; each invocation exits through `os._exit()` after `pytest.main(...)`.
+- Regression test: `tests/test_suite_runner.py::test_runner_script_runs_isolated_processes_for_files_and_behavioral_nodes`, `tests/test_suite_runner.py::test_pre_commit_uses_shell_test_runner`
+
+### [BUG-20260324-shutdown-timeout-release-race]
+- Status: squashed
+- Symptom: If `shutdown()` times out while the realtime worker is still transcribing, later worker iterations can crash because the VAD session and model references were already cleared.
+- Root cause: `Transcriber.shutdown()` released `_vad` and model references unconditionally even when `join(timeout=...)` returned with the worker still alive.
+- Fix: `shutdown()` now marks the transcriber unready and reports the timeout, but defers runtime release until a later shutdown call after the worker has actually exited.
+- Regression test: `tests/test_transcriber.py::test_shutdown_releases_runtime_references`
+
+### [BUG-20260324-silent-runtime-failures]
+- Status: squashed
+- Symptom: Transcription paths fail and the UI often shows no words or no updates without telling the user why.
+- Root cause: Broad exception handling and `contextlib.suppress(...)` hide failures in UI handoff, realtime transcription, batch transcription, and shutdown.
+- Fix: Transcriber now emits explicit error callbacks; the app surfaces those errors in the transcript pane and info bar; shutdown/audio drop failures are logged instead of silently swallowed.
+- Regression test: `tests/test_app.py::test_transcriber_error_surfaces_in_ui`, `tests/test_transcriber.py::test_batch_transcription_error_emits_callback`
+
+### [BUG-20260324-tight-coupling-runtime]
+- Status: squashed
+- Symptom: Fixes in one runtime path frequently regress another path.
+- Root cause: `app.py` owned transcriber lifecycle wiring, batch model loading, UI-thread handoff, and recorder integration instead of consuming a single runtime interface.
+- Fix: `Transcriber` now owns live worker lifecycle, batch transcription, and callback bindings through `TranscriberBindings`; `app.py` consumes that interface instead of loading or calling model internals directly.
+- Regression test: `tests/test_integration.py::test_batch_transcription_with_real_audio_fixture`
+
+### [BUG-20260324-live-pane-fragility]
+- Status: squashed
+- Symptom: Live pane scrolling, partial replacement, and stabilized-line behavior regress easily.
+- Root cause: Full clear-and-rewrite rendering depends on replaying internal live state instead of using a simpler widget/update model.
+- Fix: Live output now renders through a single scrollable pane with one content widget, keeping stable lines plus the current partial without RichLog replay state. (Superseded by live_captioner removal — pane fragility is moot.)
+- Regression test: `tests/test_app.py::test_transcriber_error_surfaces_in_ui`
+
+### [BUG-20260324-split-model-bootstrap]
+- Status: squashed
+- Symptom: Runtime behavior depends on startup ordering and env state that is spread across modules.
+- Root cause: HF offline flags, tqdm lock warmup, live model load, and batch model load are initialized in different places.
+- Fix: Runtime bootstrap moved into `scarecrow/runtime.py`, with one model manager owning env flags, tqdm warmup, and both Whisper model load paths. (Superseded by whisper removal — runtime.py now manages parakeet-only bootstrap.)
+- Regression test: `tests/test_startup.py::test_hf_hub_offline_set_by_main_module`, `tests/test_startup.py::test_transcriber_prepare_with_real_model`, `tests/test_integration.py::test_batch_transcription_with_real_audio_fixture`
+
+### [BUG-20260324-missing-real-pipeline-test]
+- Status: squashed
+- Symptom: Regressions reach runtime because most tests mock the transcriber, recorder, or model calls.
+- Root cause: No test fed real audio through the actual transcription pipeline with real cached models and a timeout.
+- Fix: Added a real-model integration test that feeds an actual recording through both the live and batch transcriber paths with a 30-second timeout.
+- Regression test: `tests/test_integration.py::test_batch_transcription_with_real_audio_fixture`
+
+### [BUG-20260324-missing-hook-enforcement]
+- Status: squashed
+- Symptom: It was easy to forget doc updates, regression references, or validation before commit/push.
+- Root cause: Repo policy lived in chat instructions and habit rather than enforceable git hooks.
+- Fix: Added repo-managed pre-commit and pre-push hooks via `.pre-commit-config.yaml` and `scripts/check_repo_policy.py`.
+- Regression test: `tests/test_repo_policy.py::test_check_bugs_regression_refs_rejects_na_substring`
+
+### [BUG-20260324-hidden-pth-after-uv-sync]
+- Status: squashed
+- Symptom: Importing `scarecrow` from outside the project root fails because `.venv/lib/python3.12/site-packages/_scarecrow.pth` has the macOS `UF_HIDDEN` flag set again.
+- Root cause: Editable-install rebuilds can leave the `.pth` path file in a broken hidden-flag state on this macOS environment.
+- Fix: Added `scarecrow/env_health.py`, `scripts/repair_venv.py`, and `scripts/sync_env.py` so sync now includes a post-repair import validation path. (Superseded — editable-install workarounds removed; setup now uses `uv sync --no-editable`.)
+- Regression test: `tests/test_env_health.py::test_clear_hidden_flag_removes_hidden_bit`, `tests/test_env_health.py::test_ensure_editable_install_visible_repairs_hidden_pth`, `tests/test_startup.py::test_pth_file_not_hidden`
+
+### [BUG-20260324-on-audio-callback-crash]
+- Status: squashed
+- Symptom: If the `_on_audio` callback (transcriber audio feed) raises inside the PortAudio callback, the callback thread dies silently. The recorder appears alive but no audio flows to the transcriber.
+- Root cause: The `_on_audio(indata)` call in `recorder.py._callback()` was unguarded — any exception propagated into the PortAudio thread, killing it.
+- Fix: Wrapped the `_on_audio` call in try/except, logging the error. The PortAudio callback never propagates exceptions.
+- Regression test: `tests/test_recorder.py::test_on_audio_exception_does_not_crash_callback`
+
+### [BUG-20260324-model-manager-race]
+- Status: squashed
+- Symptom: Concurrent batch transcription workers could both see `_batch_model is None` and load the expensive batch model twice.
+- Root cause: `ModelManager.get_batch_model()` had no thread synchronization.
+- Fix: Added `threading.Lock` to `ModelManager`, guarding all model creation paths.
+- Regression test: `tests/test_transcriber.py::test_get_parakeet_model_thread_safety`
+
+### [BUG-20260324-pause-wipes-live-pane]
+- Status: squashed
+- Symptom: Pressing pause wiped all accumulated live transcription lines, replacing them with just "Paused".
+- Root cause: `action_pause` called `_update_live("Paused")` which replaces all `_live_stable` lines.
+- Fix: Pause now sets the partial text to "Paused" without clearing stable history. Resume clears the partial.
+- Regression test: `tests/test_app.py::test_press_p_during_recording_pauses`, `tests/test_behavioral.py::test_rapid_pause_resume_state_sequence`
+
+### [BUG-20260324-peak-level-overflow]
+- Status: squashed
+- Symptom: `np.abs(np.int16(-32768))` overflows to -32768, producing a negative peak level.
+- Root cause: int16 abs overflow — the most negative int16 has no positive counterpart.
+- Fix: Cast to int32 before abs: `indata.astype(np.int32)`.
+- Regression test: `tests/test_recorder.py::test_peak_level_returns_correct_value`
+
+### [BUG-20260324-stale-manual-scripts]
+- Status: squashed
+- Symptom: `scripts/test_transcription.py` and `scripts/test_dual_stream.py` crash with TypeError/AttributeError — they reference the old RealtimeSTT API.
+- Root cause: Scripts were not updated after the runtime refactor replaced RealtimeSTT with Silero VAD + faster-whisper.
+- Fix: Rewrote both scripts to use current API (`TranscriberBindings`, `accept_audio`, `AudioRecorder`). (Superseded by whisper removal — scripts deleted entirely.)
+- Regression test: `tests/test_regressions.py::test_scarecrow_importable_from_outside_project_dir`
+
+### [BUG-20260324-final-flush-lost]
+- Status: squashed
+- Symptom: The final batch of buffered speech was silently lost on quit because `_flush_final_batch` fired the result through the `call_from_thread` callback path, which deferred the transcript write past `session.finalize()`.
+- Root cause: `_flush_final_batch` called `transcribe_batch()` from the Textual event loop; the result flowed through `on_batch_result` → `_post_to_ui` → `call_from_thread`, which deferred `_append_transcript` behind `session.finalize()`. By the time it ran, `_session` was `None`.
+- Fix: `cleanup_after_exit()` now flushes the final buffered batch to the session transcript before the session finalizes, and `_flush_final_batch()` writes directly instead of routing through the async callback path.
+- Regression test: `tests/test_behavioral.py::test_stop_recording_flushes_final_batch_before_finalize`, `tests/test_behavioral.py::test_flush_final_batch_writes_to_transcript_file`, `tests/test_behavioral.py::test_flush_final_batch_disables_async_callback_path`
+
+### [BUG-20260324-ctrlc-cleanup]
+- Status: squashed
+- Symptom: Pressing Ctrl+C during recording left the microphone stream and WAV file open; the transcript file was not flushed or closed.
+- Root cause: The `finally` block in `__main__.py` only called `transcriber.shutdown()`; it did not stop the recorder or finalize the session because Ctrl+C never runs `_stop_recording`.
+- Fix: `main()` now routes Ctrl+C through `app.cleanup_after_exit()`, which stops intake, flushes the final buffered batch, shuts down the transcriber, and finalizes the session.
+- Regression test: `tests/test_behavioral.py::test_ctrl_c_cleanup_after_exit_flushes_and_finalizes`, `tests/test_startup.py::test_main_finally_uses_app_cleanup_hook`
+
+### [BUG-20260324-setup-defaults-drift]
+- Status: squashed
+- Symptom: Running `scripts/setup.py` and selecting a different live model silently failed to update `config.py` because the setup script's `DEFAULTS["live"]` was `"tiny.en"` but the config already contained `"base.en"`.
+- Root cause: `write_config()` used exact string replacement with the hardcoded default; since the default didn't match what was in the file, the replacement found nothing and wrote the file unchanged.
+- Fix: `write_config()` now uses regex replacement that updates whatever model names are currently in `config.py`.
+- Regression test: `tests/test_setup.py::test_write_config_updates_current_models_without_exact_default_match`, `tests/test_setup.py::test_write_config_treats_model_names_as_plain_text`
+
+### [BUG-20260324-batch-worker-infinite-block]
+- Status: squashed
+- Symptom: If a batch model inference hangs during shutdown, `_wait_for_batch_workers` blocks the Textual event loop indefinitely with no recovery path.
+- Root cause: `future.result()` was called without a timeout.
+- Fix: `_wait_for_batch_workers()` now times out, abandons the batch executor, ignores late batch callbacks, skips the final flush when a worker times out, and lets shutdown continue.
+- Regression test: `tests/test_behavioral.py::test_wait_for_batch_workers_survives_timeout`, `tests/test_behavioral.py::test_stop_recording_skips_final_flush_after_batch_timeout`
+
+### [BUG-20260324-policy-na-bypass]
+- Status: squashed
+- Symptom: A BUGS.md entry with regression test value `n/a (some explanation)` bypassed the policy check because the check used exact-match for "n/a", not substring match.
+- Root cause: `check_bugs_regression_refs()` checked `value in {"pending", "none", "n/a"}` which only caught exact "n/a".
+- Fix: Added `"n/a" in value` substring check alongside the existing checks.
+- Regression test: `tests/test_repo_policy.py::test_check_bugs_regression_refs_rejects_na_substring`
+
+### [BUG-20260324-double-shutdown]
+- Status: squashed
+- Symptom: On normal quit, `transcriber.shutdown()` was called twice — once by `_stop_recording` and once by the `finally` block in `__main__.py`. Harmless but wasteful and confusing.
+- Root cause: The `finally` block called `transcriber.shutdown()` unconditionally.
+- Fix: The shared cleanup path is now idempotent, so repeated cleanup calls do not double-shutdown the transcriber or finalize the session twice.
+- Regression test: `tests/test_behavioral.py::test_cleanup_after_exit_is_idempotent_for_normal_quit`, `tests/test_behavioral.py::test_ctrl_c_cleanup_after_exit_flushes_and_finalizes`

@@ -33,29 +33,51 @@ def test_drain_buffer_returns_float32(tmp_path: Path) -> None:
         recorder.stop()
 
 
-def test_drain_buffer_sample_rate_is_44100(tmp_path: Path) -> None:
-    """drain_buffer returns audio at recorder's sample rate (44100), not 16000.
-
-    The batch transcription code must resample before passing to Parakeet.
-    """
+def test_drain_buffer_resamples_to_stt_rate(tmp_path: Path) -> None:
+    """drain_buffer downsamples 48kHz recording audio to 16kHz for STT."""
+    from scarecrow.config import Config
     from scarecrow.recorder import AudioRecorder
+
+    cfg = Config(SAMPLE_RATE=16000, RECORDING_SAMPLE_RATE=48000)
 
     with patch.dict(
         "sys.modules", {"sounddevice": MagicMock(), "soundfile": MagicMock()}
     ):
-        recorder = AudioRecorder(tmp_path / "audio.wav", sample_rate=16000)
+        recorder = AudioRecorder(tmp_path / "audio.wav", sample_rate=48000, cfg=cfg)
         recorder.start()
 
-        # Simulate 1 second of audio at 16000Hz
-        for _ in range(16):  # ~16 chunks of 1024 = ~16384 samples
+        # Simulate 1 second of audio at 48000Hz: 48 chunks of 1024 = 49152 samples
+        for _ in range(48):
             indata = np.zeros((1024, 1), dtype="int16")
             recorder._callback(indata, 1024, None, None)
 
         audio = recorder.drain_buffer()
         assert audio is not None
-        # Should have ~16384 samples at 16kHz
-        assert len(audio) > 15000
-        assert recorder.sample_rate == 16000
+        # Output should be ~1/3 of input length (16kHz vs 48kHz)
+        assert len(audio) == pytest.approx(49152 // 3, rel=0.05)
+        recorder.stop()
+
+
+def test_finalize_audio_no_resample_when_rates_match(tmp_path: Path) -> None:
+    """drain_buffer output length is unchanged when recording and STT rates match."""
+    from scarecrow.config import Config
+    from scarecrow.recorder import AudioRecorder
+
+    cfg = Config(SAMPLE_RATE=16000, RECORDING_SAMPLE_RATE=16000)
+
+    with patch.dict(
+        "sys.modules", {"sounddevice": MagicMock(), "soundfile": MagicMock()}
+    ):
+        recorder = AudioRecorder(tmp_path / "audio.wav", sample_rate=16000, cfg=cfg)
+        recorder.start()
+
+        for _ in range(16):
+            indata = np.zeros((1024, 1), dtype="int16")
+            recorder._callback(indata, 1024, None, None)
+
+        audio = recorder.drain_buffer()
+        assert audio is not None
+        assert len(audio) == 16 * 1024
         recorder.stop()
 
 
@@ -109,12 +131,14 @@ def test_callback_does_not_buffer_when_paused(tmp_path: Path) -> None:
 
 def test_callback_buffers_when_recording(tmp_path: Path) -> None:
     """Recording callback must accumulate audio in the batch buffer."""
+    from scarecrow.config import Config
     from scarecrow.recorder import AudioRecorder
 
+    cfg = Config(SAMPLE_RATE=16000, RECORDING_SAMPLE_RATE=16000)
     with patch.dict(
         "sys.modules", {"sounddevice": MagicMock(), "soundfile": MagicMock()}
     ):
-        recorder = AudioRecorder(tmp_path / "audio.wav")
+        recorder = AudioRecorder(tmp_path / "audio.wav", sample_rate=16000, cfg=cfg)
         recorder.start()
 
         indata = np.ones((1024, 1), dtype="int16") * 500

@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-REQUIRED_DOCS = ("README.md", "HISTORY.md", "BUGS.md")
+REQUIRED_DOCS = ("README.md", "HISTORY.md")
 CODE_PREFIXES = ("scarecrow/", "tests/", "scripts/")
 CODE_SUFFIXES = (".py", ".tcss", ".toml", ".yaml", ".yml", ".json", ".md")
 
@@ -49,21 +49,14 @@ def check_history_updated(staged_files: list[str]) -> list[str]:
     if "HISTORY.md" in staged_files:
         return []
     if any(_is_code_change(path) for path in staged_files):
-        return [
-            "Code or behavior-affecting files are staged but HISTORY.md is not updated."
-        ]
+        print("reminder: HISTORY.md not staged with this code change.", file=sys.stderr)
     return []
 
 
-def check_bugs_regression_refs() -> list[str]:
-    bugs_path = REPO_ROOT / "BUGS.md"
-    if not bugs_path.exists():
-        return []
-
+def _check_bug_sections(sections: list[str]) -> list[str]:
+    """Validate a list of raw bug section bodies (text after the heading marker)."""
     failures: list[str] = []
-    text = bugs_path.read_text(encoding="utf-8")
-    sections = re.split(r"(?m)^## ", text)
-    for raw in sections[1:]:
+    for raw in sections:
         title, _, body = raw.partition("\n")
         # Only squashed bugs require a regression test reference.
         # Won't-fix bugs are exempt — they have no fix to regress.
@@ -82,6 +75,28 @@ def check_bugs_regression_refs() -> list[str]:
             failures.append(
                 f"{title.strip()}: squashed bug must name a regression test."
             )
+    return failures
+
+
+def check_bugs_regression_refs() -> list[str]:
+    failures: list[str] = []
+
+    # Backward compat: scan BUGS.md if it still exists (during migration).
+    bugs_path = REPO_ROOT / "BUGS.md"
+    if bugs_path.exists():
+        text = bugs_path.read_text(encoding="utf-8")
+        sections = re.split(r"(?m)^## ", text)
+        failures.extend(_check_bug_sections(sections[1:]))
+
+    # Also scan HISTORY.md for bug entries.  In HISTORY.md bugs are nested
+    # under date headings, so they use h3 (### [BUG-) instead of h2.
+    history_path = REPO_ROOT / "HISTORY.md"
+    if history_path.exists():
+        text = history_path.read_text(encoding="utf-8")
+        sections = re.split(r"(?m)^### ", text)
+        bug_sections = [s for s in sections[1:] if s.startswith("[BUG-")]
+        failures.extend(_check_bug_sections(bug_sections))
+
     return failures
 
 

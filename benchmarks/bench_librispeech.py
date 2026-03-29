@@ -35,6 +35,15 @@ LIBRISPEECH_ROOT = Path(__file__).parent / "data" / "LibriSpeech" / "test-clean"
 
 DEFAULT_CHUNK_SECONDS = 15
 
+KNOWN_MODELS = [
+    "mlx-community/parakeet-tdt-0.6b-v3",
+    "mlx-community/parakeet-tdt-1.1b",
+    "mlx-community/parakeet-rnnt-0.6b-v2",
+    "mlx-community/parakeet-rnnt-1.1b-v2",
+    "mlx-community/parakeet-ctc-0.6b-v2",
+    "mlx-community/parakeet-ctc-1.1b-v2",
+]
+
 # VAD parameters matching config.py defaults
 VAD_SILENCE_THRESHOLD = 0.01
 VAD_MIN_SILENCE_MS = 600
@@ -480,6 +489,20 @@ def _sweep_configs(
     return configs
 
 
+def _print_compare_table(results: list[tuple[str, BenchmarkResult]]) -> None:
+    """Print a comparison table from multi-model results."""
+    print(f"\n{'=' * 72}")
+    print("  MODEL COMPARISON RESULTS")
+    print(f"{'=' * 72}")
+    col = 38
+    print(f"  {'Model':<{col}} {'WER':>7} {'RTF':>7} {'GPU MB':>7}")
+    print(f"  {'-' * col} {'-' * 7} {'-' * 7} {'-' * 7}")
+    for model_id, result in results:
+        gpu = result.resources.get("gpu_peak_mb", 0)
+        print(f"  {model_id:<{col}} {result.wer:>6.1%} {result.rtf:>7.3f} {gpu:>7.0f}")
+    print()
+
+
 def _print_sweep_table(results: list[tuple[VADConfig, BenchmarkResult]]) -> None:
     """Print a comparison table from sweep results."""
     print(f"\n{'=' * 80}")
@@ -574,7 +597,24 @@ def main():
         choices=["silence", "max-buffer"],
         help="Which parameter to sweep (default: silence)",
     )
+    parser.add_argument(
+        "--compare",
+        type=str,
+        default=None,
+        help="Comma-separated model IDs to compare (runs benchmark for each)",
+    )
+    parser.add_argument(
+        "--list-models",
+        action="store_true",
+        help="Print known Parakeet MLX model IDs and exit",
+    )
     args = parser.parse_args()
+
+    if args.list_models:
+        print("Known Parakeet MLX models:")
+        for m in KNOWN_MODELS:
+            print(f"  {m}")
+        raise SystemExit(0)
 
     if not LIBRISPEECH_ROOT.exists():
         print(f"ERROR: {LIBRISPEECH_ROOT} not found.")
@@ -589,6 +629,32 @@ def main():
         f"Built {actual_s:.0f}s ({actual_s / 60:.1f}m) audio stream from "
         f"LibriSpeech test-clean"
     )
+
+    if args.compare:
+        model_ids = [m.strip() for m in args.compare.split(",") if m.strip()]
+        vad_cfg = None
+        if args.vad:
+            vad_cfg = VADConfig(
+                silence_threshold=args.silence_threshold,
+                min_silence_ms=args.min_silence_ms,
+                max_buffer_seconds=args.max_buffer_seconds,
+            )
+        compare_results = []
+        for model_id in model_ids:
+            print(f"\nLoading model: {model_id}")
+            model = make_parakeet(model_id)
+            result = run_benchmark(audio, reference, model, args.chunk, vad=vad_cfg)
+            compare_results.append((model_id, result))
+            del model
+            gc.collect()
+            try:
+                import mlx.core as mx
+
+                mx.metal.reset_peak_memory()
+            except Exception:
+                pass
+        _print_compare_table(compare_results)
+        return
 
     print(f"\nLoading model: {args.model}")
     model = make_parakeet(args.model)
