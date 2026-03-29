@@ -257,3 +257,34 @@ def test_transcribe_batch_resets_failures_on_success() -> None:
         t.transcribe_batch(np.zeros(16000, dtype=np.float32), 30, emit_callback=False)
 
     assert t.consecutive_failures == 0
+
+
+def test_transcribe_batch_respects_max_retries_zero() -> None:
+    """When max_retries=0, transcribe_batch must attempt exactly once and not retry."""
+    call_count = 0
+
+    def always_fail(audio):
+        nonlocal call_count
+        call_count += 1
+        raise RuntimeError("permanent failure")
+
+    t = Transcriber()
+    t._ready = True
+    t._model_manager = MagicMock()
+
+    with (
+        patch.object(t, "_transcribe_parakeet", side_effect=always_fail),
+        patch("scarecrow.transcriber.time.sleep") as mock_sleep,
+    ):
+        result = t.transcribe_batch(
+            np.zeros(16000, dtype=np.float32),
+            30,
+            emit_callback=False,
+            max_retries=0,
+        )
+
+    assert result is None
+    assert call_count == 1, (
+        f"Expected exactly 1 attempt with max_retries=0, got {call_count}"
+    )
+    mock_sleep.assert_not_called()

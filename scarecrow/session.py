@@ -61,7 +61,7 @@ class Session:
 
     def append_event(self, event: dict) -> None:
         """Appends a JSON event to transcript.jsonl, flushes immediately."""
-        if self._finalized:
+        if self._finalized or self._write_failed:
             return
         try:
             if self._transcript_file is None:

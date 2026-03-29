@@ -303,3 +303,31 @@ def test_drain_to_silence_uses_ceil_for_silence_chunks(
         "(ceil(9600/1700)=6 chunks required, 6 provided)"
     )
     recorder.stop()
+
+
+def test_callback_survives_unexpected_exception(
+    output_path: Path, mock_sd, mock_sf
+) -> None:
+    """_callback must not propagate unexpected exceptions.
+
+    Regression: an unguarded exception inside _callback would kill the
+    PortAudio audio thread, silently stopping all audio capture.
+    """
+    _, mock_file = mock_sf
+    recorder = AudioRecorder(output_path)
+    recorder.start()
+
+    # Force the sound file write to raise an unexpected non-OSError exception
+    mock_file.write.side_effect = ValueError("unexpected numpy shape mismatch")
+
+    indata = np.zeros((1024, 1), dtype="int16")
+    # Must not raise — the safety net should catch it
+    try:
+        recorder._callback(indata, 1024, None, None)
+    except Exception as exc:
+        pytest.fail(f"_callback propagated an exception: {exc!r}")
+
+    # Recorder state must remain intact (still recording, not paused)
+    assert recorder.is_recording
+    assert not recorder.is_paused
+    recorder.stop()

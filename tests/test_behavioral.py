@@ -34,6 +34,7 @@ def _mock_transcriber():
     """Return a mock batch-only Transcriber."""
     mock = MagicMock()
     mock.is_ready = True
+    mock.consecutive_failures = 0
     mock.shutdown.return_value = None
 
     def _shutdown(timeout=5):
@@ -544,7 +545,7 @@ async def test_stop_recording_flushes_final_batch_before_finalize(
 
     transcriber = _mock_transcriber()
 
-    def fake_final_batch(audio, elapsed, *, emit_callback=False):
+    def fake_final_batch(audio, elapsed, *, emit_callback=False, max_retries=None):
         calls.append("final-batch")
         assert emit_callback is False
         return "transcribed text"
@@ -691,7 +692,7 @@ async def test_flush_final_batch_disables_async_callback_path(tmp_path: Path) ->
 
     transcriber = _mock_transcriber()
 
-    def fake_batch(_audio, _elapsed, *, emit_callback=True):
+    def fake_batch(_audio, _elapsed, *, emit_callback=True, max_retries=None):
         assert emit_callback is False
         return "one final line"
 
@@ -888,6 +889,82 @@ def test_session_finalize_idempotent_after_interrupt(tmp_path: Path) -> None:
     content = session.transcript_path.read_text(encoding="utf-8")
     assert "before interrupt" in content
     assert "after finalize" not in content
+
+
+# ---------------------------------------------------------------------------
+# H1: KeyboardInterrupt during batch flush must not skip session finalization
+# ---------------------------------------------------------------------------
+
+
+def test_cleanup_handles_keyboard_interrupt_during_batch_wait(tmp_path: Path) -> None:
+    """KeyboardInterrupt during _wait_for_batch_workers must still finalize session."""
+    from scarecrow.session import Session
+
+    real_session = Session(base_dir=tmp_path)
+    mock_recorder = _mock_recorder()
+    mock_transcriber = _mock_transcriber()
+
+    app = ScarecrowApp(transcriber=mock_transcriber)
+    app._audio_recorder = mock_recorder
+    app._session = real_session
+    app._reactive_state = AppState.RECORDING
+
+    with patch.object(app, "_wait_for_batch_workers", side_effect=KeyboardInterrupt):
+        app.cleanup_after_exit()
+
+    # Session must be finalized (set to None) despite the KeyboardInterrupt
+    assert app._session is None
+    assert real_session.transcript_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# H5: _flush_final_batch must pass max_retries=0 to skip retries during shutdown
+# ---------------------------------------------------------------------------
+
+
+def test_flush_final_batch_skips_retries(tmp_path: Path) -> None:
+    """_flush_final_batch must call transcribe_batch with max_retries=0."""
+    mock_recorder = _mock_recorder()
+    mock_recorder.drain_buffer.return_value = np.zeros(16000, dtype=np.float32)
+    mock_transcriber = _mock_transcriber()
+    mock_transcriber.transcribe_batch.return_value = "final text"
+
+    app = ScarecrowApp(transcriber=mock_transcriber)
+    app._audio_recorder = mock_recorder
+    app._session = None
+
+    app._flush_final_batch(include_ui=False)
+
+    call_kwargs = mock_transcriber.transcribe_batch.call_args
+    assert call_kwargs.kwargs.get("max_retries") == 0, (
+        "Final flush must pass max_retries=0 to skip retries during shutdown"
+    )
+
+
+# ---------------------------------------------------------------------------
+# H6: Circuit breaker stops batch submission after repeated failures
+# ---------------------------------------------------------------------------
+
+
+def test_circuit_breaker_stops_batch_submission() -> None:
+    """_submit_batch_transcription must return False after repeated failures."""
+    mock_transcriber = _mock_transcriber()
+    mock_transcriber.consecutive_failures = 3  # at or above threshold
+
+    app = ScarecrowApp(transcriber=mock_transcriber)
+    app._reactive_state = AppState.RECORDING
+
+    warned: list[str] = []
+    app._warn_transcript = lambda msg: warned.append(msg)  # type: ignore[method-assign]
+    app._set_status = lambda msg, **kw: None  # type: ignore[method-assign]
+
+    audio = np.zeros(16000, dtype=np.float32)
+    result = app._submit_batch_transcription(audio, batch_elapsed=0)
+
+    assert result is False
+    assert app._circuit_breaker_shown is True
+    assert len(warned) == 1
+    assert "Transcription unavailable" in warned[0]
 
 
 # ---------------------------------------------------------------------------
@@ -1780,3 +1857,297 @@ async def test_resume_handles_stream_start_failure(
 
         # State transitions to RECORDING regardless
         assert app.state is AppState.RECORDING
+
+
+# ---------------------------------------------------------------------------
+# M1: All-silent buffer must not accumulate — drain_to_silence discards it
+# ---------------------------------------------------------------------------
+
+
+def test_all_silent_buffer_does_not_accumulate(tmp_path: Path) -> None:
+    """drain_to_silence must return None and clear buffer when all chunks are silent.
+
+    Regression: silence_end == 0 (buffer starts with silence) previously
+    skipped the drain because the guard was `silence_end > 0`, causing the
+    buffer to accumulate for up to 30 seconds before a hard drain.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from scarecrow.recorder import AudioRecorder
+
+    with patch.dict(
+        "sys.modules", {"sounddevice": MagicMock(), "soundfile": MagicMock()}
+    ):
+        recorder = AudioRecorder(tmp_path / "audio.wav")
+
+    # Inject all-silent chunks (> 0.5 s so the 0.5s guard passes)
+    # At 16kHz with 1600-sample chunks, 6 chunks = 0.6 s
+    silent_chunk = np.zeros((1600, 1), dtype="int16")
+    with recorder._buffer_lock:
+        for _ in range(6):
+            recorder._audio_chunks.append(silent_chunk.copy())
+            recorder._chunk_energies.append(0.0)
+
+    result = recorder.drain_to_silence()
+
+    # All-silent buffer must be discarded (not sent to transcriber)
+    assert result is None, "All-silent buffer must return None"
+    with recorder._buffer_lock:
+        assert len(recorder._audio_chunks) == 0, "Buffer must be cleared"
+        assert len(recorder._chunk_energies) == 0
+
+
+# ---------------------------------------------------------------------------
+# M2: action_pause must flush remaining pre-pause audio buffer
+# ---------------------------------------------------------------------------
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_pause_flushes_remaining_audio_buffer(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """action_pause must call drain_buffer() to flush any audio VAD didn't drain.
+
+    Regression: pre-pause audio without a silence boundary was left in the
+    buffer and would bleed into the post-resume transcription window.
+    """
+    mock_rec = _mock_recorder()
+    # drain_to_silence returns None (no silence boundary found)
+    mock_rec.drain_to_silence.return_value = None
+    # drain_buffer returns leftover speech audio
+    leftover = np.zeros(8000, dtype=np.float32)
+    mock_rec.drain_buffer.return_value = leftover
+    mock_recorder_cls.return_value = mock_rec
+    mock_session_cls.return_value = MagicMock()
+
+    app = ScarecrowApp(transcriber=_mock_transcriber())
+    app._preflight_check = lambda: True  # type: ignore[method-assign]
+    async with app.run_test() as pilot:
+        app._start_recording()
+        await pilot.pause(delay=0.3)
+        assert app.state is AppState.RECORDING
+
+        app.action_pause()
+        await pilot.pause()
+
+        assert app.state is AppState.PAUSED
+        # drain_buffer must have been called to flush pre-pause audio
+        mock_rec.drain_buffer.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# JSONL timestamp standardization: all events must have timestamp + elapsed
+# ---------------------------------------------------------------------------
+
+
+async def test_transcript_event_has_timestamp_and_elapsed(tmp_path: Path) -> None:
+    """transcript events written by _record_transcript must include both
+    an ISO 8601 timestamp field and an elapsed field."""
+    import json
+    import re
+
+    from scarecrow.session import Session
+
+    real_session = Session(base_dir=tmp_path)
+
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        app._session = real_session
+        app._elapsed = 42
+        app._last_divider_elapsed = -999  # force a divider first time
+        app._append_transcript("test transcript text")
+        await pilot.pause()
+
+    events = [
+        json.loads(line)
+        for line in real_session.transcript_path.read_text().splitlines()
+    ]
+    transcript_events = [e for e in events if e.get("type") == "transcript"]
+    assert transcript_events, "Expected at least one transcript event"
+    ev = transcript_events[0]
+    assert "elapsed" in ev, "transcript event must have 'elapsed' field"
+    assert "timestamp" in ev, "transcript event must have 'timestamp' field"
+    pattern = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$"
+    assert re.match(pattern, ev["timestamp"]), (
+        f"transcript timestamp {ev['timestamp']!r} does not match ISO 8601"
+    )
+
+
+async def test_divider_event_has_timestamp_and_elapsed(tmp_path: Path) -> None:
+    """divider events must include both an ISO 8601 timestamp field and elapsed."""
+    import json
+    import re
+
+    from scarecrow.session import Session
+
+    real_session = Session(base_dir=tmp_path)
+
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        app._session = real_session
+        app._elapsed = 10
+        app._last_divider_elapsed = -999  # force a divider
+        app._append_transcript("divider test")
+        await pilot.pause()
+
+    events = [
+        json.loads(line)
+        for line in real_session.transcript_path.read_text().splitlines()
+    ]
+    divider_events = [e for e in events if e.get("type") == "divider"]
+    assert divider_events, "Expected at least one divider event"
+    ev = divider_events[0]
+    assert "elapsed" in ev, "divider event must have 'elapsed' field"
+    assert "timestamp" in ev, "divider event must have 'timestamp' field"
+    pattern = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$"
+    assert re.match(pattern, ev["timestamp"]), (
+        f"divider timestamp {ev['timestamp']!r} does not match ISO 8601"
+    )
+
+
+async def test_pause_event_has_timestamp_and_elapsed(tmp_path: Path) -> None:
+    """pause events must include both an ISO 8601 timestamp field and elapsed."""
+    import json
+    import re
+
+    from scarecrow.session import Session
+
+    real_session = Session(base_dir=tmp_path)
+
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        app._session = real_session
+        app._elapsed = 77
+        app.state = AppState.RECORDING
+        app._write_pause_marker()
+        await pilot.pause()
+
+    events = [
+        json.loads(line)
+        for line in real_session.transcript_path.read_text().splitlines()
+    ]
+    pause_events = [e for e in events if e.get("type") == "pause"]
+    assert pause_events, "Expected at least one pause event"
+    ev = pause_events[0]
+    assert "elapsed" in ev, "pause event must have 'elapsed' field"
+    assert "timestamp" in ev, "pause event must have 'timestamp' field"
+    pattern = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$"
+    assert re.match(pattern, ev["timestamp"]), (
+        f"pause timestamp {ev['timestamp']!r} does not match ISO 8601"
+    )
+
+
+async def test_note_event_has_timestamp_and_elapsed(tmp_path: Path) -> None:
+    """note events must include both an ISO 8601 timestamp field and elapsed."""
+    import json
+    import re
+
+    from scarecrow.session import Session
+
+    real_session = Session(base_dir=tmp_path)
+
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        app._session = real_session
+        app._elapsed = 55
+        input_widget = app.query_one("#note-input", Input)
+        input_widget.value = "note with timestamp"
+
+        app._submit_note()
+        await pilot.pause()
+
+    events = [
+        json.loads(line)
+        for line in real_session.transcript_path.read_text().splitlines()
+    ]
+    note_events = [e for e in events if e.get("type") == "note"]
+    assert note_events, "Expected at least one note event"
+    ev = note_events[0]
+    assert "elapsed" in ev, "note event must have 'elapsed' field"
+    assert "timestamp" in ev, "note event must have 'timestamp' field"
+    pattern = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$"
+    assert re.match(pattern, ev["timestamp"]), (
+        f"note timestamp {ev['timestamp']!r} does not match ISO 8601"
+    )
+
+
+async def test_warning_event_has_timestamp_and_elapsed(tmp_path: Path) -> None:
+    """warning events must include both an ISO 8601 timestamp field and elapsed."""
+    import json
+    import re
+
+    from scarecrow.session import Session
+
+    real_session = Session(base_dir=tmp_path)
+
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        app._session = real_session
+        app._elapsed = 30
+        app._warn_transcript("test warning message")
+        await pilot.pause()
+
+    events = [
+        json.loads(line)
+        for line in real_session.transcript_path.read_text().splitlines()
+    ]
+    warning_events = [e for e in events if e.get("type") == "warning"]
+    assert warning_events, "Expected at least one warning event"
+    ev = warning_events[0]
+    assert "elapsed" in ev, "warning event must have 'elapsed' field"
+    assert "timestamp" in ev, "warning event must have 'timestamp' field"
+    pattern = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$"
+    assert re.match(pattern, ev["timestamp"]), (
+        f"warning timestamp {ev['timestamp']!r} does not match ISO 8601"
+    )
+
+
+async def test_resume_event_written_on_unpause(tmp_path: Path) -> None:
+    """Pressing Ctrl+P to resume from PAUSED must write a resume event to the
+    transcript with both an ISO 8601 timestamp and an elapsed field."""
+    import json
+    import re
+
+    from scarecrow.session import Session
+
+    real_session = Session(base_dir=tmp_path)
+
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        app._session = real_session
+        app._elapsed = 120
+        # Manually set to PAUSED so action_pause takes the resume branch
+        app.state = AppState.PAUSED
+
+        app.action_pause()
+        await pilot.pause()
+
+        assert app.state is AppState.RECORDING
+
+    events = [
+        json.loads(line)
+        for line in real_session.transcript_path.read_text().splitlines()
+    ]
+    resume_events = [e for e in events if e.get("type") == "resume"]
+    assert resume_events, "Expected a resume event after unpausing"
+    ev = resume_events[0]
+    assert "elapsed" in ev, "resume event must have 'elapsed' field"
+    assert ev["elapsed"] == 120
+    assert "timestamp" in ev, "resume event must have 'timestamp' field"
+    pattern = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$"
+    assert re.match(pattern, ev["timestamp"]), (
+        f"resume timestamp {ev['timestamp']!r} does not match ISO 8601"
+    )

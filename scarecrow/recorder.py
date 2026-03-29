@@ -63,6 +63,19 @@ class AudioRecorder:
         status,
     ) -> None:
         """PortAudio callback — runs on a dedicated audio thread."""
+        try:
+            self._callback_inner(indata, _frames, _time, status)
+        except Exception:
+            logging.getLogger(__name__).exception("Unexpected error in audio callback")
+
+    def _callback_inner(
+        self,
+        indata: np.ndarray,
+        _frames: int,
+        _time,
+        status,
+    ) -> None:
+        """Inner body of PortAudio callback (separated for safety-net wrapping)."""
         if status:
             status_str = str(status).lower()
             if "input overflow" in status_str:
@@ -217,7 +230,13 @@ class AudioRecorder:
                 else:
                     consecutive_silent = 0
 
-            if silence_end is not None and silence_end > 0:
+            if silence_end is not None:
+                if silence_end == 0:
+                    # Buffer starts with silence — no speech to drain.
+                    # Discard the silent chunks to prevent unbounded growth.
+                    self._audio_chunks.clear()
+                    self._chunk_energies.clear()
+                    return None
                 # Drain through the silence (include silent chunks so
                 # we don't clip words that fade into the silence gap)
                 drain_end = min(silence_end + consecutive_silent, n_chunks)

@@ -167,6 +167,7 @@ class ScarecrowApp(App[None]):
         self._recording_start_time: float | None = None
         self._disk_warn_shown: bool = False
         self._session_disk_warn_shown: bool = False
+        self._circuit_breaker_shown: bool = False
         self._last_divider_elapsed: int = -config.DIVIDER_INTERVAL
         # Paragraph accumulator: join consecutive batch results on one block
         self._current_paragraph: str = ""
@@ -295,7 +296,8 @@ class ScarecrowApp(App[None]):
             self._session.append_event(
                 {
                     "type": "warning",
-                    "timestamp": timestamp,
+                    "elapsed": self._elapsed,
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
                     "text": message,
                 }
             )
@@ -412,7 +414,7 @@ class ScarecrowApp(App[None]):
             try:
                 future.result(timeout=0)
             except Exception as exc:
-                log.error("Batch worker failed: %s", exc)
+                log.exception("Batch worker failed")
                 self._warn_transcript(f"Batch transcription failed: {exc}")
         self._batch_futures = alive
 
@@ -426,6 +428,17 @@ class ScarecrowApp(App[None]):
 
     def _submit_batch_transcription(self, audio, batch_elapsed: int) -> bool:
         if self._transcriber is None or len(audio) == 0:
+            return False
+
+        # Circuit breaker: stop submitting after repeated consecutive failures
+        if self._transcriber.consecutive_failures >= self._MAX_CONSECUTIVE_FAILURES:
+            if not self._circuit_breaker_shown:
+                self._circuit_breaker_shown = True
+                self._warn_transcript(
+                    "Transcription unavailable — audio is still recording. "
+                    "Restart Scarecrow to retry."
+                )
+                self._set_status("Transcription unavailable", error=True)
             return False
 
         self._reap_batch_futures()
@@ -508,11 +521,18 @@ class ScarecrowApp(App[None]):
 
         if self._session is not None:
             if divider is not None:
-                self._session.append_event({"type": "divider", "elapsed": elapsed})
+                self._session.append_event(
+                    {
+                        "type": "divider",
+                        "elapsed": elapsed,
+                        "timestamp": datetime.now().isoformat(timespec="seconds"),
+                    }
+                )
             self._session.append_event(
                 {
                     "type": "transcript",
                     "elapsed": elapsed,
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
                     "text": text,
                 }
             )
@@ -537,6 +557,7 @@ class ScarecrowApp(App[None]):
                 audio,
                 batch_elapsed,
                 emit_callback=False,
+                max_retries=0,
             )
         except Exception as exc:
             log.exception("Final batch transcription failed during shutdown")
@@ -601,13 +622,17 @@ class ScarecrowApp(App[None]):
         marker = f"── {ts} · Recording paused ──"
         self._current_paragraph = ""
         self._paragraph_line_count = 0
-        captions = self.query_one("#captions", RichLog)
-        captions.write(f"[dim]{marker}[/dim]")
+        try:
+            captions = self.query_one("#captions", RichLog)
+            captions.write(f"[dim]{marker}[/dim]")
+        except NoMatches:
+            pass
         if self._session is not None:
             self._session.append_event(
                 {
                     "type": "pause",
                     "elapsed": self._elapsed,
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
                 }
             )
 
@@ -684,6 +709,19 @@ class ScarecrowApp(App[None]):
             self._vad_transcribe()
             self.state = AppState.PAUSED
             if self._audio_recorder is not None:
+                # Force-flush any remaining pre-pause audio that VAD couldn't drain
+                # (e.g. speech without a silence boundary). This prevents stale audio
+                # from contaminating post-resume transcription.
+                self._reap_batch_futures()
+                if not self._batch_futures:
+                    audio = self._audio_recorder.drain_buffer()
+                    if audio is not None and len(audio) > 0:
+                        batch_elapsed = self._batch_window_start
+                        self._batch_window_start = self._elapsed
+                        self._submit_batch_transcription(audio, batch_elapsed)
+                else:
+                    # Batch busy — discard rather than contaminate post-resume
+                    self._audio_recorder.drain_buffer()
                 try:
                     self._audio_recorder.pause()
                 except Exception as exc:
@@ -701,6 +739,15 @@ class ScarecrowApp(App[None]):
                 except Exception as exc:
                     log.exception("Failed to resume audio recorder")
                     self._set_status(f"Could not resume recorder: {exc}", error=True)
+            # Write resume event to transcript
+            if self._session is not None:
+                self._session.append_event(
+                    {
+                        "type": "resume",
+                        "elapsed": self._elapsed,
+                        "timestamp": datetime.now().isoformat(timespec="seconds"),
+                    }
+                )
             self._batch_countdown = BATCH_INTERVAL_SECONDS
             self._last_divider_elapsed = -config.DIVIDER_INTERVAL
             self._set_status("")
@@ -794,11 +841,16 @@ class ScarecrowApp(App[None]):
                             "Batch worker timed out during shutdown; "
                             "skipping final transcript flush."
                         )
-            except Exception as exc:
-                log.exception(
-                    "Failed while flushing batch transcription during shutdown"
-                )
-                if include_ui:
+            except BaseException as exc:
+                if isinstance(exc, KeyboardInterrupt):
+                    log.warning(
+                        "KeyboardInterrupt during batch flush; continuing cleanup"
+                    )
+                else:
+                    log.exception(
+                        "Failed while flushing batch transcription during shutdown"
+                    )
+                if include_ui and isinstance(exc, Exception):
                     self._show_error(f"Could not flush final transcript batch: {exc}")
             finally:
                 self._audio_recorder = None
@@ -818,9 +870,15 @@ class ScarecrowApp(App[None]):
             if self._session is not None:
                 try:
                     self._session.write_end_header()
+                except Exception:
+                    log.exception("Failed to write session end header")
+                try:
                     flac_path = self._session.compress_audio()
                     if flac_path:
                         log.info("Audio compressed to %s", flac_path)
+                except Exception:
+                    log.exception("Failed to compress audio")
+                try:
                     self._session.finalize()
                 except Exception as exc:
                     log.exception("Failed to finalize session")
@@ -833,6 +891,8 @@ class ScarecrowApp(App[None]):
                 self.state = AppState.IDLE
             except Exception:
                 self._reactive_state = AppState.IDLE
+
+    _MAX_CONSECUTIVE_FAILURES: ClassVar[int] = 3
 
     _NOTE_PREFIXES: ClassVar[dict[str, str]] = {
         "/task": "TASK",
@@ -886,7 +946,8 @@ class ScarecrowApp(App[None]):
                 {
                     "type": "note",
                     "tag": tag,
-                    "timestamp": timestamp,
+                    "elapsed": self._elapsed,
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
                     "text": raw,
                 }
             )

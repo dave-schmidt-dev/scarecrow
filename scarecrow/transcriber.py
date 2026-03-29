@@ -88,15 +88,18 @@ class Transcriber:
         batch_elapsed: int,
         *,
         emit_callback: bool = True,
+        max_retries: int | None = None,
     ) -> str | None:
         """Run parakeet on a drained recorder buffer.
 
         Returns the transcribed text, empty string if nothing was recognized,
-        or None on error. Retries up to _MAX_RETRIES times before giving up.
-        The normal executor-driven path still emits the callback so the UI
-        updates via call_from_thread.
+        or None on error. Retries up to max_retries times before giving up
+        (defaults to _MAX_RETRIES). Pass max_retries=0 to skip retries, e.g.
+        during shutdown. The normal executor-driven path still emits the
+        callback so the UI updates via call_from_thread.
         """
-        for attempt in range(_MAX_RETRIES + 1):
+        retries = max_retries if max_retries is not None else _MAX_RETRIES
+        for attempt in range(retries + 1):
             try:
                 text = self._transcribe_parakeet(audio)
                 # Success — reset failure tracking
@@ -112,9 +115,9 @@ class Transcriber:
                 log.exception(
                     "Batch transcription failed (attempt %d/%d)",
                     attempt + 1,
-                    _MAX_RETRIES + 1,
+                    retries + 1,
                 )
-                if attempt < _MAX_RETRIES:
+                if attempt < retries:
                     time.sleep(_RETRY_DELAY)
 
         # All retries exhausted

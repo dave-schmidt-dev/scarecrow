@@ -1,5 +1,20 @@
 # History
 
+## 2026-03-28 (Opus audit: shutdown, timestamps, safety, audio pipeline)
+
+- **Shutdown hardening:** `cleanup_after_exit()` now catches `BaseException` (not just `Exception`) around batch flush, so `KeyboardInterrupt` during `_wait_for_batch_workers` no longer skips session finalization. Session cleanup split into independent try blocks so `write_end_header`, `compress_audio`, and `finalize` each run regardless of prior failures.
+- **Shutdown flush skips retries:** `_flush_final_batch()` now passes `max_retries=0` so shutdown never sleeps on retry delays.
+- **Circuit breaker:** After 3 consecutive transcription failures, batch submission stops and a persistent "Transcription unavailable" warning is shown. Audio continues recording.
+- **JSONL timestamp standardization:** All events now include both ISO 8601 `timestamp` and `elapsed` (seconds since recording start). Removes the 3-format inconsistency (ISO, elapsed-only, HH:MM:SS-only).
+- **Resume event:** `action_pause()` now writes a `{"type": "resume"}` event when unpausing, enabling consumers to reconstruct recording vs paused intervals.
+- **JSONL schema contract tests:** New `test_jsonl_schema.py` with per-event-type validation of required fields, plus tests for pause/warning/resume events in JSONL.
+- **All-silent buffer fix:** `drain_to_silence()` now discards all-silent buffers instead of accumulating them for 30s before hard drain (wasting GPU on empty audio).
+- **Pre-pause buffer flush:** `action_pause()` now drains remaining audio before pausing to prevent stale pre-pause chunks from contaminating post-resume transcription.
+- **PortAudio callback safety net:** Top-level `try/except` in audio callback prevents unexpected exceptions from silently killing the audio stream.
+- **Batch future tracebacks preserved:** `_reap_batch_futures` now uses `log.exception` instead of `log.error` to preserve stack traces.
+- **`append_event` guards `_write_failed`:** Stops attempting writes after first disk failure, preventing log spam.
+- **`_write_pause_marker` NoMatches guard:** Prevents crash if RichLog widget is not found.
+
 ## 2026-03-28 (improvements: JSONL, FLAC, retry, pruning, cleanup)
 
 - **RichLog pruning:** UI transcript pane now caps at 500 lines. Oldest lines are pruned automatically; all content is on disk in the JSONL transcript.

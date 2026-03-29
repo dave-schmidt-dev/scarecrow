@@ -54,6 +54,7 @@ PARALLEL_FILES=(
   tests/test_app.py
   tests/test_env_health.py
   tests/test_integration.py
+  tests/test_jsonl_schema.py
   tests/test_parakeet_backend.py
   tests/test_recorder.py
   tests/test_regressions.py
