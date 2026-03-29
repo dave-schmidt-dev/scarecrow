@@ -26,6 +26,7 @@ class Session:
         self.append_event(
             {
                 "type": "session_start",
+                "schema_version": 1,
                 "timestamp": now.isoformat(timespec="seconds"),
                 "session_dir": str(self._session_dir),
             }
@@ -76,6 +77,10 @@ class Session:
         """Compress audio.wav to audio.flac (lossless).
 
         Returns FLAC path or None on failure.
+
+        Note: reads the entire WAV into memory for compression. For a 2-hour
+        session at 16kHz mono, this is ~230 MB. Acceptable on current hardware
+        but could be switched to streaming compression if needed.
         """
         import soundfile as sf
 

@@ -20,7 +20,7 @@ from unittest.mock import MagicMock
 # ---------------------------------------------------------------------------
 
 REQUIRED_FIELDS: dict[str, set[str]] = {
-    "session_start": {"type", "timestamp", "session_dir"},
+    "session_start": {"type", "schema_version", "timestamp", "session_dir"},
     "session_end": {"type", "timestamp"},
     "transcript": {"type", "elapsed", "timestamp", "text"},
     "divider": {"type", "elapsed", "timestamp"},
@@ -28,6 +28,8 @@ REQUIRED_FIELDS: dict[str, set[str]] = {
     "resume": {"type", "elapsed", "timestamp"},
     "note": {"type", "tag", "elapsed", "timestamp", "text"},
     "warning": {"type", "elapsed", "timestamp", "text"},
+    "recording_start": {"type", "elapsed", "timestamp"},
+    "session_metrics": {"type", "elapsed", "timestamp", "word_count"},
 }
 
 # ---------------------------------------------------------------------------
@@ -74,6 +76,7 @@ def test_session_start_schema(tmp_path: Path) -> None:
     assert violations == [], f"Schema violations: {violations}"
     # timestamp must be ISO 8601 (contains 'T')
     assert "T" in starts[0]["timestamp"]
+    assert isinstance(starts[0]["schema_version"], int)
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +251,50 @@ async def test_resume_event_schema(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # 8. Full-session round-trip: all event types pass schema validation
 # ---------------------------------------------------------------------------
+
+
+def test_recording_start_schema(tmp_path: Path) -> None:
+    """recording_start event must have required fields."""
+    # This event is written by the app, not Session directly.
+    # Test via direct append_event to validate schema.
+    from scarecrow.session import Session
+
+    session = Session(base_dir=tmp_path)
+    session.append_event(
+        {
+            "type": "recording_start",
+            "elapsed": 0,
+            "timestamp": "2026-03-28T14:00:00",
+        }
+    )
+    session.finalize()
+    events = _read_jsonl(session.transcript_path)
+    starts = [e for e in events if e["type"] == "recording_start"]
+    assert len(starts) == 1
+    violations = _validate_event(starts[0])
+    assert violations == [], f"Schema violations: {violations}"
+
+
+def test_session_metrics_schema(tmp_path: Path) -> None:
+    """session_metrics event must have required fields."""
+    from scarecrow.session import Session
+
+    session = Session(base_dir=tmp_path)
+    session.append_event(
+        {
+            "type": "session_metrics",
+            "elapsed": 300,
+            "timestamp": "2026-03-28T14:05:00",
+            "word_count": 42,
+        }
+    )
+    session.finalize()
+    events = _read_jsonl(session.transcript_path)
+    metrics = [e for e in events if e["type"] == "session_metrics"]
+    assert len(metrics) == 1
+    violations = _validate_event(metrics[0])
+    assert violations == [], f"Schema violations: {violations}"
+    assert metrics[0]["word_count"] == 42
 
 
 def test_all_events_pass_schema_validation(tmp_path: Path) -> None:

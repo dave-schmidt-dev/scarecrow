@@ -400,10 +400,7 @@ class ScarecrowApp(App[None]):
         self._post_to_ui(self._append_transcript, text, batch_elapsed)
 
     def _on_transcriber_error(self, source: str, message: str) -> None:
-        if source == "audio":
-            self._post_to_ui(lambda: self._set_status(message, error=True))
-        else:
-            self._post_to_ui(self._show_error, f"{source}: {message}")
+        self._post_to_ui(self._show_error, f"{source}: {message}")
 
     def _reap_batch_futures(self) -> None:
         alive: set[Future[str | None]] = set()
@@ -694,6 +691,15 @@ class ScarecrowApp(App[None]):
                 f"[dim]Session Start: {ts}[/dim]"
             )
 
+        if self._session is not None:
+            self._session.append_event(
+                {
+                    "type": "recording_start",
+                    "elapsed": 0,
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
+                }
+            )
+
     def _on_vad_poll(self) -> None:
         """Poll for silence boundaries (parakeet backend)."""
         if self.state is AppState.RECORDING:
@@ -868,6 +874,17 @@ class ScarecrowApp(App[None]):
                         self._show_error(f"Could not shut down transcriber: {exc}")
 
             if self._session is not None:
+                try:
+                    self._session.append_event(
+                        {
+                            "type": "session_metrics",
+                            "elapsed": self._elapsed,
+                            "timestamp": datetime.now().isoformat(timespec="seconds"),
+                            "word_count": self._word_count,
+                        }
+                    )
+                except Exception:
+                    log.exception("Failed to write session metrics")
                 try:
                     self._session.write_end_header()
                 except Exception:

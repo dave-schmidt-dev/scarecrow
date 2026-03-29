@@ -1,5 +1,12 @@
 # History
 
+## 2026-03-28 (low-priority audit fixes)
+
+- **Schema version:** `session_start` event now includes `schema_version: 1` for forward compatibility.
+- **New events:** `recording_start` (marks when audio capture actually begins) and `session_metrics` (word count, elapsed time, written before session end).
+- **Removed dead code:** `source == "audio"` branch in `_on_transcriber_error` (no emitter ever used it).
+- **compress_audio docstring:** Notes memory usage (~230 MB for 2hr session) for future contributors.
+
 ## 2026-03-28 (Opus audit: shutdown, timestamps, safety, audio pipeline)
 
 - **Shutdown hardening:** `cleanup_after_exit()` now catches `BaseException` (not just `Exception`) around batch flush, so `KeyboardInterrupt` during `_wait_for_batch_workers` no longer skips session finalization. Session cleanup split into independent try blocks so `write_end_header`, `compress_audio`, and `finalize` each run regardless of prior failures.
