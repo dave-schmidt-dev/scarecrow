@@ -11,6 +11,8 @@
 - **VAD tuning from benchmarks:** `VAD_MIN_SILENCE_MS` 600→750ms based on sweep data (both models plateau at 750ms).
 - **Shutdown refactor:** `cleanup_after_exit()` rewritten from 80-line nested try/except to 11 named idempotent `_cleanup_*` steps with independent error handling.
 - **Config dataclass:** `config.py` globals replaced with `Config` dataclass. Module-level aliases for backward compatibility. Constructors accept optional `Config` parameter for testability.
+- **Integration tests excluded by default:** Real-model summarizer tests marked `@integration` and skipped via pytest `addopts`. Run explicitly with `-m integration`.
+- **Pre-commit hooks use venv Python directly** instead of `uv run` to avoid reinstalling as editable.
 
 ## 2026-03-29 (auto-summarization, /context command, setup script overhaul)
 

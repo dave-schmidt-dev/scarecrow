@@ -21,7 +21,8 @@ from scarecrow.summarizer import (
 )
 
 _real_gguf = _discover_gguf()
-_skip_no_model = pytest.mark.skipif(
+_integration = pytest.mark.integration
+_requires_model = pytest.mark.skipif(
     _real_gguf is None,
     reason="Nemotron GGUF not found in HuggingFace cache",
 )
@@ -367,7 +368,8 @@ def test_model_name_from_gguf_fallback() -> None:
 # ---------------------------------------------------------------------------
 
 
-@_skip_no_model
+@_integration
+@_requires_model
 def test_generate_returns_text_from_real_model() -> None:
     """_generate loads the real GGUF and produces a non-empty response."""
     assert _real_gguf is not None
@@ -383,7 +385,8 @@ def test_generate_returns_text_from_real_model() -> None:
     assert tokens > 0
 
 
-@_skip_no_model
+@_integration
+@_requires_model
 def test_generate_respects_system_prompt() -> None:
     """The model follows the system prompt instruction."""
     assert _real_gguf is not None
@@ -399,7 +402,8 @@ def test_generate_respects_system_prompt() -> None:
     assert "PINEAPPLE" in text.upper()
 
 
-@_skip_no_model
+@_integration
+@_requires_model
 def test_summarize_session_end_to_end(tmp_path: Path) -> None:
     """Full pipeline: transcript on disk -> summary.md with real model."""
     events = [

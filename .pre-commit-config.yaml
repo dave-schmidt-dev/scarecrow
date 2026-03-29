@@ -3,7 +3,7 @@ repos:
     hooks:
       - id: repo-policy
         name: repo-policy
-        entry: uv run python scripts/check_repo_policy.py --staged-only
+        entry: .venv/bin/python scripts/check_repo_policy.py --staged-only
         language: system
         pass_filenames: false
         stages: [pre-commit]

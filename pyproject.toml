@@ -46,6 +46,8 @@ known-first-party = ["scarecrow"]
 testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
+markers = ["integration: tests that load real ML models (GPU-heavy, slow)"]
+addopts = "-m 'not integration'"
 
 [tool.uv]
 default-groups = ["dev"]
