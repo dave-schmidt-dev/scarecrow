@@ -31,6 +31,15 @@ Scarecrow keeps a running bug ledger in this file. Append to it every time a bug
 
 ## Current Bugs
 
+## [BUG-20260329-disk-io-in-callback]
+- Status: squashed
+- Found: 2026-03-29
+- Area: recorder
+- Symptom: Persistent pops/clicks in recorded audio. Audible on playback regardless of FLAC vs WAV.
+- Root cause: The PortAudio realtime audio callback (`_callback_inner`) wrote audio to a WAV file via `soundfile.write()` on every invocation. When the disk write stalled (macOS flushing, Spotlight indexing, etc.), the callback returned late and PortAudio dropped the next buffer, producing audible pops. This is a well-known real-time audio anti-pattern — disk I/O must never happen on the audio thread. Missed by 3 prior code audits that focused on thread safety (lock correctness) and error handling rather than real-time audio design constraints.
+- Fix: Moved all disk I/O to a dedicated `wav-writer` thread. The callback now enqueues audio chunks to a bounded `queue.Queue` via `put_nowait` (zero blocking). The writer thread pulls from the queue and writes to SoundFile. The callback retains only peak/RMS computation and in-memory buffer append (both fast, no I/O). Queue overflow sets `_disk_write_failed` and drops the frame (transcription buffer still gets it). `stop()` sends a sentinel, joins the writer thread (5s timeout), and has a safety-net file close.
+- Regression test: `tests/test_recorder.py::test_writer_thread_flushes_on_stop`, `tests/test_recorder.py::test_writer_thread_handles_disk_error`, `tests/test_recorder.py::test_full_queue_sets_warning`, `tests/test_recorder.py::test_stop_without_start_is_safe`
+
 ## [BUG-20260324-quit-drops-final-batch]
 - Status: squashed
 - Found: 2026-03-24

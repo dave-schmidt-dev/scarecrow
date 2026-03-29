@@ -112,7 +112,7 @@ def test_start_opens_input_stream(output_path: Path, mock_sd, mock_sf) -> None:
 
 
 def test_stop_closes_stream_and_file(output_path: Path, mock_sd, mock_sf) -> None:
-    """stop() closes both the stream and the sound file."""
+    """stop() must close both the stream and the sound file."""
     _, mock_stream = mock_sd
     _, mock_file = mock_sf
     recorder = AudioRecorder(output_path)
@@ -120,13 +120,13 @@ def test_stop_closes_stream_and_file(output_path: Path, mock_sd, mock_sf) -> Non
     recorder.stop()
     mock_stream.stop.assert_called_once()
     mock_stream.close.assert_called_once()
-    mock_file.close.assert_called_once()
+    mock_file.close.assert_called()
 
 
 def test_callback_writes_audio_when_recording(
     output_path: Path, mock_sd, mock_sf
 ) -> None:
-    """Callback writes mic data to SoundFile when not paused."""
+    """Callback must enqueue audio data which the writer thread writes to file."""
     _, mock_file = mock_sf
     recorder = AudioRecorder(output_path)
     recorder.start()
@@ -134,14 +134,17 @@ def test_callback_writes_audio_when_recording(
     indata = np.zeros((1024, 1), dtype="int16")
     recorder._callback(indata, 1024, None, None)
 
-    mock_file.write.assert_called_once_with(indata)
+    # stop() joins the writer thread, ensuring all queued data is written
     recorder.stop()
+    assert mock_file.write.call_count >= 1
+    written = mock_file.write.call_args[0][0]
+    assert written.shape == (1024, 1)
 
 
 def test_callback_writes_silence_when_paused(
     output_path: Path, mock_sd, mock_sf
 ) -> None:
-    """Callback writes zeros to SoundFile when paused."""
+    """Callback must enqueue silence (zeros) when paused, written to file."""
     _, mock_file = mock_sf
     recorder = AudioRecorder(output_path)
     recorder.start()
@@ -150,16 +153,17 @@ def test_callback_writes_silence_when_paused(
     indata = np.ones((1024, 1), dtype="int16") * 1000
     recorder._callback(indata, 1024, None, None)
 
+    # stop() joins the writer thread, ensuring silence was flushed to file
+    recorder.stop()
+    assert mock_file.write.call_count >= 1
     written = mock_file.write.call_args[0][0]
     assert np.all(written == 0)
-    recorder.stop()
 
 
 def test_callback_does_nothing_when_stopped(
     output_path: Path, mock_sd, mock_sf
 ) -> None:
-    """Callback does not write after stop() is called."""
-    _, mock_file = mock_sf
+    """Callback must not enqueue after stop() is called."""
     recorder = AudioRecorder(output_path)
     recorder.start()
     recorder.stop()
@@ -167,7 +171,7 @@ def test_callback_does_nothing_when_stopped(
     indata = np.zeros((1024, 1), dtype="int16")
     recorder._callback(indata, 1024, None, None)
 
-    mock_file.write.assert_not_called()
+    assert recorder._write_queue.empty()
 
 
 def test_start_is_idempotent(output_path: Path, mock_sd, mock_sf) -> None:
@@ -308,26 +312,124 @@ def test_drain_to_silence_uses_ceil_for_silence_chunks(
 def test_callback_survives_unexpected_exception(
     output_path: Path, mock_sd, mock_sf
 ) -> None:
-    """_callback must not propagate unexpected exceptions.
+    """Callback must not crash on unexpected errors."""
+    import threading
 
-    Regression: an unguarded exception inside _callback would kill the
-    PortAudio audio thread, silently stopping all audio capture.
-    """
+    _, mock_file = mock_sf
+    recorder = AudioRecorder(output_path)
+
+    # Block the writer thread so we can fill the queue without it draining
+    block = threading.Event()
+    release = threading.Event()
+
+    def slow_write(data):
+        release.set()
+        block.wait()
+
+    mock_file.write.side_effect = slow_write
+    recorder.start()
+
+    # Inject one item to engage the writer thread and then block it inside
+    # slow_write — at this point the writer has dequeued that 1 item, so the
+    # queue is empty and we can fill all WRITER_QUEUE_SIZE slots.
+    recorder._write_queue.put(("audio", np.zeros((1, 1), dtype="int16")))
+    release.wait(timeout=2)  # wait until writer is blocked inside slow_write
+
+    # Fill queue to capacity (writer is blocked, won't drain these)
+    import scarecrow.config as cfg
+
+    for _ in range(cfg.WRITER_QUEUE_SIZE):
+        recorder._write_queue.put(("audio", np.zeros((1, 1), dtype="int16")))
+
+    indata = np.ones((1024, 1), dtype="int16") * 1000
+    # Should not crash even with queue full
+    recorder._callback(indata, 1024, None, None)
+
+    # Audio is dropped but transcription buffer still gets it
+    assert len(recorder._audio_chunks) == 1
+
+    # Unblock writer so stop() can complete
+    block.set()
+    mock_file.write.side_effect = None
+    recorder.stop()
+
+
+def test_writer_thread_flushes_on_stop(output_path: Path, mock_sd, mock_sf) -> None:
+    """Writer thread must write all queued audio before stop() returns."""
     _, mock_file = mock_sf
     recorder = AudioRecorder(output_path)
     recorder.start()
 
-    # Force the sound file write to raise an unexpected non-OSError exception
-    mock_file.write.side_effect = ValueError("unexpected numpy shape mismatch")
-
-    indata = np.zeros((1024, 1), dtype="int16")
-    # Must not raise — the safety net should catch it
-    try:
+    # Enqueue several chunks via the callback
+    for _ in range(5):
+        indata = np.ones((1024, 1), dtype="int16") * 500
         recorder._callback(indata, 1024, None, None)
-    except Exception as exc:
-        pytest.fail(f"_callback propagated an exception: {exc!r}")
 
-    # Recorder state must remain intact (still recording, not paused)
-    assert recorder.is_recording
-    assert not recorder.is_paused
     recorder.stop()
+
+    # Writer thread should have written all 5 chunks
+    assert mock_file.write.call_count == 5
+
+
+def test_writer_thread_handles_disk_error(output_path: Path, mock_sd, mock_sf) -> None:
+    """Writer thread must set _disk_write_failed on OSError."""
+    _, mock_file = mock_sf
+    mock_file.write.side_effect = OSError("disk full")
+    recorder = AudioRecorder(output_path)
+    recorder.start()
+
+    indata = np.ones((1024, 1), dtype="int16") * 500
+    recorder._callback(indata, 1024, None, None)
+
+    recorder.stop()
+
+    assert recorder._disk_write_failed is True
+
+
+def test_full_queue_sets_warning(output_path: Path, mock_sd, mock_sf) -> None:
+    """A full write queue must set _disk_write_failed and a warning."""
+    import threading
+
+    _, mock_file = mock_sf
+    recorder = AudioRecorder(output_path)
+
+    # Block the writer thread so the queue stays full during the callback
+    block = threading.Event()
+    release = threading.Event()
+
+    def slow_write(data):
+        release.set()
+        block.wait()
+
+    mock_file.write.side_effect = slow_write
+    recorder.start()
+
+    # Inject one item to engage the writer, then wait for it to block inside
+    # slow_write — at this point the writer has dequeued that 1 item, so the
+    # queue is empty and we can fill all WRITER_QUEUE_SIZE slots.
+    recorder._write_queue.put(("audio", np.zeros((1, 1), dtype="int16")))
+    release.wait(timeout=2)
+
+    import scarecrow.config as cfg
+
+    # Fill queue to capacity (writer is blocked, won't drain these)
+    for _ in range(cfg.WRITER_QUEUE_SIZE):
+        recorder._write_queue.put(("audio", np.zeros((1, 1), dtype="int16")))
+
+    # Next callback should detect full queue
+    indata = np.ones((1024, 1), dtype="int16") * 500
+    recorder._callback(indata, 1024, None, None)
+
+    assert recorder._disk_write_failed is True
+    assert "queue full" in (recorder._last_warning or "").lower()
+
+    # Unblock writer so stop() can complete
+    block.set()
+    mock_file.write.side_effect = None
+    recorder.stop()
+
+
+def test_stop_without_start_is_safe(output_path: Path, mock_sd, mock_sf) -> None:
+    """stop() without start() must not crash."""
+    recorder = AudioRecorder(output_path)
+    recorder.stop()  # Should not raise

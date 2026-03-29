@@ -26,6 +26,10 @@ VAD_MIN_SILENCE_MS = 600  # consecutive silence before triggering drain
 VAD_MAX_BUFFER_SECONDS = 30  # hard drain if no silence found by this point
 VAD_POLL_INTERVAL_MS = 150  # how often to check for silence
 
+# Writer thread queue size (bounded to prevent unbounded memory growth)
+# ~12.5 seconds of audio at 16kHz with 1024-sample blocks
+WRITER_QUEUE_SIZE = 200
+
 # Minimum seconds between transcript dividers
 DIVIDER_INTERVAL = 60
 

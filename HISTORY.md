@@ -1,5 +1,13 @@
 # History
 
+## 2026-03-29 (fix audio pops: move disk I/O out of PortAudio callback)
+
+- **Fixed audio pops/clicks:** The PortAudio realtime callback was writing to a WAV file via `soundfile.write()`, causing buffer underruns when disk I/O stalled. Moved all disk writes to a dedicated `wav-writer` thread. The callback now only enqueues data to a bounded `queue.Queue` (zero blocking, zero disk I/O). Peak/RMS computation stays in the callback (fast, no I/O).
+- **Writer thread architecture:** Queue protocol uses tagged tuples (`("audio", data)`, `("silence", data)`, `None` sentinel). Writer thread owns `SoundFile.close()`. `stop()` sends sentinel → joins writer (5s timeout) → safety-net close.
+- **Queue overflow handling:** If the disk is too slow and the queue fills (200 items, ~12.5s), the callback drops the frame and sets `_disk_write_failed`. The transcription buffer still gets the audio.
+- **Added `WRITER_QUEUE_SIZE = 200` to config.py.**
+- **4 new tests:** writer flush on stop, disk error handling, queue overflow warning, stop-without-start safety.
+
 ## 2026-03-28 (/mn session naming, disable FLAC)
 
 - **`/mn` command:** Type `/mn Huddle with Mike` to name the current session. Renames the session directory to `2026-03-28_15-30-00_huddle-with-mike/`. Writes a `session_renamed` event to the JSONL transcript. Also available as `/meeting`.

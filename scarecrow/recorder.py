@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import queue
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -55,6 +57,12 @@ class AudioRecorder:
         self._last_warning: str | None = None
         self._last_status_warning: str = ""
 
+        # Writer thread: pulls audio from queue, writes to SoundFile
+        self._write_queue: queue.Queue[tuple[str, np.ndarray] | None] = queue.Queue(
+            maxsize=config.WRITER_QUEUE_SIZE,
+        )
+        self._writer_thread: threading.Thread | None = None
+
     def _callback(
         self,
         indata: np.ndarray,
@@ -68,13 +76,7 @@ class AudioRecorder:
         except Exception:
             logging.getLogger(__name__).exception("Unexpected error in audio callback")
 
-    def _callback_inner(
-        self,
-        indata: np.ndarray,
-        _frames: int,
-        _time,
-        status,
-    ) -> None:
+    def _callback_inner(self, indata, _frames, _time, status):
         """Inner body of PortAudio callback (separated for safety-net wrapping)."""
         if status:
             status_str = str(status).lower()
@@ -88,33 +90,26 @@ class AudioRecorder:
                 logging.getLogger(__name__).warning("sounddevice status: %s", status)
 
         with self._lock:
-            if not self._recording or self._sound_file is None:
+            if not self._recording:
                 return
             if self._paused:
                 silence = np.zeros_like(indata)
-                try:
-                    self._sound_file.write(silence)
-                except OSError:
-                    if not self._disk_write_failed:
-                        self._disk_write_failed = True
-                        self._last_warning = (
-                            "Audio file write failed \u2014 disk may be full"
-                        )
-                        logging.getLogger(__name__).exception(
-                            "Failed to write silence to audio file"
-                        )
+                with contextlib.suppress(queue.Full):
+                    self._write_queue.put_nowait(("silence", silence))
                 self._peak_level = 0.0
             else:
+                # Copy once, share between queue and transcription buffer
+                data_copy = indata.copy()
                 try:
-                    self._sound_file.write(indata)
-                except OSError:
+                    self._write_queue.put_nowait(("audio", data_copy))
+                except queue.Full:
                     if not self._disk_write_failed:
                         self._disk_write_failed = True
                         self._last_warning = (
-                            "Audio file write failed \u2014 disk may be full"
+                            "Audio write queue full \u2014 disk too slow"
                         )
-                        logging.getLogger(__name__).exception(
-                            "Failed to write audio to file"
+                        logging.getLogger(__name__).error(
+                            "Write queue full, dropping audio frame"
                         )
                 # Track peak level for audio meter
                 peak = float(np.abs(indata.astype(np.int32)).max()) / 32768.0
@@ -125,10 +120,44 @@ class AudioRecorder:
                 rms = float(
                     np.sqrt(np.mean((indata.astype(np.float32) / 32768.0) ** 2))
                 )
-                # Buffer for batch transcription
+                # Buffer for batch transcription (shares the same copy)
                 with self._buffer_lock:
-                    self._audio_chunks.append(indata.copy())
+                    self._audio_chunks.append(data_copy)
                     self._chunk_energies.append(rms)
+
+    def _writer_loop(self) -> None:
+        """Dedicated thread: pulls audio from queue, writes to SoundFile."""
+        log = logging.getLogger(__name__)
+        while True:
+            item = self._write_queue.get()
+            if item is None:
+                # Sentinel: drain remaining items, then close file
+                while True:
+                    try:
+                        remaining = self._write_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    if remaining is not None:
+                        self._write_chunk(remaining[1], log)
+                break
+            _tag, data = item
+            self._write_chunk(data, log)
+
+        # Writer thread owns file closure
+        if self._sound_file is not None:
+            self._sound_file.close()
+            self._sound_file = None
+
+    def _write_chunk(self, data: np.ndarray, log: logging.Logger) -> None:
+        """Write a single audio chunk to the SoundFile."""
+        try:
+            if self._sound_file is not None:
+                self._sound_file.write(data)
+        except OSError:
+            if not self._disk_write_failed:
+                self._disk_write_failed = True
+                self._last_warning = "Audio file write failed \u2014 disk may be full"
+                log.exception("Failed to write audio to file")
 
     def start(self) -> None:
         """Opens sounddevice InputStream with callback, opens SoundFile for writing."""
@@ -145,6 +174,20 @@ class AudioRecorder:
             channels=self._channels,
             subtype=config.SUBTYPE,
         )
+
+        # Clear any stale queue items and start the writer thread
+        while not self._write_queue.empty():
+            try:
+                self._write_queue.get_nowait()
+            except queue.Empty:
+                break
+
+        self._writer_thread = threading.Thread(
+            target=self._writer_loop,
+            name="wav-writer",
+            daemon=True,
+        )
+        self._writer_thread.start()
 
         self._stream = sd.InputStream(
             samplerate=self._sample_rate,
@@ -285,6 +328,13 @@ class AudioRecorder:
             self._stream.close()
             self._stream = None
 
+        # Signal writer thread to flush and exit
+        if self._writer_thread is not None:
+            self._write_queue.put(None)
+            self._writer_thread.join(timeout=5.0)
+            self._writer_thread = None
+
+        # Safety net: close file if writer thread didn't (e.g., it hung)
         if self._sound_file is not None:
             self._sound_file.close()
             self._sound_file = None
