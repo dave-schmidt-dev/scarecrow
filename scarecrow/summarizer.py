@@ -198,6 +198,13 @@ def _generate(
             temperature=0.3,
         )
         text = response["choices"][0]["message"]["content"]
+        # Nemotron-Nano may emit chain-of-thought reasoning before the
+        # actual summary. Strip everything before the first ## heading.
+        import re
+
+        heading_match = re.search(r"(?m)^## ", text)
+        if heading_match:
+            text = text[heading_match.start() :]
         usage = response.get("usage", {})
         total_tokens = usage.get("total_tokens", 0)
         return text, total_tokens
