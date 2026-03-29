@@ -337,16 +337,24 @@ class ScarecrowApp(App[None]):
             self._warn_transcript("Transcript write failed \u2014 disk may be full")
 
     def _check_device_loss(self) -> None:
-        """Detect audio device disconnection and restart stream on new default."""
+        """Detect audio device change or loss and restart stream."""
         if self.state is not AppState.RECORDING:
             return
         if self._audio_recorder is None:
             return
+        device_changed = self._audio_recorder.default_device_changed
         stale = self._audio_recorder.seconds_since_last_callback
-        if stale < self._DEVICE_LOSS_THRESHOLD:
+        if not device_changed and stale < self._DEVICE_LOSS_THRESHOLD:
             return
-        log.warning("No audio callback for %.1fs — attempting stream restart", stale)
-        self._warn_transcript("Audio device lost — reconnecting to default mic")
+        if device_changed:
+            log.warning("Default audio device changed — restarting stream")
+            self._warn_transcript("Audio device changed — switching to new default mic")
+        else:
+            log.warning(
+                "No audio callback for %.1fs — attempting stream restart",
+                stale,
+            )
+            self._warn_transcript("Audio device lost — reconnecting to default mic")
         try:
             self._audio_recorder.restart_stream()
             self._set_status("Mic reconnected")

@@ -71,6 +71,8 @@ class AudioRecorder:
         self._cfg = _cfg
         # Heartbeat: track last callback time to detect device loss
         self._last_callback_time: float = 0.0
+        # Device change detection
+        self._opened_device_id: int | None = None
 
     def _callback(
         self,
@@ -205,6 +207,7 @@ class AudioRecorder:
             dtype="int16",
             callback=self._callback,
         )
+        self._opened_device_id = sd.default.device[0]
 
         with self._lock:
             self._recording = True
@@ -372,6 +375,18 @@ class AudioRecorder:
             return 0.0
         return time.monotonic() - self._last_callback_time
 
+    @property
+    def default_device_changed(self) -> bool:
+        """True if the system default input device differs from open time."""
+        if self._opened_device_id is None:
+            return False
+        try:
+            import sounddevice as sd
+
+            return sd.default.device[0] != self._opened_device_id
+        except Exception:
+            return False
+
     def restart_stream(self) -> None:
         """Close and reopen the audio stream on the current default device."""
         import sounddevice as sd
@@ -386,6 +401,7 @@ class AudioRecorder:
             dtype="int16",
             callback=self._callback,
         )
+        self._opened_device_id = sd.default.device[0]
         self._stream.start()
         self._last_callback_time = time.monotonic()
 
