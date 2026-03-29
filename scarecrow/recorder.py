@@ -6,6 +6,7 @@ import contextlib
 import logging
 import queue
 import threading
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -68,6 +69,8 @@ class AudioRecorder:
         )
         self._writer_thread: threading.Thread | None = None
         self._cfg = _cfg
+        # Heartbeat: track last callback time to detect device loss
+        self._last_callback_time: float = 0.0
 
     def _callback(
         self,
@@ -84,6 +87,7 @@ class AudioRecorder:
 
     def _callback_inner(self, indata, _frames, _time, status):
         """Inner body of PortAudio callback (separated for safety-net wrapping)."""
+        self._last_callback_time = time.monotonic()
         if status:
             status_str = str(status).lower()
             if "input overflow" in status_str:
@@ -360,6 +364,30 @@ class AudioRecorder:
             self._sound_file = None
 
         return self._output_path
+
+    @property
+    def seconds_since_last_callback(self) -> float:
+        """Seconds since the last audio callback. High = device loss."""
+        if self._last_callback_time == 0.0:
+            return 0.0
+        return time.monotonic() - self._last_callback_time
+
+    def restart_stream(self) -> None:
+        """Close and reopen the audio stream on the current default device."""
+        import sounddevice as sd
+
+        if self._stream is not None:
+            self._stream.stop()
+            self._stream.close()
+
+        self._stream = sd.InputStream(
+            samplerate=self._sample_rate,
+            channels=self._channels,
+            dtype="int16",
+            callback=self._callback,
+        )
+        self._stream.start()
+        self._last_callback_time = time.monotonic()
 
     @property
     def sample_rate(self) -> int:

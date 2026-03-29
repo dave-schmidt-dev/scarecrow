@@ -256,10 +256,13 @@ class ScarecrowApp(App[None]):
 
         return True
 
+    _DEVICE_LOSS_THRESHOLD: ClassVar[float] = 3.0  # seconds without callback
+
     def _tick(self) -> None:
         if self._recording_start_time is not None:
             self._elapsed = int(time.monotonic() - self._recording_start_time)
         self._check_recorder_warnings()
+        self._check_device_loss()
         self._sync_info_bar()
 
     def _sync_info_bar(self) -> None:
@@ -332,6 +335,24 @@ class ScarecrowApp(App[None]):
         ):
             self._session_disk_warn_shown = True
             self._warn_transcript("Transcript write failed \u2014 disk may be full")
+
+    def _check_device_loss(self) -> None:
+        """Detect audio device disconnection and restart stream on new default."""
+        if self.state is not AppState.RECORDING:
+            return
+        if self._audio_recorder is None:
+            return
+        stale = self._audio_recorder.seconds_since_last_callback
+        if stale < self._DEVICE_LOSS_THRESHOLD:
+            return
+        log.warning("No audio callback for %.1fs — attempting stream restart", stale)
+        self._warn_transcript("Audio device lost — reconnecting to default mic")
+        try:
+            self._audio_recorder.restart_stream()
+            self._set_status("Mic reconnected")
+        except Exception as exc:
+            log.exception("Failed to restart audio stream")
+            self._set_status(f"Mic reconnect failed: {exc}", error=True)
 
     def _handle_flush(self) -> None:
         """Force-flush the audio buffer immediately."""

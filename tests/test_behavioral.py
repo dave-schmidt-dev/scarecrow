@@ -51,6 +51,7 @@ def _mock_recorder():
     mock.is_recording = True
     mock.is_paused = False
     mock.peak_level = 0.0
+    mock.seconds_since_last_callback = 0.0
     mock.start.return_value = None
     mock.stop.return_value = MagicMock()
     return mock
