@@ -238,7 +238,9 @@ def test_drain_to_silence_drains_at_silence_boundary(
 
     # Should have drained something (loud portion up to or through silence)
     assert result is not None
-    assert len(result) > 0
+    audio, energies = result
+    assert len(audio) > 0
+    assert isinstance(energies, list)
     recorder.stop()
 
 

@@ -74,7 +74,9 @@ sc          # launch Scarecrow (auto-starts recording)
 
 **Keybindings** inside the TUI:
 - `Ctrl+P` — pause / resume (releases microphone while paused)
-- `Ctrl+Q` — quit
+- `Ctrl+Shift+Q` — quick quit (skip summary, still saves transcript + audio)
+- `Ctrl+Q` — quit (full cleanup + summary)
+- `Ctrl+Shift+D` — discard session & quit (moves session to `.discarded/`)
 - `Enter` — submit note (or, at startup, start recording)
 
 **Commands** (type at the start of your note, then press Enter):
@@ -104,36 +106,34 @@ The TUI shows:
 
 ### Shutdown output
 
-On quit (`Ctrl+Q`), Scarecrow prints session metrics to the terminal:
-- Recording duration
-- Word count
-- Session directory path
-- Audio and transcript file sizes
-- "Press Enter to close" prompt (auto-closes after 30s)
+Scarecrow has three quit modes:
 
-On a clean quit, Scarecrow routes shutdown through `app.cleanup_after_exit()` to:
-- stop microphone intake
-- wait for any in-flight batch transcription to finish and capture its text directly from the future
-- drain and transcribe the final buffered audio window
-- abandon the batch executor if a worker times out, ignore late batch callbacks, and continue shutdown
-- shut down the batch executor (non-blocking)
-- compress audio from WAV to FLAC (lossless)
-- flush and close the session transcript file
+| Shortcut | What happens |
+|---|---|
+| `Ctrl+Q` | Full quit — saves everything, compresses audio, generates summary |
+| `Ctrl+Shift+Q` | Quick quit — saves transcript + audio, skips summary |
+| `Ctrl+Shift+D` | Discard — moves session to `.discarded/` (confirmation required) |
 
-Ctrl+C uses the same cleanup path, so the final buffered batch is flushed before the session closes.
+On quit, Scarecrow prints session metrics (duration, word count, file sizes) to the terminal.
+
+Shutdown runs in two phases for a responsive TUI:
+- **Phase 1** (in-TUI, fast): stop microphone, flush final audio batch, close session files
+- **Phase 2** (post-TUI, terminal output): compress WAV→FLAC, generate summary
+
+Ctrl+C uses the same cleanup path as Ctrl+Q.
 
 ### Auto-summarization
 
-When a session ends, Scarecrow generates `summary.md` in the session directory using a local LLM (Nemotron-3-Nano via llama-server). The summary includes:
+When a session ends, Scarecrow generates `summary.md` in the session directory using a local LLM (Nemotron-3-Nano in-process). The summary includes:
 - Prose summary of the transcript with `/note` entries woven in naturally
 - `/task` entries listed as a Markdown checklist at the bottom
-- Token and word count footer for context window tuning
+- Footer with model name, word counts, token usage, and summarization time
 
 `/context` entries provide background information (names, spelling, domain terms) that improves summary quality without appearing in the output.
 
 Summarization requires a Nemotron GGUF model in the HuggingFace cache and `llama-cpp-python` (installed automatically). The model is loaded in-process — no server needed.
 
-If summarization fails, `summary.md` contains error details and a retry command:
+If the model produces only reasoning with no structured output, the summarizer automatically retries with a forced prefix. If both attempts fail, `summary.md` contains error details and a retry command:
 ```bash
 python3 scripts/resummarize.py ~/recordings/<session-dir>
 ```
@@ -150,6 +150,8 @@ The parakeet model is preloaded during the prepare phase before the TUI launches
 
 Scarecrow uses parakeet-mlx as its sole transcription engine. A 16kHz audio stream is buffered and fed to the model using VAD-based chunking — audio drains at natural speech pauses (750ms+ silence) with a 30-second hard max for continuous speech, polled every 150ms. Audio capture, transcription, and the TUI all run in a single process.
 
+**Hallucination prevention:** Before sending audio to Parakeet, the VAD checks the speech-frame ratio of drained audio — if fewer than 15% of chunks contain speech energy (`VAD_MIN_SPEECH_RATIO`), the buffer is silently dropped. After transcription, a post-inference filter catches repeated-word hallucinations (e.g., "the the the the").
+
 Inline notes are typed in the notes pane and submitted with Enter. The tag is determined by an optional prefix at the start of the text: `/task` or `/t` for `[TASK]`, or no prefix for `[NOTE]`. Each note is written to the transcript pane and the transcript file with a wall-clock timestamp and tag prefix. Notes work in any app state (recording, paused, or idle).
 
 Transcript dividers show the start time of each audio batch window (not the time the model finishes processing). Dividers appear at most every 60 seconds. Consecutive batch results are joined into flowing paragraphs between dividers.
@@ -161,7 +163,7 @@ Each recording session creates a timestamped directory:
 ```
 recordings/
   2026-03-24_07-48-36/
-    audio.wav            # full recording (16kHz PCM16)
+    audio.flac           # full recording, lossless FLAC (compressed from WAV on shutdown)
     transcript.jsonl     # JSON Lines transcript — one event per line
     summary.md           # LLM-generated session summary (auto-created on shutdown)
 ```
@@ -184,7 +186,7 @@ Event types: `session_start`, `session_end`, `transcript`, `divider`, `pause`, `
 
 ### Audio format
 
-Audio is recorded and kept as WAV (raw PCM in the audio callback, zero CPU overhead). The session retains `audio.wav` after shutdown. Lossless FLAC compression (~2:1 size reduction, ~0.9 MB/min) is available via `Session.compress_audio()` but is currently disabled to allow audio quality auditing.
+Audio is recorded as WAV (raw PCM in the audio callback, zero CPU overhead). On shutdown, WAV is automatically compressed to lossless FLAC (~2:1 size reduction, ~0.9 MB/min) and the WAV is deleted.
 
 ## Development
 

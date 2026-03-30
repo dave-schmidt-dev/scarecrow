@@ -37,6 +37,9 @@ class Config:
     VAD_MIN_SILENCE_MS: int = 750  # consecutive silence before triggering drain
     VAD_MAX_BUFFER_SECONDS: int = 30  # hard drain if no silence found by this point
     VAD_POLL_INTERVAL_MS: int = 150  # how often to check for silence
+    # Minimum fraction of chunks with speech before sending to Parakeet.
+    # TODO: benchmark via bench_librispeech.py
+    VAD_MIN_SPEECH_RATIO: float = 0.15
 
     # Writer thread queue size (bounded to prevent unbounded memory growth)
     # ~12.5 seconds of audio at 48kHz with 1024-sample blocks
@@ -87,6 +90,7 @@ VAD_SILENCE_THRESHOLD = config.VAD_SILENCE_THRESHOLD
 VAD_MIN_SILENCE_MS = config.VAD_MIN_SILENCE_MS
 VAD_MAX_BUFFER_SECONDS = config.VAD_MAX_BUFFER_SECONDS
 VAD_POLL_INTERVAL_MS = config.VAD_POLL_INTERVAL_MS
+VAD_MIN_SPEECH_RATIO = config.VAD_MIN_SPEECH_RATIO
 WRITER_QUEUE_SIZE = config.WRITER_QUEUE_SIZE
 DIVIDER_INTERVAL = config.DIVIDER_INTERVAL
 DEFAULT_RECORDINGS_DIR = config.DEFAULT_RECORDINGS_DIR

@@ -36,6 +36,7 @@ def _mock_recorder():
     mock.peak_level = 0.0
     mock.start.return_value = None
     mock.stop.return_value = MagicMock()
+    mock.drain_to_silence.return_value = None
     return mock
 
 

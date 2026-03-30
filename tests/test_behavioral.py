@@ -54,6 +54,7 @@ def _mock_recorder():
     mock.seconds_since_last_callback = 0.0
     mock.start.return_value = None
     mock.stop.return_value = MagicMock()
+    mock.drain_to_silence.return_value = None
     return mock
 
 
@@ -1381,7 +1382,10 @@ async def test_batch_transcription_triggered_at_interval(
 ) -> None:
     """_vad_transcribe must call _submit_batch_transcription when RECORDING."""
     mock_recorder = _mock_recorder()
-    mock_recorder.drain_to_silence.return_value = np.zeros(16000, dtype=np.float32)
+    mock_recorder.drain_to_silence.return_value = (
+        np.zeros(16000, dtype=np.float32),
+        [0.05] * 10,
+    )
     mock_recorder_cls.return_value = mock_recorder
     mock_session_cls.return_value = MagicMock()
 
@@ -1422,7 +1426,10 @@ async def test_batch_transcription_not_triggered_before_interval(
 ) -> None:
     """_submit_batch_transcription must NOT be called without _vad_transcribe firing."""
     mock_recorder = _mock_recorder()
-    mock_recorder.drain_to_silence.return_value = np.zeros(16000, dtype=np.float32)
+    mock_recorder.drain_to_silence.return_value = (
+        np.zeros(16000, dtype=np.float32),
+        [0.05] * 10,
+    )
     mock_recorder_cls.return_value = mock_recorder
     mock_session_cls.return_value = MagicMock()
 

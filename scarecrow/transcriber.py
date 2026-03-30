@@ -86,6 +86,12 @@ class Transcriber:
         )
         return result.text.strip() if result.text else ""
 
+    @staticmethod
+    def _is_hallucination(text: str) -> bool:
+        """Detect repeated-token hallucination (e.g., 'the the the the')."""
+        words = text.split()
+        return len(words) >= 3 and len(set(w.lower() for w in words)) == 1
+
     def transcribe_batch(
         self,
         audio: np.ndarray,
@@ -108,6 +114,9 @@ class Transcriber:
                 text = self._transcribe_parakeet(audio)
                 # Success — reset failure tracking
                 self._consecutive_failures = 0
+                if text and self._is_hallucination(text):
+                    log.debug("Filtered hallucination: %r", text)
+                    return ""
                 if (
                     text
                     and emit_callback

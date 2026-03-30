@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+import time
 from pathlib import Path
 
 from scarecrow import config
@@ -96,6 +97,8 @@ _IGNORED_EVENT_TYPES = frozenset(
 _SYSTEM_PROMPT_BASE = (
     "Summarize the transcript below. Use ONLY information explicitly stated "
     "in the transcript. Fix obvious speech-to-text typos for names and terms.\n\n"
+    "Output ONLY the structured summary below — no preamble, no reasoning, "
+    "no thinking. Start directly with ## Summary.\n\n"
     "Use this exact output structure:\n\n"
     "## Summary\n"
     "1-3 short paragraphs: what was discussed, decided, or accomplished.\n\n"
@@ -112,7 +115,8 @@ _SYSTEM_PROMPT_BASE = (
     "- [NOTE]: User observations. Weave into Summary or Key Points naturally.\n"
     "- [TASK]: Copy verbatim into Action Items.\n"
     "- [CONTEXT]: Spelling hints and background. Use to fix names and terms "
-    "only. Never surface as standalone content."
+    "only. Never surface as standalone content.\n\n"
+    "Output ONLY the three sections above. Do not add any other sections."
 )
 
 
@@ -170,6 +174,34 @@ def _build_prompt(events: list[dict]) -> tuple[str, str]:
     return system_prompt, user_content
 
 
+def _strip_reasoning(text: str) -> str:
+    """Remove chain-of-thought reasoning from Nemotron-Nano output.
+
+    The model may wrap reasoning in <think>...</think> tags, or emit
+    free-form reasoning before the actual structured summary.  We try
+    several strategies in order:
+      1. Strip <think>…</think> blocks (may appear at the start).
+      2. Keep only text from the first ## heading onward.
+      3. If neither works, the model produced only reasoning — return
+         an error placeholder so the user knows to re-run.
+    """
+    import re
+
+    # 1. Strip <think>…</think> blocks (greedy within each block).
+    stripped = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    if stripped:
+        text = stripped
+
+    # 2. Keep from first ## heading onward.
+    heading_match = re.search(r"(?m)^## ", text)
+    if heading_match:
+        return text[heading_match.start() :]
+
+    # 3. No heading found — model produced only reasoning.
+    log.warning("Summarizer output contained no ## headings; treating as failed")
+    return ""
+
+
 def _generate(
     gguf_path: Path,
     system_prompt: str,
@@ -190,6 +222,7 @@ def _generate(
         verbose=False,
     )
     try:
+        # First try chat completion.
         response = llm.create_chat_completion(
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -198,17 +231,45 @@ def _generate(
             max_tokens=config.SUMMARIZER_OUTPUT_BUDGET,
             temperature=0.3,
         )
-        text = response["choices"][0]["message"]["content"]
-        # Nemotron-Nano may emit chain-of-thought reasoning before the
-        # actual summary. Strip everything before the first ## heading.
-        import re
-
-        heading_match = re.search(r"(?m)^## ", text)
-        if heading_match:
-            text = text[heading_match.start() :]
+        raw_text = response["choices"][0]["message"]["content"]
+        log.debug("Raw model output (first 500 chars): %s", raw_text[:500])
+        text = _strip_reasoning(raw_text)
         usage = response.get("usage", {})
         total_tokens = usage.get("total_tokens", 0)
-        return text, total_tokens
+
+        if text:
+            return text, total_tokens
+
+        # Model produced only reasoning / meta-commentary.  Retry with
+        # raw completion and a forced prefix so it cannot preamble.
+        log.warning("Chat completion produced no summary; retrying with forced prefix")
+        prefix = "## Summary\n\n"
+        prompt = (
+            f"<|system|>\n{system_prompt}\n"
+            f"<|user|>\n{user_content}\n"
+            f"<|assistant|>\n{prefix}"
+        )
+        raw = llm(
+            prompt,
+            max_tokens=config.SUMMARIZER_OUTPUT_BUDGET,
+            temperature=0.1,
+            stop=["<|end|>", "<|user|>", "<|system|>"],
+        )
+        raw_text2 = raw["choices"][0]["text"]
+        log.debug("Retry raw output (first 500 chars): %s", raw_text2[:500])
+        text = _strip_reasoning(prefix + raw_text2)
+        usage2 = raw.get("usage", {})
+        total_tokens = usage2.get("total_tokens", total_tokens)
+        if text:
+            return text, total_tokens
+
+        # Both attempts failed — return error placeholder.
+        fail_msg = (
+            "## Summary\n\n"
+            "*Auto-summarization produced only reasoning with no structured output. "
+            "Re-run with `scripts/resummarize.py` to retry.*\n"
+        )
+        return fail_msg, total_tokens
     finally:
         del llm
 
@@ -266,9 +327,11 @@ def summarize_session(
         model_name = _model_name_from_gguf(gguf)
         log.info("Loading %s (ctx %d) for summarization...", model_name, ctx_size)
 
+        t0 = time.monotonic()
         summary_text, total_tokens = _generate(
             gguf, system_prompt, user_content, ctx_size
         )
+        summarize_seconds = time.monotonic() - t0
 
         transcript_words = len(user_content.split())
         summary_words = len(summary_text.split())
@@ -279,7 +342,8 @@ def summarize_session(
             f"{transcript_words} words transcribed, "
             f"summarized in {summary_words} words · "
             f"{total_tokens} tokens used · "
-            f"ctx {ctx_size}*\n"
+            f"ctx {ctx_size} · "
+            f"{summarize_seconds:.1f}s*\n"
         )
         summary_text += footer
 

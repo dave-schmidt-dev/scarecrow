@@ -2,6 +2,19 @@
 
 Bug entries are inline under their date heading. A squashed bug must reference a regression test.
 
+## 2026-03-30 (quit flow overhaul, hallucination prevention, summarizer fixes)
+
+- **Three quit modes:** `Ctrl+Q` (full quit with summary), `Ctrl+Shift+Q` (quick quit — skip summary, still saves transcript + compressed audio), `Ctrl+Shift+D` (discard session — moves to `.discarded/` with double-press confirmation + 3s auto-cancel).
+- **Phase 1/Phase 2 shutdown split:** TUI exits immediately after fast cleanup (stop recorder, flush audio, close files). Slow steps (FLAC compression, LLM summarization) run in `__main__.py` with terminal progress output. Eliminates the frozen-TUI hang during shutdown.
+- **Re-enabled FLAC compression on shutdown:** WAV→FLAC happens automatically in Phase 2. WAV is deleted after successful compression.
+- **Speech-frame-ratio gate:** `_vad_transcribe()` now checks what fraction of drained audio chunks contain speech energy. Buffers with <15% speech frames (`VAD_MIN_SPEECH_RATIO = 0.15`) are dropped before reaching Parakeet. Uses the same per-chunk RMS energies already computed by `drain_to_silence()`.
+- **`drain_to_silence()` returns chunk energies:** Return type changed from `np.ndarray | None` to `tuple[np.ndarray, list[float]] | None`. The energies list contains per-chunk RMS values for the drained audio, avoiding redundant recomputation.
+- **Post-inference hallucination filter:** `Transcriber._is_hallucination()` catches repeated-word patterns (e.g., "the the the the") after Parakeet inference. Conservative: only filters 3+ consecutive identical words, passes all real short utterances.
+- **Summarizer forced-prefix retry:** When Nemotron produces only meta-reasoning (no `## Summary` heading), the summarizer automatically retries using the raw completion API with `## Summary\n\n` as a forced prefix. Falls back to error placeholder only if both attempts fail.
+- **Summary prompt: no extra sections:** Added "Output ONLY the three sections above" to prevent the model from inventing `## Notes` or other sections.
+- **Summary footer includes timing:** Footer now reports summarization wall-clock time (e.g., `52.3s`) alongside model name, word counts, and token usage.
+- **New config:** `VAD_MIN_SPEECH_RATIO: float = 0.15` — minimum fraction of chunks with speech energy before sending to Parakeet. TODO: benchmark via `bench_librispeech.py`.
+
 ## 2026-03-29 (code review: simplify infra, in-process LLM, model upgrade)
 
 - **Fix PortAudio segfaults properly:** Added `atexit` handler in `tests/conftest.py` to terminate PortAudio before interpreter teardown. Removed SIGSEGV-as-success hack and per-node behavioral test isolation from the test runner.

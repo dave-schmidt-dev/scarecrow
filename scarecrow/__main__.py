@@ -91,16 +91,25 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        print("\n  Shutting down…", flush=True)
-        try:
-            app.cleanup_after_exit()
-        except Exception:
-            logging.getLogger(__name__).exception("Finally: failed to clean up app")
-        if app._shutdown_summary:
-            print(app._shutdown_summary, flush=True)
-        if getattr(app, "_summary_path", None):
-            print(f"  Summary: {app._summary_path}", flush=True)
-        print("  Done.", flush=True)
+        if getattr(app, "_discard_mode", False):
+            print("\n  Session discarded.", flush=True)
+            if app._shutdown_summary:
+                print(app._shutdown_summary, flush=True)
+        else:
+            print("\n  Shutting down…", flush=True)
+            try:
+                app.cleanup_after_exit()  # Phase 1 safety net (no-op if already ran)
+            except Exception:
+                logging.getLogger(__name__).exception("Phase 1 cleanup failed")
+            try:
+                app.post_exit_cleanup()  # Phase 2: compress + maybe summarize
+            except Exception:
+                logging.getLogger(__name__).exception("Phase 2 cleanup failed")
+            if app._shutdown_summary:
+                print(app._shutdown_summary, flush=True)
+            if getattr(app, "_summary_path", None):
+                print(f"  Summary: {app._summary_path}", flush=True)
+            print("  Done.", flush=True)
         print(flush=True)
         print("  Press Enter to close (auto-close in 30s)…", flush=True)
         _wait_for_enter_or_timeout(30)

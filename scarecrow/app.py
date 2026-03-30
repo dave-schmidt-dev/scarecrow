@@ -141,7 +141,9 @@ class ScarecrowApp(App[None]):
 
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("ctrl+p", "pause", "Pause/Resume", show=True),
+        Binding("ctrl+shift+q", "quick_quit", "Quick Quit", show=True),
         Binding("ctrl+q", "quit", "Quit", show=True),
+        Binding("ctrl+shift+d", "discard_quit", "Discard", show=False),
     ]
 
     state: reactive[AppState] = reactive(AppState.IDLE)
@@ -179,6 +181,11 @@ class ScarecrowApp(App[None]):
         # Paragraph accumulator: join consecutive batch results on one block
         self._current_paragraph: str = ""
         self._paragraph_line_count: int = 0
+        # Quit-flow state
+        self._skip_summary: bool = False
+        self._discard_mode: bool = False
+        self._completed_session: Session | None = None
+        self._awaiting_discard_confirm: bool = False
 
     def compose(self) -> ComposeResult:
         yield InfoBar(id="info-bar")
@@ -433,7 +440,9 @@ class ScarecrowApp(App[None]):
             "\n"
             "[bold]Keybindings:[/bold]\n"
             "  Ctrl+P              Pause / resume\n"
+            "  Ctrl+Shift+Q        Quick Quit (skip summary)\n"
             "  Ctrl+Q              Quit\n"
+            "  Ctrl+Shift+D        Discard session & quit\n"
             "  Enter               Submit note"
         )
         with contextlib.suppress(NoMatches):
@@ -677,9 +686,26 @@ class ScarecrowApp(App[None]):
         if self._batch_futures:
             return
 
-        audio = self._audio_recorder.drain_to_silence()
-        if audio is None or len(audio) == 0:
+        result = self._audio_recorder.drain_to_silence()
+        if result is None:
             return
+        audio, chunk_energies = result
+        if len(audio) == 0:
+            return
+
+        # Speech-frame-ratio gate: skip if too few chunks have speech.
+        if chunk_energies:
+            speech_chunks = sum(
+                1 for e in chunk_energies if e >= self._cfg.VAD_SILENCE_THRESHOLD
+            )
+            speech_ratio = speech_chunks / len(chunk_energies)
+            if speech_ratio < self._cfg.VAD_MIN_SPEECH_RATIO:
+                log.debug(
+                    "Skipping low-speech buffer (%.0f%% < %.0f%%)",
+                    speech_ratio * 100,
+                    self._cfg.VAD_MIN_SPEECH_RATIO * 100,
+                )
+                return
 
         batch_elapsed = self._batch_window_start
         self._batch_window_start = self._elapsed
@@ -842,6 +868,55 @@ class ScarecrowApp(App[None]):
         self._set_status("Shutting down…")
         self.set_timer(0.3, self._deferred_quit)
 
+    def action_quick_quit(self) -> None:
+        self._skip_summary = True
+        self._shutdown_summary = self._collect_shutdown_metrics()
+        self._set_status("Shutting down (no summary)…")
+        self.set_timer(0.3, self._deferred_quit)
+
+    def action_discard_quit(self) -> None:
+        if not self._awaiting_discard_confirm:
+            self._awaiting_discard_confirm = True
+            self._set_status(
+                "Discard session? Press Ctrl+Shift+D again (3s)…",
+                error=True,
+            )
+            self._discard_confirm_timer = self.set_timer(
+                3.0, self._cancel_discard_confirm
+            )
+            return
+        # Confirmed — execute discard
+        self._awaiting_discard_confirm = False
+        self._discard_confirm_timer.stop()
+        self._execute_discard_quit()
+
+    def _cancel_discard_confirm(self) -> None:
+        self._awaiting_discard_confirm = False
+        self._set_status("")
+
+    def _execute_discard_quit(self) -> None:
+        session_dir = self._session.session_dir if self._session else None
+        self._shutdown_summary = self._collect_shutdown_metrics()
+
+        # Phase 1 with discard flag — skips flush/metrics/end-header,
+        # still does hardware teardown + session finalize (closes handles).
+        self.cleanup_after_exit(include_ui=True, discard=True)
+
+        # Soft-delete: move session to .discarded/ subfolder.
+        if session_dir is not None and session_dir.exists():
+            discarded_dir = session_dir.parent / ".discarded"
+            discarded_dir.mkdir(exist_ok=True)
+            dest = discarded_dir / session_dir.name
+            try:
+                session_dir.rename(dest)
+                log.info("Discarded session → %s", dest)
+            except Exception:
+                log.exception("Failed to move session to .discarded/")
+
+        self._discard_mode = True
+        self._completed_session = None  # prevent Phase 2
+        self.exit()
+
     def _collect_shutdown_metrics(self) -> str:
         h = self._elapsed // 3600
         m = (self._elapsed % 3600) // 60
@@ -870,13 +945,17 @@ class ScarecrowApp(App[None]):
         return "\n".join(lines)
 
     def _deferred_quit(self) -> None:
+        if hasattr(self, "_discard_confirm_timer"):
+            self._discard_confirm_timer.stop()
         self._stop_recording()
         self.exit()
 
     def _stop_recording(self) -> None:
         self.cleanup_after_exit(include_ui=True)
 
-    def cleanup_after_exit(self, *, include_ui: bool = False) -> None:
+    def cleanup_after_exit(
+        self, *, include_ui: bool = False, discard: bool = False
+    ) -> None:
         with self._shutdown_lock:
             has_recording_state = self._current_state() in (
                 AppState.RECORDING,
@@ -895,8 +974,19 @@ class ScarecrowApp(App[None]):
             if not needs_cleanup:
                 return
 
-            # Capture session_dir before any step can clear _session.
-            session_dir = self._session.session_dir if self._session else None
+            # Capture session reference before any step can clear _session.
+            if self._session is not None:
+                self._completed_session = self._session
+
+            # When discarding, prevent in-flight batch callbacks from
+            # writing to a session we're about to move.
+            if discard:
+                self._ignore_batch_results = True
+
+            # Steps skipped when discarding (data we're about to throw away).
+            skip_on_discard = frozenset(
+                {"flush_audio", "session_metrics", "session_end_header"}
+            )
 
             steps = [
                 ("pause_timers", self._cleanup_pause_timers),
@@ -910,19 +1000,48 @@ class ScarecrowApp(App[None]):
                 ),
                 ("session_metrics", self._cleanup_session_metrics),
                 ("session_end_header", self._cleanup_session_end_header),
-                ("compress_audio", self._cleanup_compress_audio),
                 (
                     "session_finalize",
                     lambda: self._cleanup_session_finalize(include_ui),
                 ),
-                ("auto_summarize", lambda: self._cleanup_auto_summarize(session_dir)),
                 ("reset_state", self._cleanup_reset_state),
             ]
             for name, step in steps:
+                if discard and name in skip_on_discard:
+                    continue
                 try:
                     step()
                 except Exception:
                     log.exception("Cleanup step %s failed", name)
+
+    def post_exit_cleanup(self) -> None:
+        """Phase 2 cleanup: compression and summarization. Runs after TUI exit."""
+        session = self._completed_session
+        if session is None:
+            return
+        session_dir = session.session_dir
+
+        print("  Compressing audio…", flush=True)
+        try:
+            session.compress_audio()
+        except Exception:
+            log.exception("Failed to compress audio")
+
+        if not self._skip_summary:
+            print("  Generating summary…", flush=True)
+            try:
+                from scarecrow.summarizer import summarize_session
+
+                result = summarize_session(
+                    session_dir, obsidian_dir=self._cfg.OBSIDIAN_VAULT_DIR
+                )
+                if result:
+                    log.info("Summary: %s", result)
+                    self._summary_path = result
+            except Exception:
+                log.exception("Failed to generate summary")
+        else:
+            print("  Summary skipped (quick quit).", flush=True)
 
     def _cleanup_pause_timers(self) -> None:
         if hasattr(self, "_tick_timer"):
@@ -1009,10 +1128,6 @@ class ScarecrowApp(App[None]):
             return
         self._session.write_end_header()
 
-    def _cleanup_compress_audio(self) -> None:
-        if self._session is not None:
-            self._session.compress_audio()
-
     def _cleanup_session_finalize(self, include_ui: bool) -> None:
         if self._session is None:
             return
@@ -1024,19 +1139,6 @@ class ScarecrowApp(App[None]):
                 self._show_error(f"Could not finalize session: {exc}")
         finally:
             self._session = None
-
-    def _cleanup_auto_summarize(self, session_dir) -> None:
-        if session_dir is None:
-            return
-        print("  Generating summary…", flush=True)
-        from scarecrow.summarizer import summarize_session
-
-        result = summarize_session(
-            session_dir, obsidian_dir=self._cfg.OBSIDIAN_VAULT_DIR
-        )
-        if result:
-            log.info("Summary: %s", result)
-            self._summary_path = result
 
     def _cleanup_reset_state(self) -> None:
         try:

@@ -250,7 +250,7 @@ class AudioRecorder:
         silence_threshold: float | None = None,
         min_silence_ms: int | None = None,
         max_buffer_seconds: float | None = None,
-    ) -> np.ndarray | None:
+    ) -> tuple[np.ndarray, list[float]] | None:
         """Drain audio up to the most recent silence boundary.
 
         Scans chunk energies from the end to find a run of consecutive
@@ -258,7 +258,9 @@ class AudioRecorder:
         of that silence. If no silence is found and the buffer exceeds
         max_buffer_seconds, does a hard drain of everything.
 
-        Returns None if the buffer is too short to act on.
+        Returns ``(audio, chunk_energies)`` where *chunk_energies* are the
+        per-chunk RMS values for the drained audio, or ``None`` if the
+        buffer is too short to act on.
         """
         if silence_threshold is None:
             silence_threshold = self._cfg.VAD_SILENCE_THRESHOLD
@@ -311,18 +313,20 @@ class AudioRecorder:
                 # we don't clip words that fade into the silence gap)
                 drain_end = min(silence_end + consecutive_silent, n_chunks)
                 chunks = self._audio_chunks[:drain_end]
+                energies = list(self._chunk_energies[:drain_end])
                 self._audio_chunks = self._audio_chunks[drain_end:]
                 self._chunk_energies = self._chunk_energies[drain_end:]
             elif total_seconds >= max_buffer_seconds:
                 # Hard drain — continuous speech exceeded max
                 chunks = self._audio_chunks.copy()
+                energies = list(self._chunk_energies)
                 self._audio_chunks.clear()
                 self._chunk_energies.clear()
             else:
                 # Not enough silence yet, keep accumulating
                 return None
 
-        return self._finalize_audio(chunks)
+        return self._finalize_audio(chunks), energies
 
     @property
     def buffer_seconds(self) -> float:

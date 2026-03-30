@@ -84,6 +84,7 @@ def test_main_finally_uses_app_cleanup_hook() -> None:
     fake_transcriber.prepare.return_value = None
     fake_app = MagicMock()
     fake_app.run.side_effect = KeyboardInterrupt()
+    fake_app._discard_mode = False
     fake_app._shutdown_summary = ""
 
     with (
@@ -94,6 +95,7 @@ def test_main_finally_uses_app_cleanup_hook() -> None:
         __main__.main()
 
     fake_app.cleanup_after_exit.assert_called_once_with()
+    fake_app.post_exit_cleanup.assert_called_once_with()
 
 
 def test_main_calls_preload_batch_model() -> None:

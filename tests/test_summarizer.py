@@ -16,6 +16,7 @@ from scarecrow.summarizer import (
     _estimate_tokens,
     _generate,
     _model_name_from_gguf,
+    _strip_reasoning,
     _write_error_summary,
     summarize_session,
 )
@@ -171,6 +172,32 @@ def test_build_prompt_session_name_as_context() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Reasoning Stripping
+# ---------------------------------------------------------------------------
+
+
+def test_strip_reasoning_removes_think_tags() -> None:
+    text = "<think>Let me analyze this...</think>\n## Summary\nHello world"
+    assert _strip_reasoning(text) == "## Summary\nHello world"
+
+
+def test_strip_reasoning_keeps_heading_after_freeform_reasoning() -> None:
+    text = "We need to think about this.\nOkay so...\n## Summary\nResult"
+    assert _strip_reasoning(text) == "## Summary\nResult"
+
+
+def test_strip_reasoning_returns_empty_when_no_headings() -> None:
+    text = "Just a bunch of reasoning with no structure at all."
+    result = _strip_reasoning(text)
+    assert result == ""
+
+
+def test_strip_reasoning_preserves_clean_output() -> None:
+    text = "## Summary\nGood summary\n\n## Key Points\n- Point 1"
+    assert _strip_reasoning(text) == text
+
+
+# ---------------------------------------------------------------------------
 # In-Process Generation (mocked)
 # ---------------------------------------------------------------------------
 
@@ -181,14 +208,14 @@ def test_generate_loads_model_and_returns_text(tmp_path: Path) -> None:
 
     mock_llm = MagicMock()
     mock_llm.create_chat_completion.return_value = {
-        "choices": [{"message": {"content": "Generated summary"}}],
+        "choices": [{"message": {"content": "## Summary\nGenerated summary"}}],
         "usage": {"total_tokens": 300},
     }
 
     with patch("llama_cpp.Llama", return_value=mock_llm) as mock_cls:
         text, tokens = _generate(gguf, "system prompt", "user content", 8192)
 
-    assert text == "Generated summary"
+    assert text == "## Summary\nGenerated summary"
     assert tokens == 300
     mock_cls.assert_called_once_with(
         model_path=str(gguf),
