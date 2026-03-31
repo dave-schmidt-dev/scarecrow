@@ -2,7 +2,22 @@
 
 Bug entries are inline under their date heading. A squashed bug must reference a regression test.
 
-## 2026-03-30 (system audio capture via BlackHole)
+## 2026-03-31 (dual-channel transcription, echo filter, mute controls)
+
+- **System audio transcription (Phase 2):** System audio captured via BlackHole is now transcribed through Parakeet alongside the mic. Uses the same single-threaded executor (mic priority — sys audio buffers when executor is busy). Sys transcripts display with a dim `◁` prefix for visual separation.
+- **Echo filter:** Mic transcripts that duplicate recent sys audio are automatically suppressed using Jaccard word-set similarity (60% threshold, 15s window). Prevents duplicate transcripts when not using headphones.
+- **Per-source mute:** `Ctrl+M` mutes/unmutes mic, `Ctrl+Shift+S` mutes/unmutes sys audio. InfoBar shows `MUTED` label. Global pause (Ctrl+P) respects mute state on resume.
+- **Auto audio routing:** Scarecrow automatically switches the default output to "Scarecrow Output" (Multi-Output Device) on startup and restores the original output on exit. Volume controls remain available when not in Scarecrow. Requires one-time setup of "Scarecrow Output" in Audio MIDI Setup.
+- **Sys audio on by default:** `--sys-audio` flag removed (now the default). Use `--no-sys-audio` to disable. Legacy `--sys-audio` flag silently ignored.
+- **Sys audio VAD tuning:** Lower silence threshold (0.003 vs mic's 0.01), 1500ms min silence (vs 750ms), 5s min buffer before draining, speech ratio gate disabled. Produces coherent sentence-length segments from clean digital audio.
+- **JSONL `source` field:** Transcript events now include `"source": "mic"` or `"source": "sys"` (optional, backward compatible).
+- **Paragraph freeze fix:** Switching between mic and sys sources no longer causes duplicate text blocks in the RichLog.
+- **New module:** `scarecrow/echo_filter.py` — transcript-level echo suppression.
+- **New config:** `SYS_VAD_SILENCE_THRESHOLD`, `SYS_VAD_MIN_SILENCE_MS`, `SYS_VAD_MIN_SPEECH_RATIO`.
+- **Audio routing rewrite:** `audio_routing.py` simplified from ephemeral aggregate creation (broken on macOS 26) to persistent device switching via `activate_scarecrow_output()`/`restore_output()`.
+- **22 new tests** covering drain methods, stereo downmix, RMS normalization, transcriber source dispatch, JSONL schema, echo filter.
+
+
 
 - **System audio recording (Phase 1):** New `--sys-audio` flag enables recording system audio (BlackHole) to a separate `audio_sys.wav` alongside the mic recording. Uses an independent `SystemAudioCapture` class with its own PortAudio stream, writer thread, and peak meter — zero modifications to the existing AudioRecorder or transcription pipeline.
 - **Automatic audio routing via CoreAudio:** On `--sys-audio`, Scarecrow creates a private Multi-Output Device (via `AudioHardwareCreateAggregateDevice` ctypes) that routes system audio to both speakers and BlackHole. No manual Audio MIDI Setup needed. Restored on shutdown with atexit safety net.

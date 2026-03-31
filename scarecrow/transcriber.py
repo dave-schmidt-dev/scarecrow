@@ -27,6 +27,7 @@ class TranscriberBindings:
     """Callbacks for UI/runtime integration."""
 
     on_batch_result: BatchCallback | None = None
+    on_sys_batch_result: BatchCallback | None = None
     on_error: ErrorCallback | None = None
 
 
@@ -97,6 +98,7 @@ class Transcriber:
         audio: np.ndarray,
         batch_elapsed: int,
         *,
+        source: str = "mic",
         emit_callback: bool = True,
         max_retries: int | None = None,
     ) -> str | None:
@@ -107,6 +109,9 @@ class Transcriber:
         (defaults to _MAX_RETRIES). Pass max_retries=0 to skip retries, e.g.
         during shutdown. The normal executor-driven path still emits the
         callback so the UI updates via call_from_thread.
+
+        *source* selects which callback to fire: ``"mic"`` dispatches to
+        ``on_batch_result``, ``"sys"`` to ``on_sys_batch_result``.
         """
         retries = max_retries if max_retries is not None else _MAX_RETRIES
         for attempt in range(retries + 1):
@@ -117,12 +122,14 @@ class Transcriber:
                 if text and self._is_hallucination(text):
                     log.debug("Filtered hallucination: %r", text)
                     return ""
-                if (
-                    text
-                    and emit_callback
-                    and self._bindings.on_batch_result is not None
-                ):
-                    self._bindings.on_batch_result(text, batch_elapsed)
+                if text and emit_callback:
+                    if (
+                        source == "sys"
+                        and self._bindings.on_sys_batch_result is not None
+                    ):
+                        self._bindings.on_sys_batch_result(text, batch_elapsed)
+                    elif self._bindings.on_batch_result is not None:
+                        self._bindings.on_batch_result(text, batch_elapsed)
                 return text if text else ""
             except Exception:
                 log.exception(

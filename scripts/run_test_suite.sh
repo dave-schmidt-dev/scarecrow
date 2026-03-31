@@ -25,6 +25,7 @@ run_pytest() {
 # --- Run all test files in parallel ---
 TEST_FILES=(
   tests/test_app.py
+  tests/test_echo_filter.py
   tests/test_behavioral.py
   tests/test_integration.py
   tests/test_jsonl_schema.py

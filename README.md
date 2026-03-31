@@ -69,8 +69,8 @@ alias sc="/path/to/scarecrow/.venv/bin/scarecrow"
 ## Usage
 
 ```bash
-sc                # launch Scarecrow (auto-starts recording)
-sc --sys-audio    # launch with system audio capture (requires BlackHole)
+sc                   # launch Scarecrow (auto-starts recording + sys audio)
+sc --no-sys-audio    # launch without system audio capture
 ```
 
 **Keybindings** inside the TUI:
@@ -157,7 +157,7 @@ Inline notes are typed in the notes pane and submitted with Enter. The tag is de
 
 Transcript dividers show the start time of each audio batch window (not the time the model finishes processing). Dividers appear at most every 60 seconds. Consecutive batch results are joined into flowing paragraphs between dividers.
 
-**System audio capture (opt-in):** With `--sys-audio`, Scarecrow opens a second audio stream on BlackHole (or any named device via `SYSTEM_AUDIO_DEVICE` config) and records it to `audio_sys.wav`. This captures the other side of calls/meetings. The system audio stream is independent of the transcription pipeline — mic-only VAD and Parakeet continue unchanged. The InfoBar shows dual level meters (mic + sys) when active. Compressed to FLAC on shutdown alongside the mic recording.
+**System audio capture (on by default):** Scarecrow captures system audio via BlackHole and transcribes both channels through Parakeet. On startup, the default output switches to "Scarecrow Output" (a Multi-Output Device routing audio to speakers + BlackHole); on exit, the original output is restored. Mic transcripts display normally; sys transcripts show with a dim `◁` prefix. An echo filter suppresses mic duplicates when not using headphones. Per-source mute: `Ctrl+M` (mic), `Ctrl+Shift+S` (sys). Requires one-time setup of "Scarecrow Output" in Audio MIDI Setup. Use `--no-sys-audio` to disable.
 
 ## Session files
 
@@ -167,7 +167,7 @@ Each recording session creates a timestamped directory:
 recordings/
   2026-03-24_07-48-36/
     audio.flac           # mic recording, lossless FLAC (compressed from WAV on shutdown)
-    audio_sys.flac       # system audio (BlackHole) — only with --sys-audio
+    audio_sys.flac       # system audio (BlackHole)
     transcript.jsonl     # JSON Lines transcript — one event per line
     summary.md           # LLM-generated session summary (auto-created on shutdown)
 ```

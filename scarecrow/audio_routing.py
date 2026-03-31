@@ -253,110 +253,122 @@ def _set_default_output(device_id: int) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# Public API — switch to/from a persistent Multi-Output Device
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class MultiOutputDevice:
-    """Handle for a programmatically created Multi-Output Device."""
-
-    aggregate_id: int
-    original_output_id: int
-    original_output_uid: str | None
-
-
-def create_multi_output(
-    blackhole_name: str = "BlackHole",
-) -> MultiOutputDevice | None:
-    """Create a Multi-Output Device routing audio to speakers + BlackHole.
-
-    Returns a MultiOutputDevice handle, or None if creation failed.
-    The device is set as the default output. Call destroy_multi_output()
-    on shutdown to restore the original output.
-
-    An atexit handler is registered as a safety net for SIGTERM/normal exit.
-    """
-    # Find BlackHole UID
-    bh_uid = find_device_uid(blackhole_name)
-    if bh_uid is None:
-        log.info("Cannot create multi-output: %s not found", blackhole_name)
-        return None
-
-    # Get current output device
-    orig_id, orig_uid = get_default_output_device()
-    if orig_uid is None:
-        log.warning("Cannot determine current output device UID")
-        return None
-
-    # Don't create if the current output is already an aggregate containing BlackHole
-    orig_name = _get_string_property(orig_id, _PROP_DEVICE_NAME)
-    if orig_name and "scarecrow" in orig_name.lower():
-        log.info("Scarecrow multi-output already active")
-        return None
-
-    # Build sub-device array
-    sub_devices = _cfarray()
-    for uid in [orig_uid, bh_uid]:
-        sub = _cfdict()
-        _cf.CFDictionarySetValue(sub, _cfstr("uid"), _cfstr(uid))
-        _cf.CFArrayAppendValue(sub_devices, sub)
-
-    # Build aggregate device description
-    desc = _cfdict()
-    _cf.CFDictionarySetValue(desc, _cfstr("uid"), _cfstr("com.scarecrow.multioutput"))
-    _cf.CFDictionarySetValue(desc, _cfstr("name"), _cfstr("Scarecrow Output"))
-    _cf.CFDictionarySetValue(desc, _cfstr("subdevices"), sub_devices)
-    _cf.CFDictionarySetValue(desc, _cfstr("master"), _cfstr(orig_uid))
-    _cf.CFDictionarySetValue(desc, _cfstr("private"), _cfnum(1))
-    _cf.CFDictionarySetValue(desc, _cfstr("stacked"), _cfnum(0))
-
-    # Create the aggregate device
-    agg_id = ctypes.c_uint32(0)
-    status = _ca.AudioHardwareCreateAggregateDevice(desc, ctypes.byref(agg_id))
-    if status != 0:
-        log.warning("AudioHardwareCreateAggregateDevice failed: OSStatus %d", status)
-        return None
-
-    # Set as default output
-    if not _set_default_output(agg_id.value):
-        log.warning("Failed to set multi-output as default; destroying")
-        _ca.AudioHardwareDestroyAggregateDevice(agg_id.value)
-        return None
-
-    handle = MultiOutputDevice(
-        aggregate_id=agg_id.value,
-        original_output_id=orig_id,
-        original_output_uid=orig_uid,
+def find_device_by_name(name_substring: str) -> int | None:
+    """Find a CoreAudio device ID by name substring (case-insensitive)."""
+    prop = _AudioObjectPropertyAddress(
+        _PROP_DEVICES,
+        _SCOPE_GLOBAL,
+        _ELEMENT_MAIN,
     )
+    size = ctypes.c_uint32(0)
+    _ca.AudioObjectGetPropertyDataSize(
+        _SYSTEM_OBJECT, ctypes.byref(prop), 0, None, ctypes.byref(size)
+    )
+    n = size.value // 4
+    devs = (ctypes.c_uint32 * n)()
+    _ca.AudioObjectGetPropertyData(
+        _SYSTEM_OBJECT,
+        ctypes.byref(prop),
+        0,
+        None,
+        ctypes.byref(size),
+        devs,
+    )
+    needle = name_substring.lower()
+    for d in devs:
+        name = _get_string_property(d, _PROP_DEVICE_NAME)
+        if name and needle in name.lower():
+            return d
+    return None
 
-    # Safety net: restore on process exit (covers SIGTERM, normal exit)
-    atexit.register(_atexit_cleanup, handle)
+
+@dataclass
+class AudioOutputSwitch:
+    """Handle for an output device switch (restore on exit)."""
+
+    original_output_id: int
+    scarecrow_output_id: int
+
+
+_active_switch: AudioOutputSwitch | None = None
+
+
+def activate_scarecrow_output(
+    device_name: str = "Scarecrow Output",
+) -> AudioOutputSwitch | None:
+    """Switch default output to the Scarecrow Multi-Output Device.
+
+    The device must already exist (created via Audio MIDI Setup).
+    Returns a handle for restore_output(), or None if the device
+    wasn't found or is already active. An atexit handler is registered
+    as a safety net.
+    """
+    global _active_switch
+
+    scarecrow_id = find_device_by_name(device_name)
+    if scarecrow_id is None:
+        log.info("'%s' device not found — sys audio routing unavailable", device_name)
+        return None
+
+    orig_id, _ = get_default_output_device()
+    orig_name = _get_string_property(orig_id, _PROP_DEVICE_NAME)
+
+    # Already on Scarecrow Output — nothing to do
+    if orig_id == scarecrow_id:
+        log.info("Already using '%s'", device_name)
+        handle = AudioOutputSwitch(
+            original_output_id=orig_id,
+            scarecrow_output_id=scarecrow_id,
+        )
+        _active_switch = handle
+        atexit.register(_atexit_restore)
+        return handle
+
+    if not _set_default_output(scarecrow_id):
+        log.warning("Failed to switch output to '%s'", device_name)
+        return None
+
+    handle = AudioOutputSwitch(
+        original_output_id=orig_id,
+        scarecrow_output_id=scarecrow_id,
+    )
+    _active_switch = handle
+    atexit.register(_atexit_restore)
 
     log.info(
-        "Created multi-output device (ID=%d) routing to %s + %s",
-        agg_id.value,
-        orig_name or orig_uid,
-        blackhole_name,
+        "Switched output: %s → %s",
+        orig_name or f"device {orig_id}",
+        device_name,
     )
     return handle
 
 
-def destroy_multi_output(handle: MultiOutputDevice) -> None:
-    """Restore original output and destroy the Multi-Output Device."""
-    # Restore original default output
-    if not _set_default_output(handle.original_output_id):
+def restore_output(handle: AudioOutputSwitch) -> None:
+    """Restore the original output device."""
+    global _active_switch
+
+    # Don't restore if the original was already Scarecrow Output
+    if handle.original_output_id == handle.scarecrow_output_id:
+        _active_switch = None
+        return
+
+    if _set_default_output(handle.original_output_id):
+        orig_name = _get_string_property(handle.original_output_id, _PROP_DEVICE_NAME)
+        log.info(
+            "Restored output: %s", orig_name or f"device {handle.original_output_id}"
+        )
+    else:
         log.warning("Failed to restore original output device")
 
-    # Destroy the aggregate
-    status = _ca.AudioHardwareDestroyAggregateDevice(handle.aggregate_id)
-    if status != 0:
-        log.warning("AudioHardwareDestroyAggregateDevice failed: OSStatus %d", status)
-    else:
-        log.info("Destroyed multi-output device (ID=%d)", handle.aggregate_id)
+    _active_switch = None
 
 
-def _atexit_cleanup(handle: MultiOutputDevice) -> None:
+def _atexit_restore() -> None:
     """Safety net: restore output on process exit."""
-    with contextlib.suppress(Exception):
-        destroy_multi_output(handle)
+    if _active_switch is not None:
+        with contextlib.suppress(Exception):
+            restore_output(_active_switch)

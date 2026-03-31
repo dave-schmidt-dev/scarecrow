@@ -298,6 +298,62 @@ def test_session_metrics_schema(tmp_path: Path) -> None:
     assert metrics[0]["word_count"] == 42
 
 
+# ---------------------------------------------------------------------------
+# 9. transcript with optional "source" field
+# ---------------------------------------------------------------------------
+
+
+def test_transcript_source_field_is_optional(tmp_path: Path) -> None:
+    """transcript events may carry an optional 'source' field ('mic' or 'sys')."""
+    from scarecrow.session import Session
+
+    session = Session(base_dir=tmp_path)
+
+    # Without source — must be valid
+    session.append_event(
+        {
+            "type": "transcript",
+            "elapsed": 10,
+            "timestamp": "2026-03-31T10:00:10",
+            "text": "hello",
+        }
+    )
+    # With source="mic" — must be valid
+    session.append_event(
+        {
+            "type": "transcript",
+            "elapsed": 20,
+            "timestamp": "2026-03-31T10:00:20",
+            "text": "from microphone",
+            "source": "mic",
+        }
+    )
+    # With source="sys" — must be valid
+    session.append_event(
+        {
+            "type": "transcript",
+            "elapsed": 30,
+            "timestamp": "2026-03-31T10:00:30",
+            "text": "from system audio",
+            "source": "sys",
+        }
+    )
+    session.finalize()
+
+    events = _read_jsonl(session.transcript_path)
+    transcripts = [e for e in events if e["type"] == "transcript"]
+    assert len(transcripts) == 3
+
+    for event in transcripts:
+        violations = _validate_event(event)
+        assert violations == [], f"Schema violations: {violations}"
+
+    # Verify source values are preserved
+    assert "source" not in transcripts[0]
+    assert transcripts[1]["source"] == "mic"
+    assert transcripts[2]["source"] == "sys"
+
+
 def test_all_events_pass_schema_validation(tmp_path: Path) -> None:
     """Every event in a JSONL file written directly must pass schema validation."""
     from scarecrow.session import Session

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import functools
 import logging
 import threading
 import time
@@ -28,6 +29,7 @@ from textual.widgets import Footer, Input, RichLog, Static
 
 from scarecrow import config
 from scarecrow.config import Config
+from scarecrow.echo_filter import EchoFilter
 from scarecrow.recorder import AudioRecorder
 from scarecrow.session import Session
 from scarecrow.transcriber import TranscriberBindings
@@ -68,6 +70,8 @@ class InfoBar(Static):
     peak_level: reactive[float] = reactive(0.0, always_update=True)
     sys_peak_level: reactive[float] = reactive(0.0, always_update=True)
     has_sys_audio: reactive[bool] = reactive(False)
+    mic_muted: reactive[bool] = reactive(False)
+    sys_muted: reactive[bool] = reactive(False)
 
     def _render_meter(self, raw: float) -> tuple[str, str, str, str]:
         """Return (bar_char, color, meter_label, label_style) for a peak level."""
@@ -105,20 +109,26 @@ class InfoBar(Static):
             text.append(f" {icon}")
         width = self.size.width if self.size.width > 0 else 120
         if self.state is AppState.RECORDING:
-            bar_char, color, meter_label, label_style = self._render_meter(
-                self.peak_level
-            )
             text.append(" mic ", style="dim")
-            text.append(bar_char, style=color)
-            text.append(f" {meter_label}", style=label_style)
+            if self.mic_muted:
+                text.append("MUTED", style="dim")
+            else:
+                bar_char, color, meter_label, label_style = self._render_meter(
+                    self.peak_level
+                )
+                text.append(bar_char, style=color)
+                text.append(f" {meter_label}", style=label_style)
             if self.has_sys_audio and width >= 80:
                 text.append("  │  ", style="dim")
-                sys_bar, sys_color, sys_meter_label, sys_label_style = (
-                    self._render_meter(self.sys_peak_level)
-                )
                 text.append("sys ", style="dim")
-                text.append(sys_bar, style=sys_color)
-                text.append(f" {sys_meter_label}", style=sys_label_style)
+                if self.sys_muted:
+                    text.append("MUTED", style="dim")
+                else:
+                    sys_bar, sys_color, sys_meter_label, sys_label_style = (
+                        self._render_meter(self.sys_peak_level)
+                    )
+                    text.append(sys_bar, style=sys_color)
+                    text.append(f" {sys_meter_label}", style=sys_label_style)
         text.append("  ")
 
         h = self.elapsed // 3600
@@ -157,6 +167,8 @@ class ScarecrowApp(App[None]):
 
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("ctrl+p", "pause", "Pause/Resume", show=True),
+        Binding("ctrl+m", "mute_mic", "Mute Mic", show=False),
+        Binding("ctrl+shift+s", "mute_sys", "Mute Sys", show=False),
         Binding("ctrl+shift+q", "quick_quit", "Quick Quit", show=True),
         Binding("ctrl+q", "quit", "Quit", show=True),
         Binding("ctrl+shift+d", "discard_quit", "Discard", show=False),
@@ -172,7 +184,7 @@ class ScarecrowApp(App[None]):
         transcriber: Transcriber | None = None,
         *,
         cfg: Config | None = None,
-        sys_audio: bool = False,
+        sys_audio: bool = True,
     ) -> None:
         super().__init__()
         self._cfg = cfg or config.config
@@ -200,6 +212,16 @@ class ScarecrowApp(App[None]):
         # Paragraph accumulator: join consecutive batch results on one block
         self._current_paragraph: str = ""
         self._paragraph_line_count: int = 0
+        # System audio paragraph accumulator (right-aligned, italic)
+        self._sys_current_paragraph: str = ""
+        self._sys_paragraph_line_count: int = 0
+        self._last_paragraph_source: str = ""
+        self._sys_batch_window_start: int = 0
+        # Per-source mute state
+        self._mic_muted: bool = False
+        self._sys_muted: bool = False
+        # Echo suppression — suppress mic transcripts that duplicate sys
+        self._echo_filter = EchoFilter()
         # Quit-flow state
         self._skip_summary: bool = False
         self._discard_mode: bool = False
@@ -309,6 +331,8 @@ class ScarecrowApp(App[None]):
         )
         bar.sys_peak_level = self._sys_capture.peak_level if self._sys_capture else 0.0
         bar.has_sys_audio = self._sys_capture is not None
+        bar.mic_muted = self._mic_muted
+        bar.sys_muted = self._sys_muted
 
     def watch_state(self, _new_state: AppState) -> None:
         self._sync_info_bar()
@@ -399,6 +423,27 @@ class ScarecrowApp(App[None]):
         if self._audio_recorder is None or self._transcriber is None:
             return
 
+        # Flush sys audio synchronously first so both sources drain
+        if self._sys_capture is not None:
+            sys_audio = self._sys_capture.drain_buffer()
+            if sys_audio is not None and len(sys_audio) > 0:
+                sys_elapsed = self._sys_batch_window_start
+                self._sys_batch_window_start = self._elapsed
+                try:
+                    text = self._transcriber.transcribe_batch(
+                        sys_audio,
+                        sys_elapsed,
+                        source="sys",
+                        emit_callback=False,
+                        max_retries=0,
+                    )
+                except Exception:
+                    log.exception("Flush: sys audio transcription failed")
+                    text = None
+                if text:
+                    self._record_transcript(text, sys_elapsed, source="sys")
+
+        # Then flush mic async
         self._reap_batch_futures()
         if self._batch_futures:
             self._set_status("Batch busy; flush queued for next cycle.")
@@ -461,13 +506,15 @@ class ScarecrowApp(App[None]):
             "\n"
             "[bold]Keybindings:[/bold]\n"
             "  Ctrl+P              Pause / resume\n"
+            "  Ctrl+M              Mute / unmute mic\n"
+            "  Ctrl+Shift+S        Mute / unmute sys audio\n"
             "  Ctrl+Shift+Q        Quick Quit (skip summary)\n"
             "  Ctrl+Q              Quit\n"
             "  Ctrl+Shift+D        Discard session & quit\n"
             "  Enter               Submit note\n"
             "\n"
             "[bold]Launch flags:[/bold]\n"
-            "  --sys-audio         Capture system audio via BlackHole"
+            "  --no-sys-audio      Disable system audio capture"
         )
         with contextlib.suppress(NoMatches):
             self.query_one("#captions", RichLog).write(help_text)
@@ -498,6 +545,7 @@ class ScarecrowApp(App[None]):
             self._transcriber.bind(
                 TranscriberBindings(
                     on_batch_result=self._on_batch_result,
+                    on_sys_batch_result=self._on_sys_batch_result,
                     on_error=self._on_transcriber_error,
                 )
             )
@@ -506,7 +554,23 @@ class ScarecrowApp(App[None]):
         if self._ignore_batch_results:
             log.debug("Ignoring late batch result during shutdown")
             return
-        self._post_to_ui(self._append_transcript, text, batch_elapsed)
+        if self._echo_filter.is_echo(text):
+            return
+        self._post_to_ui(
+            functools.partial(self._record_transcript, source="mic"),
+            text,
+            batch_elapsed,
+        )
+
+    def _on_sys_batch_result(self, text: str, batch_elapsed: int) -> None:
+        if self._ignore_batch_results:
+            return
+        self._echo_filter.record_sys(text)
+        self._post_to_ui(
+            functools.partial(self._record_transcript, source="sys"),
+            text,
+            batch_elapsed,
+        )
 
     def _on_transcriber_error(self, source: str, message: str) -> None:
         self._post_to_ui(self._show_error, f"{source}: {message}")
@@ -532,7 +596,9 @@ class ScarecrowApp(App[None]):
             )
         return self._batch_executor
 
-    def _submit_batch_transcription(self, audio, batch_elapsed: int) -> bool:
+    def _submit_batch_transcription(
+        self, audio, batch_elapsed: int, *, source: str = "mic"
+    ) -> bool:
         if self._transcriber is None or len(audio) == 0:
             return False
 
@@ -556,11 +622,8 @@ class ScarecrowApp(App[None]):
             self._set_status("Batch busy; carrying audio into the next window.")
             return False
 
-        future = self._ensure_batch_executor().submit(
-            self._transcriber.transcribe_batch,
-            audio,
-            batch_elapsed,
-        )
+        fn = functools.partial(self._transcriber.transcribe_batch, source=source)
+        future = self._ensure_batch_executor().submit(fn, audio, batch_elapsed)
         self._batch_futures.add(future)
         return True
 
@@ -577,6 +640,9 @@ class ScarecrowApp(App[None]):
             # Paragraph tracking is invalidated by pruning
             self._current_paragraph = ""
             self._paragraph_line_count = 0
+            self._sys_current_paragraph = ""
+            self._sys_paragraph_line_count = 0
+            self._last_paragraph_source = ""
 
     def _transcript_divider(self, elapsed: int, path) -> str:
         h = elapsed // 3600
@@ -591,6 +657,7 @@ class ScarecrowApp(App[None]):
         batch_elapsed: int | None = None,
         *,
         include_ui: bool = True,
+        source: str = "mic",
     ) -> None:
         elapsed = batch_elapsed if batch_elapsed is not None else self._elapsed
         divider_gap = elapsed - self._last_divider_elapsed
@@ -607,24 +674,49 @@ class ScarecrowApp(App[None]):
                 captions = None
             if captions is not None:
                 if divider is not None:
-                    # Freeze current paragraph, write divider, start fresh
+                    # Freeze both paragraphs, write divider, start fresh
                     self._current_paragraph = ""
                     self._paragraph_line_count = 0
+                    self._sys_current_paragraph = ""
+                    self._sys_paragraph_line_count = 0
+                    self._last_paragraph_source = ""
                     captions.write(f"[dim]{divider}[/dim]")
 
-                # Append to current paragraph and replace in RichLog
-                if self._current_paragraph:
-                    self._current_paragraph += " " + escape(text)
-                else:
-                    self._current_paragraph = escape(text)
+                # When switching sources, freeze the other paragraph —
+                # reset both line count AND accumulated text so the old
+                # paragraph stays in place and the new source starts fresh.
+                if source != self._last_paragraph_source:
+                    if self._last_paragraph_source == "mic":
+                        self._current_paragraph = ""
+                        self._paragraph_line_count = 0
+                    elif self._last_paragraph_source == "sys":
+                        self._sys_current_paragraph = ""
+                        self._sys_paragraph_line_count = 0
 
-                # Remove previous paragraph lines, then write updated block
-                if self._paragraph_line_count > 0:
-                    del captions.lines[-self._paragraph_line_count :]
-                    captions._line_cache.clear()
-                before = len(captions.lines)
-                captions.write(self._current_paragraph)
-                self._paragraph_line_count = len(captions.lines) - before
+                if source == "sys":
+                    # Dim-styled sys audio with subtle prefix.
+                    # No paragraph accumulation — each drain is independent
+                    # speech, unlike mic where consecutive batches continue
+                    # the same utterance.
+                    text_obj = Text()
+                    text_obj.append("◁ ", style="dim cyan")
+                    text_obj.append(escape(text), style="dim")
+                    captions.write(text_obj)
+                else:
+                    # Left-aligned for mic (default)
+                    if self._current_paragraph:
+                        self._current_paragraph += " " + escape(text)
+                    else:
+                        self._current_paragraph = escape(text)
+
+                    if self._paragraph_line_count > 0:
+                        del captions.lines[-self._paragraph_line_count :]
+                        captions._line_cache.clear()
+                    before = len(captions.lines)
+                    captions.write(self._current_paragraph)
+                    self._paragraph_line_count = len(captions.lines) - before
+
+                self._last_paragraph_source = source
 
         if self._session is not None:
             if divider is not None:
@@ -641,6 +733,7 @@ class ScarecrowApp(App[None]):
                     "elapsed": elapsed,
                     "timestamp": datetime.now().isoformat(timespec="seconds"),
                     "text": text,
+                    "source": source,
                 }
             )
 
@@ -651,32 +744,49 @@ class ScarecrowApp(App[None]):
             self._prune_richlog()
 
     def _flush_final_batch(self, *, include_ui: bool = True) -> None:
-        if self._audio_recorder is None or self._transcriber is None:
+        if self._transcriber is None:
             return
 
-        audio = self._audio_recorder.drain_buffer()
-        if audio is None or len(audio) == 0:
-            return
+        # Flush mic
+        if self._audio_recorder is not None:
+            audio = self._audio_recorder.drain_buffer()
+            if audio is not None and len(audio) > 0:
+                batch_elapsed = self._batch_window_start
+                try:
+                    text = self._transcriber.transcribe_batch(
+                        audio,
+                        batch_elapsed,
+                        emit_callback=False,
+                        max_retries=0,
+                    )
+                except Exception as exc:
+                    log.exception("Final mic batch transcription failed")
+                    if include_ui:
+                        self._show_error(f"Final batch transcription failed: {exc}")
+                    text = None
+                if text:
+                    self._record_transcript(text, batch_elapsed, include_ui=include_ui)
 
-        batch_elapsed = self._batch_window_start
-        try:
-            text = self._transcriber.transcribe_batch(
-                audio,
-                batch_elapsed,
-                emit_callback=False,
-                max_retries=0,
-            )
-        except Exception as exc:
-            log.exception("Final batch transcription failed during shutdown")
-            if include_ui:
-                self._show_error(f"Final batch transcription failed: {exc}")
-            return
-        if text:
-            self._record_transcript(
-                text,
-                batch_elapsed,
-                include_ui=include_ui,
-            )
+        # Flush sys audio
+        if self._sys_capture is not None:
+            sys_audio = self._sys_capture.drain_buffer()
+            if sys_audio is not None and len(sys_audio) > 0:
+                sys_elapsed = self._sys_batch_window_start
+                try:
+                    text = self._transcriber.transcribe_batch(
+                        sys_audio,
+                        sys_elapsed,
+                        source="sys",
+                        emit_callback=False,
+                        max_retries=0,
+                    )
+                except Exception:
+                    log.exception("Final sys batch transcription failed")
+                    text = None
+                if text:
+                    self._record_transcript(
+                        text, sys_elapsed, include_ui=include_ui, source="sys"
+                    )
 
     def _wait_for_batch_workers(self) -> tuple[bool, list[str]]:
         timed_out = False
@@ -736,6 +846,48 @@ class ScarecrowApp(App[None]):
         self._batch_window_start = self._elapsed
         self._submit_batch_transcription(audio, batch_elapsed)
 
+    def _sys_vad_transcribe(self) -> None:
+        """Drain system audio at silence boundaries."""
+        if self._sys_capture is None or self._transcriber is None:
+            return
+
+        self._reap_batch_futures()
+        if self._batch_futures:
+            return
+
+        result = self._sys_capture.drain_to_silence(
+            silence_threshold=self._cfg.SYS_VAD_SILENCE_THRESHOLD,
+            min_silence_ms=self._cfg.SYS_VAD_MIN_SILENCE_MS,
+            max_buffer_seconds=self._cfg.VAD_MAX_BUFFER_SECONDS,
+            min_buffer_seconds=5.0,
+        )
+        if result is None:
+            return
+        audio, chunk_energies = result
+        if len(audio) == 0:
+            return
+
+        if chunk_energies:
+            energy_floor = self._cfg.SYS_VAD_SILENCE_THRESHOLD * 0.5
+            speech_chunks = sum(1 for e in chunk_energies if e >= energy_floor)
+            speech_ratio = speech_chunks / len(chunk_energies)
+            if speech_ratio < self._cfg.SYS_VAD_MIN_SPEECH_RATIO:
+                max_e = max(chunk_energies) if chunk_energies else 0.0
+                log.debug(
+                    "Skipping low-speech sys buffer (%.0f%% < %.0f%%, "
+                    "%d chunks, max_rms=%.6f, floor=%.6f)",
+                    speech_ratio * 100,
+                    self._cfg.SYS_VAD_MIN_SPEECH_RATIO * 100,
+                    len(chunk_energies),
+                    max_e,
+                    energy_floor,
+                )
+                return
+
+        batch_elapsed = self._sys_batch_window_start
+        self._sys_batch_window_start = self._elapsed
+        self._submit_batch_transcription(audio, batch_elapsed, source="sys")
+
     def _append_transcript(self, text: str, batch_elapsed: int | None = None) -> None:
         self._record_transcript(text, batch_elapsed)
 
@@ -747,6 +899,9 @@ class ScarecrowApp(App[None]):
         marker = f"── {ts} · Recording paused ──"
         self._current_paragraph = ""
         self._paragraph_line_count = 0
+        self._sys_current_paragraph = ""
+        self._sys_paragraph_line_count = 0
+        self._last_paragraph_source = ""
         try:
             captions = self.query_one("#captions", RichLog)
             captions.write(f"[dim]{marker}[/dim]")
@@ -852,7 +1007,11 @@ class ScarecrowApp(App[None]):
     def _on_vad_poll(self) -> None:
         """Poll for silence boundaries (parakeet backend)."""
         if self.state is AppState.RECORDING:
-            self._vad_transcribe()
+            if not self._mic_muted:
+                self._vad_transcribe()
+            # Sys VAD runs after mic — mic gets priority via "batch busy" guard
+            if self._sys_capture is not None and not self._sys_muted:
+                self._sys_vad_transcribe()
         # Always update buffer age display
         if self._audio_recorder is not None:
             buf_s = int(self._audio_recorder.buffer_seconds)
@@ -883,6 +1042,19 @@ class ScarecrowApp(App[None]):
                     log.exception("Failed to pause audio recorder")
                     self._set_status(f"Could not pause recorder: {exc}", error=True)
                 if self._sys_capture is not None:
+                    # Flush sys audio buffer before pausing
+                    self._reap_batch_futures()
+                    if not self._batch_futures:
+                        sys_audio = self._sys_capture.drain_buffer()
+                        if sys_audio is not None and len(sys_audio) > 0:
+                            sys_elapsed = self._sys_batch_window_start
+                            self._sys_batch_window_start = self._elapsed
+                            self._submit_batch_transcription(
+                                sys_audio, sys_elapsed, source="sys"
+                            )
+                    else:
+                        # Batch busy — discard to prevent stale replay
+                        self._sys_capture.drain_buffer()
                     try:
                         self._sys_capture.pause()
                     except Exception:
@@ -894,12 +1066,16 @@ class ScarecrowApp(App[None]):
         if self.state is AppState.PAUSED:
             self.state = AppState.RECORDING
             if self._audio_recorder is not None:
-                try:
-                    self._audio_recorder.resume()
-                except Exception as exc:
-                    log.exception("Failed to resume audio recorder")
-                    self._set_status(f"Could not resume recorder: {exc}", error=True)
-                if self._sys_capture is not None:
+                # Only resume sources that aren't muted
+                if not self._mic_muted:
+                    try:
+                        self._audio_recorder.resume()
+                    except Exception as exc:
+                        log.exception("Failed to resume audio recorder")
+                        self._set_status(
+                            f"Could not resume recorder: {exc}", error=True
+                        )
+                if self._sys_capture is not None and not self._sys_muted:
                     try:
                         self._sys_capture.resume()
                     except Exception:
@@ -917,6 +1093,51 @@ class ScarecrowApp(App[None]):
             self._last_divider_elapsed = -self._cfg.DIVIDER_INTERVAL
             self._set_status("")
             self._sync_info_bar()
+
+    def action_mute_mic(self) -> None:
+        if self.state is not AppState.RECORDING:
+            return
+        if self._audio_recorder is None:
+            return
+        self._mic_muted = not self._mic_muted
+        if self._mic_muted:
+            # Drain buffer before muting — discard if executor busy
+            self._reap_batch_futures()
+            if not self._batch_futures:
+                audio = self._audio_recorder.drain_buffer()
+                if audio is not None and len(audio) > 0:
+                    batch_elapsed = self._batch_window_start
+                    self._batch_window_start = self._elapsed
+                    self._submit_batch_transcription(audio, batch_elapsed)
+            else:
+                self._audio_recorder.drain_buffer()
+            self._audio_recorder.pause()
+        else:
+            self._audio_recorder.resume()
+        self._sync_info_bar()
+
+    def action_mute_sys(self) -> None:
+        if self.state is not AppState.RECORDING:
+            return
+        if self._sys_capture is None:
+            return
+        self._sys_muted = not self._sys_muted
+        if self._sys_muted:
+            self._reap_batch_futures()
+            if not self._batch_futures:
+                sys_audio = self._sys_capture.drain_buffer()
+                if sys_audio is not None and len(sys_audio) > 0:
+                    sys_elapsed = self._sys_batch_window_start
+                    self._sys_batch_window_start = self._elapsed
+                    self._submit_batch_transcription(
+                        sys_audio, sys_elapsed, source="sys"
+                    )
+            else:
+                self._sys_capture.drain_buffer()
+            self._sys_capture.pause()
+        else:
+            self._sys_capture.resume()
+        self._sync_info_bar()
 
     def action_quit(self) -> None:
         self._shutdown_summary = self._collect_shutdown_metrics()

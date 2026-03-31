@@ -1,11 +1,15 @@
 # Roadmap
 
-## System audio recording (Phase 1 done)
-- [x] Capture system audio via BlackHole to separate WAV (`--sys-audio` flag)
+## System audio (Phase 1 + 2 done)
+- [x] Capture system audio via BlackHole to separate WAV (on by default, `--no-sys-audio` to disable)
 - [x] Dual InfoBar level meters (mic + sys)
 - [x] Streaming FLAC compression on shutdown
-- [ ] Phase 2: Transcribe both channels independently via Parakeet for diarization (mic=local, sys=remote)
-- [ ] Phase 2: Interleave transcripts by timestamp with speaker labels
+- [x] Auto-switch to Scarecrow Output on startup, restore on exit
+- [x] Transcribe both channels via Parakeet (shared executor, mic priority)
+- [x] Left-aligned mic, right-aligned italic sys transcripts in TUI
+- [x] JSONL `"source": "mic"|"sys"` field on transcript events
+- [x] Per-source mute (Ctrl+M mic, Ctrl+Shift+S sys)
+- [ ] Tune sys audio VAD thresholds with real meeting data
 
 ## Diarization
 - Speaker identification/labeling in transcripts ("Speaker A", "Speaker B")

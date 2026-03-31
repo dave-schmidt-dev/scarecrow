@@ -259,6 +259,87 @@ def test_transcribe_batch_resets_failures_on_success() -> None:
     assert t.consecutive_failures == 0
 
 
+def test_transcribe_batch_source_sys_dispatches_to_sys_callback() -> None:
+    """source='sys' must dispatch to on_sys_batch_result, not on_batch_result."""
+    mic_results: list[tuple[str, int]] = []
+    sys_results: list[tuple[str, int]] = []
+
+    t = Transcriber(
+        TranscriberBindings(
+            on_batch_result=lambda text, elapsed: mic_results.append((text, elapsed)),
+            on_sys_batch_result=lambda text, elapsed: sys_results.append(
+                (text, elapsed)
+            ),
+        )
+    )
+    t._ready = True
+    t._model_manager = MagicMock()
+
+    with patch.object(t, "_transcribe_parakeet", return_value="system audio text"):
+        text = t.transcribe_batch(
+            np.zeros(16000, dtype=np.float32),
+            batch_elapsed=55,
+            source="sys",
+        )
+
+    assert text == "system audio text"
+    assert sys_results == [("system audio text", 55)]
+    assert mic_results == []
+
+
+def test_transcribe_batch_source_mic_dispatches_to_mic_callback() -> None:
+    """source='mic' (default) dispatches to on_batch_result, not on_sys_batch_result."""
+    mic_results: list[tuple[str, int]] = []
+    sys_results: list[tuple[str, int]] = []
+
+    t = Transcriber(
+        TranscriberBindings(
+            on_batch_result=lambda text, elapsed: mic_results.append((text, elapsed)),
+            on_sys_batch_result=lambda text, elapsed: sys_results.append(
+                (text, elapsed)
+            ),
+        )
+    )
+    t._ready = True
+    t._model_manager = MagicMock()
+
+    with patch.object(t, "_transcribe_parakeet", return_value="mic audio text"):
+        text = t.transcribe_batch(
+            np.zeros(16000, dtype=np.float32),
+            batch_elapsed=60,
+            source="mic",
+        )
+
+    assert text == "mic audio text"
+    assert mic_results == [("mic audio text", 60)]
+    assert sys_results == []
+
+
+def test_transcribe_batch_source_sys_falls_back_to_mic_callback_when_unbound() -> None:
+    """source='sys' with no sys callback falls back to on_batch_result (elif branch)."""
+    mic_results: list[tuple[str, int]] = []
+
+    t = Transcriber(
+        TranscriberBindings(
+            on_batch_result=lambda text, elapsed: mic_results.append((text, elapsed)),
+            on_sys_batch_result=None,
+        )
+    )
+    t._ready = True
+    t._model_manager = MagicMock()
+
+    with patch.object(t, "_transcribe_parakeet", return_value="sys text"):
+        text = t.transcribe_batch(
+            np.zeros(16000, dtype=np.float32),
+            batch_elapsed=70,
+            source="sys",
+        )
+
+    assert text == "sys text"
+    # on_sys_batch_result is None → elif branch fires on_batch_result instead
+    assert mic_results == [("sys text", 70)]
+
+
 def test_transcribe_batch_respects_max_retries_zero() -> None:
     """When max_retries=0, transcribe_batch must attempt exactly once and not retry."""
     call_count = 0

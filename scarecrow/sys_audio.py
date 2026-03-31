@@ -1,8 +1,10 @@
-"""System audio capture via BlackHole — WAV recording + peak level only.
+"""System audio capture via BlackHole — WAV recording + transcription buffer.
 
-No VAD, no transcription buffer, no drain methods. This is a lightweight
-companion to AudioRecorder that records system audio for archival and
-future diarization (Phase 2).
+Captures system audio for archival (WAV) and exposes drain methods for
+VAD-driven transcription, mirroring AudioRecorder's buffer interface.
+Stereo input is downmixed to mono for Parakeet.
+
+# TODO: extract shared AudioBuffer with recorder.py
 """
 
 from __future__ import annotations
@@ -38,10 +40,11 @@ def find_blackhole_device(name: str = "BlackHole") -> int | None:
 
 
 class SystemAudioCapture:
-    """Lightweight audio capture for a named device. No VAD, no transcription.
+    """Audio capture for a named device with transcription buffer.
 
-    Writes all channels to a WAV file and exposes a decaying peak level
-    for the InfoBar meter. The writer thread pattern mirrors AudioRecorder
+    Writes all channels to a WAV file and exposes drain methods for
+    VAD-driven transcription. Stereo is downmixed to mono for the
+    transcription buffer. The writer thread pattern mirrors AudioRecorder
     (sentinel protocol, SoundFile ownership by the writer thread).
     """
 
@@ -68,6 +71,12 @@ class SystemAudioCapture:
         self._peak_decay: float = 0.15
         self._start_monotonic: float = 0.0
 
+        # Transcription buffer — mono int16 chunks + per-chunk RMS
+        self._audio_chunks: list[np.ndarray] = []
+        self._chunk_energies: list[float] = []
+        self._buffer_lock = threading.Lock()
+        self._stt_sample_rate: int = 16000
+
     def start(self) -> None:
         """Open stream on the configured device and start recording."""
         import sounddevice as sd
@@ -89,6 +98,11 @@ class SystemAudioCapture:
                 self._write_queue.get_nowait()
             except queue.Empty:
                 break
+
+        # Clear transcription buffer from any prior run
+        with self._buffer_lock:
+            self._audio_chunks.clear()
+            self._chunk_energies.clear()
 
         self._writer_thread = threading.Thread(
             target=self._writer_loop,
@@ -113,7 +127,11 @@ class SystemAudioCapture:
         self._stream.start()
 
     def stop(self) -> Path:
-        """Stop recording, close stream and file."""
+        """Stop recording, close stream and file.
+
+        NOTE: Does NOT clear _audio_chunks — shutdown code may still need
+        to drain the transcription buffer after stopping the stream.
+        """
         with self._lock:
             self._recording = False
 
@@ -158,7 +176,103 @@ class SystemAudioCapture:
     def is_recording(self) -> bool:
         return self._recording
 
-    # -- Private -----------------------------------------------------------
+    # -- Transcription buffer -------------------------------------------------
+
+    def _finalize_audio(self, chunks: list[np.ndarray]) -> np.ndarray:
+        """Concatenate mono int16 chunks → float32, downsampled to STT rate."""
+        combined = np.concatenate(chunks, axis=0).reshape(-1)
+        audio = combined.astype(np.float32) / 32768.0
+        if self._sample_rate != self._stt_sample_rate:
+            duration = len(audio) / self._sample_rate
+            new_length = int(duration * self._stt_sample_rate)
+            old_times = np.linspace(0, duration, num=len(audio), endpoint=False)
+            new_times = np.linspace(0, duration, num=new_length, endpoint=False)
+            audio = np.interp(new_times, old_times, audio).astype(np.float32)
+        return audio
+
+    def drain_buffer(self) -> np.ndarray | None:
+        """Return accumulated audio since last drain, or None if empty.
+
+        Audio is returned as float32 normalized to [-1, 1] at 16kHz.
+        """
+        with self._buffer_lock:
+            if not self._audio_chunks:
+                return None
+            chunks = self._audio_chunks.copy()
+            self._audio_chunks.clear()
+            self._chunk_energies.clear()
+
+        return self._finalize_audio(chunks)
+
+    def drain_to_silence(
+        self,
+        silence_threshold: float = 0.01,
+        min_silence_ms: int = 750,
+        max_buffer_seconds: float = 30,
+        min_buffer_seconds: float = 0.5,
+    ) -> tuple[np.ndarray, list[float]] | None:
+        """Drain audio up to the most recent silence boundary.
+
+        Returns ``(audio, chunk_energies)`` or ``None`` if too short.
+        Thresholds are passed as params (not read from config) since
+        sys audio may use different values than mic.
+        """
+        with self._buffer_lock:
+            if not self._audio_chunks:
+                return None
+
+            n_chunks = len(self._audio_chunks)
+            samples_per_chunk = len(self._audio_chunks[0])
+            total_samples = sum(len(c) for c in self._audio_chunks)
+            total_seconds = total_samples / self._sample_rate
+
+            if total_seconds < min_buffer_seconds:
+                return None
+
+            min_silence_samples = int(self._sample_rate * min_silence_ms / 1000)
+            _denom = max(samples_per_chunk, 1)
+            min_silent_chunks = max(1, -(-min_silence_samples // _denom))
+
+            silence_end = None
+            consecutive_silent = 0
+            for i in range(n_chunks - 1, -1, -1):
+                if self._chunk_energies[i] < silence_threshold:
+                    consecutive_silent += 1
+                    if consecutive_silent >= min_silent_chunks:
+                        silence_end = i
+                        break
+                else:
+                    consecutive_silent = 0
+
+            if silence_end is not None:
+                if silence_end == 0:
+                    self._audio_chunks.clear()
+                    self._chunk_energies.clear()
+                    return None
+                drain_end = min(silence_end + consecutive_silent, n_chunks)
+                chunks = self._audio_chunks[:drain_end]
+                energies = list(self._chunk_energies[:drain_end])
+                self._audio_chunks = self._audio_chunks[drain_end:]
+                self._chunk_energies = self._chunk_energies[drain_end:]
+            elif total_seconds >= max_buffer_seconds:
+                chunks = self._audio_chunks.copy()
+                energies = list(self._chunk_energies)
+                self._audio_chunks.clear()
+                self._chunk_energies.clear()
+            else:
+                return None
+
+        return self._finalize_audio(chunks), energies
+
+    @property
+    def buffer_seconds(self) -> float:
+        """Current buffer duration in seconds."""
+        with self._buffer_lock:
+            if not self._audio_chunks:
+                return 0.0
+            return sum(len(c) for c in self._audio_chunks) / self._sample_rate
+
+    # -- Private (audio callback + writer) ------------------------------------
 
     def _callback(
         self,
@@ -195,6 +309,19 @@ class SystemAudioCapture:
         with self._lock:
             if peak > self._held_peak:
                 self._held_peak = peak
+
+        # Downmix to mono for transcription buffer
+        if self._channels > 1:
+            mono = (data_copy.astype(np.int32).mean(axis=1)).astype(np.int16)
+        else:
+            mono = data_copy.reshape(-1)
+
+        # RMS for VAD (normalized to [0, 1] matching mic recorder scale)
+        rms = float(np.sqrt(np.mean((mono.astype(np.float32) / 32768.0) ** 2)))
+
+        with self._buffer_lock:
+            self._audio_chunks.append(mono)
+            self._chunk_energies.append(rms)
 
     def _writer_loop(self) -> None:
         """Dedicated thread: pulls audio from queue, writes to SoundFile."""

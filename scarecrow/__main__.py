@@ -45,9 +45,14 @@ def main() -> None:
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
 
-    # Parse --sys-audio before imports (avoids argparse side effects)
-    sys_audio = "--sys-audio" in sys.argv
-    if sys_audio:
+    # System audio capture is on by default; --no-sys-audio disables it
+    if "--no-sys-audio" in sys.argv:
+        sys_audio = False
+        sys.argv.remove("--no-sys-audio")
+    else:
+        sys_audio = True
+    # Remove legacy flag if present
+    if "--sys-audio" in sys.argv:
         sys.argv.remove("--sys-audio")
 
     from scarecrow import config
@@ -85,19 +90,16 @@ def main() -> None:
         print(f"  Failed to load Parakeet model: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    multi_output = None
+    # Switch output to Scarecrow Multi-Output Device for sys audio capture
+    audio_switch = None
     if sys_audio:
-        from scarecrow.audio_routing import create_multi_output
+        from scarecrow.audio_routing import activate_scarecrow_output
 
-        multi_output = create_multi_output(config.config.SYSTEM_AUDIO_DEVICE)
-        if multi_output:
-            print("  System audio: routing via Multi-Output Device", flush=True)
+        audio_switch = activate_scarecrow_output()
+        if audio_switch:
+            print("  System audio: routing via Scarecrow Output", flush=True)
         else:
-            print(
-                "  System audio: could not create routing "
-                f"({config.config.SYSTEM_AUDIO_DEVICE} not found?)",
-                flush=True,
-            )
+            print("  System audio: Scarecrow Output not found — mic only", flush=True)
 
     t1 = time.monotonic()
     print(f"  Ready ({t1 - t0:.1f}s)", flush=True)
@@ -132,18 +134,15 @@ def main() -> None:
             if getattr(app, "_summary_path", None):
                 print(f"  Summary: {app._summary_path}", flush=True)
             print("  Done.", flush=True)
-        # Restore original audio output and destroy multi-output device
-        if multi_output is not None:
-            from scarecrow.audio_routing import destroy_multi_output
+        # Restore original audio output
+        if audio_switch is not None:
+            from scarecrow.audio_routing import restore_output
 
             print("  Restoring audio output…", flush=True)
             try:
-                destroy_multi_output(multi_output)
+                restore_output(audio_switch)
             except Exception:
-                logging.getLogger(__name__).exception(
-                    "Failed to destroy multi-output device"
-                )
-            multi_output = None
+                logging.getLogger(__name__).exception("Failed to restore audio output")
         print(flush=True)
         print("  Press Enter to close (auto-close in 30s)…", flush=True)
         _wait_for_enter_or_timeout(30)
