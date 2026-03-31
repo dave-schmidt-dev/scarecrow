@@ -10,6 +10,7 @@
 - [x] JSONL `"source": "mic"|"sys"` field on transcript events
 - [x] Per-source mute (Ctrl+M mic, Ctrl+Shift+S sys)
 - [ ] Tune sys audio VAD thresholds with real meeting data
+  - Replay tool: `python scripts/replay_test.py <wav> --save-baseline` / `--check-baseline`
 
 ## Diarization
 - Speaker identification/labeling in transcripts ("Speaker A", "Speaker B")
