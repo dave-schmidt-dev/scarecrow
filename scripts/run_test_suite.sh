@@ -37,6 +37,7 @@ TEST_FILES=(
   tests/test_startup.py
   tests/test_suite_runner.py
   tests/test_summarizer.py
+  tests/test_sys_audio.py
   tests/test_transcriber.py
 )
 

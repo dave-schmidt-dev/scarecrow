@@ -33,6 +33,7 @@ from scarecrow.session import Session
 from scarecrow.transcriber import TranscriberBindings
 
 if TYPE_CHECKING:
+    from scarecrow.sys_audio import SystemAudioCapture
     from scarecrow.transcriber import Transcriber
 
 log = logging.getLogger(__name__)
@@ -65,6 +66,36 @@ class InfoBar(Static):
     status_message: reactive[str] = reactive("")
     status_is_error: reactive[bool] = reactive(False)
     peak_level: reactive[float] = reactive(0.0, always_update=True)
+    sys_peak_level: reactive[float] = reactive(0.0, always_update=True)
+    has_sys_audio: reactive[bool] = reactive(False)
+
+    def _render_meter(self, raw: float) -> tuple[str, str, str, str]:
+        """Return (bar_char, color, meter_label, label_style) for a peak level."""
+        import math
+
+        bars = " ▁▂▃▄▅▆▇█"
+        if raw < 0.003:
+            scaled = 0.0
+        else:
+            db = 20 * math.log10(max(raw, 1e-6))
+            # -46dB (silence) to -10dB (loud speech) → 0.0 to 1.0
+            scaled = max(0.0, min(1.0, (db + 46) / 36))
+        idx = int(scaled * (len(bars) - 1))
+        if scaled < 0.4:
+            color = "green"
+        elif scaled < 0.75:
+            color = "yellow"
+        else:
+            color = "red"
+        if scaled < 0.15:
+            meter_label, label_style = "quiet", "dim"
+        elif scaled < 0.4:
+            meter_label, label_style = "low  ", "green"
+        elif scaled < 0.75:
+            meter_label, label_style = "med  ", "yellow"
+        else:
+            meter_label, label_style = "HIGH ", f"bold {color}"
+        return bars[idx], color, meter_label, label_style
 
     def render(self) -> Text:
         label, style, icon = _STATE_STYLE[self.state]
@@ -72,36 +103,22 @@ class InfoBar(Static):
         text.append(f" {label} ", style=style)
         if icon:
             text.append(f" {icon}")
+        width = self.size.width if self.size.width > 0 else 120
         if self.state is AppState.RECORDING:
-            import math
-
-            bars = " ▁▂▃▄▅▆▇█"
-            raw = self.peak_level
-            # Log scale: map ~0.005-0.3 range to 0-1
-            if raw < 0.003:
-                scaled = 0.0
-            else:
-                db = 20 * math.log10(max(raw, 1e-6))
-                # -46dB (silence) to -10dB (loud speech) → 0.0 to 1.0
-                scaled = max(0.0, min(1.0, (db + 46) / 36))
-            idx = int(scaled * (len(bars) - 1))
-            if scaled < 0.4:
-                color = "green"
-            elif scaled < 0.75:
-                color = "yellow"
-            else:
-                color = "red"
-            text.append(" ")
-            text.append(bars[idx], style=color)
-            if scaled < 0.15:
-                label, lstyle = "quiet", "dim"
-            elif scaled < 0.4:
-                label, lstyle = "low  ", "green"
-            elif scaled < 0.75:
-                label, lstyle = "med  ", "yellow"
-            else:
-                label, lstyle = "HIGH ", f"bold {color}"
-            text.append(f" {label}", style=lstyle)
+            bar_char, color, meter_label, label_style = self._render_meter(
+                self.peak_level
+            )
+            text.append(" mic ", style="dim")
+            text.append(bar_char, style=color)
+            text.append(f" {meter_label}", style=label_style)
+            if self.has_sys_audio and width >= 80:
+                text.append("  │  ", style="dim")
+                sys_bar, sys_color, sys_meter_label, sys_label_style = (
+                    self._render_meter(self.sys_peak_level)
+                )
+                text.append("sys ", style="dim")
+                text.append(sys_bar, style=sys_color)
+                text.append(f" {sys_meter_label}", style=sys_label_style)
         text.append("  ")
 
         h = self.elapsed // 3600
@@ -111,7 +128,6 @@ class InfoBar(Static):
         text.append("  ")
 
         # Drop word count and batch countdown on narrow terminals
-        width = self.size.width if self.size.width > 0 else 120
         if width >= 60:
             text.append(f"{self.word_count}", style="bold")
             text.append(" words", style="dim")
@@ -156,11 +172,14 @@ class ScarecrowApp(App[None]):
         transcriber: Transcriber | None = None,
         *,
         cfg: Config | None = None,
+        sys_audio: bool = False,
     ) -> None:
         super().__init__()
         self._cfg = cfg or config.config
         self._session: Session | None = None
         self._audio_recorder: AudioRecorder | None = None
+        self._sys_audio_enabled = sys_audio
+        self._sys_capture: SystemAudioCapture | None = None
         self._transcriber: Transcriber | None = transcriber
         self._status_message: str = ""
         self._status_is_error = False
@@ -288,6 +307,8 @@ class ScarecrowApp(App[None]):
         bar.peak_level = (
             self._audio_recorder.peak_level if self._audio_recorder else 0.0
         )
+        bar.sys_peak_level = self._sys_capture.peak_level if self._sys_capture else 0.0
+        bar.has_sys_audio = self._sys_capture is not None
 
     def watch_state(self, _new_state: AppState) -> None:
         self._sync_info_bar()
@@ -443,7 +464,10 @@ class ScarecrowApp(App[None]):
             "  Ctrl+Shift+Q        Quick Quit (skip summary)\n"
             "  Ctrl+Q              Quit\n"
             "  Ctrl+Shift+D        Discard session & quit\n"
-            "  Enter               Submit note"
+            "  Enter               Submit note\n"
+            "\n"
+            "[bold]Launch flags:[/bold]\n"
+            "  --sys-audio         Capture system audio via BlackHole"
         )
         with contextlib.suppress(NoMatches):
             self.query_one("#captions", RichLog).write(help_text)
@@ -775,6 +799,26 @@ class ScarecrowApp(App[None]):
             self._session = None
             return
 
+        if self._sys_audio_enabled:
+            from scarecrow.sys_audio import SystemAudioCapture, find_blackhole_device
+
+            dev = find_blackhole_device(self._cfg.SYSTEM_AUDIO_DEVICE)
+            if dev is not None:
+                try:
+                    self._sys_capture = SystemAudioCapture(
+                        output_path=self._session.audio_sys_path,
+                        device=dev,
+                    )
+                    self._sys_capture.start()
+                except Exception:
+                    log.warning("Failed to start system audio capture", exc_info=True)
+                    self._sys_capture = None
+            else:
+                log.info(
+                    "System audio device '%s' not found — mic only",
+                    self._cfg.SYSTEM_AUDIO_DEVICE,
+                )
+
         self._batch_timer = self.set_interval(
             self._cfg.VAD_POLL_INTERVAL_MS / 1000,
             self._on_vad_poll,
@@ -837,6 +881,11 @@ class ScarecrowApp(App[None]):
                 except Exception as exc:
                     log.exception("Failed to pause audio recorder")
                     self._set_status(f"Could not pause recorder: {exc}", error=True)
+                if self._sys_capture is not None:
+                    try:
+                        self._sys_capture.pause()
+                    except Exception:
+                        log.warning("Failed to pause system audio", exc_info=True)
             self._set_status("Paused")
             self._write_pause_marker()
             return
@@ -849,6 +898,11 @@ class ScarecrowApp(App[None]):
                 except Exception as exc:
                     log.exception("Failed to resume audio recorder")
                     self._set_status(f"Could not resume recorder: {exc}", error=True)
+                if self._sys_capture is not None:
+                    try:
+                        self._sys_capture.resume()
+                    except Exception:
+                        log.warning("Failed to resume system audio", exc_info=True)
             # Write resume event to transcript
             if self._session is not None:
                 self._session.append_event(
@@ -1027,6 +1081,13 @@ class ScarecrowApp(App[None]):
         except Exception:
             log.exception("Failed to compress audio")
 
+        if self._sys_audio_enabled:
+            print("  Compressing system audio…", flush=True)
+            try:
+                session.compress_sys_audio()
+            except Exception:
+                log.exception("Failed to compress system audio")
+
         if not self._skip_summary:
             print("  Generating summary…", flush=True)
             try:
@@ -1058,6 +1119,11 @@ class ScarecrowApp(App[None]):
             log.exception("Failed to stop audio recorder")
             if include_ui:
                 self._show_error(f"Could not stop audio recorder: {exc}")
+        if self._sys_capture is not None:
+            try:
+                self._sys_capture.stop()
+            except Exception:
+                log.exception("Failed to stop system audio capture")
 
     def _cleanup_flush_audio(self, include_ui: bool) -> None:
         """Wait for in-flight batch workers and flush the final audio buffer.
@@ -1095,6 +1161,7 @@ class ScarecrowApp(App[None]):
 
     def _cleanup_clear_recorder(self) -> None:
         self._audio_recorder = None
+        self._sys_capture = None
 
     def _cleanup_shutdown_executor(self) -> None:
         if self._batch_executor is not None:

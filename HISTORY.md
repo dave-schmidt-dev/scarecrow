@@ -2,6 +2,15 @@
 
 Bug entries are inline under their date heading. A squashed bug must reference a regression test.
 
+## 2026-03-30 (system audio capture via BlackHole)
+
+- **System audio recording (Phase 1):** New `--sys-audio` flag enables recording system audio (BlackHole or any named device) to a separate `audio_sys.wav` alongside the mic recording. Uses an independent `SystemAudioCapture` class with its own PortAudio stream, writer thread, and peak meter — zero modifications to the existing AudioRecorder or transcription pipeline.
+- **Dual InfoBar meters:** When system audio is active, the InfoBar shows separate mic and sys level meters with independent log-scale rendering.
+- **Streaming FLAC compression for sys audio:** `Session.compress_sys_audio()` uses block-wise read/write (~5 MB chunks) instead of loading the entire file into memory. Independent of mic compression — one failing doesn't skip the other.
+- **`--sys-audio` is opt-in:** Default behavior is unchanged. No overhead when the flag is not passed.
+- **New config:** `SYSTEM_AUDIO_DEVICE: str = "BlackHole"` — device name substring match for BlackHole discovery.
+- **11 new tests** covering device discovery, capture lifecycle, peak decay, WAV writing, streaming compression.
+
 ## 2026-03-30 (quit flow overhaul, hallucination prevention, summarizer fixes)
 
 - **Three quit modes:** `Ctrl+Q` (full quit with summary), `Ctrl+Shift+Q` (quick quit — skip summary, still saves transcript + compressed audio), `Ctrl+Shift+D` (discard session — moves to `.discarded/` with double-press confirmation + 3s auto-cancel).

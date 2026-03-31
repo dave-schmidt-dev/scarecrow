@@ -41,6 +41,9 @@ class Config:
     # TODO: benchmark via bench_librispeech.py
     VAD_MIN_SPEECH_RATIO: float = 0.15
 
+    # System audio capture (opt-in via --sys-audio CLI flag)
+    SYSTEM_AUDIO_DEVICE: str = "BlackHole"  # substring match, case-insensitive
+
     # Writer thread queue size (bounded to prevent unbounded memory growth)
     # ~12.5 seconds of audio at 48kHz with 1024-sample blocks
     WRITER_QUEUE_SIZE: int = 600
@@ -91,6 +94,7 @@ VAD_MIN_SILENCE_MS = config.VAD_MIN_SILENCE_MS
 VAD_MAX_BUFFER_SECONDS = config.VAD_MAX_BUFFER_SECONDS
 VAD_POLL_INTERVAL_MS = config.VAD_POLL_INTERVAL_MS
 VAD_MIN_SPEECH_RATIO = config.VAD_MIN_SPEECH_RATIO
+SYSTEM_AUDIO_DEVICE = config.SYSTEM_AUDIO_DEVICE
 WRITER_QUEUE_SIZE = config.WRITER_QUEUE_SIZE
 DIVIDER_INTERVAL = config.DIVIDER_INTERVAL
 DEFAULT_RECORDINGS_DIR = config.DEFAULT_RECORDINGS_DIR

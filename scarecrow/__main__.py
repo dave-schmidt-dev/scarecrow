@@ -45,6 +45,11 @@ def main() -> None:
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
 
+    # Parse --sys-audio before imports (avoids argparse side effects)
+    sys_audio = "--sys-audio" in sys.argv
+    if sys_audio:
+        sys.argv.remove("--sys-audio")
+
     from scarecrow import config
     from scarecrow.app import ScarecrowApp
     from scarecrow.transcriber import Transcriber
@@ -80,12 +85,27 @@ def main() -> None:
         print(f"  Failed to load Parakeet model: {exc}", file=sys.stderr)
         sys.exit(1)
 
+    if sys_audio:
+        from scarecrow.sys_audio import find_blackhole_device
+
+        dev = find_blackhole_device(config.config.SYSTEM_AUDIO_DEVICE)
+        if dev is not None:
+            import sounddevice as sd
+
+            dev_name = sd.query_devices(dev)["name"]
+            print(f"  System audio: {dev_name} (device {dev})", flush=True)
+        else:
+            print(
+                f"  System audio: not found ({config.config.SYSTEM_AUDIO_DEVICE})",
+                flush=True,
+            )
+
     t1 = time.monotonic()
     print(f"  Ready ({t1 - t0:.1f}s)", flush=True)
     print("  Starting TUI…", flush=True)
     print(flush=True)
 
-    app = ScarecrowApp(transcriber=transcriber)
+    app = ScarecrowApp(transcriber=transcriber, sys_audio=sys_audio)
     try:
         app.run()
     except KeyboardInterrupt:

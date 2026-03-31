@@ -2,6 +2,7 @@
 
 from scarecrow.app import InfoBar, ScarecrowApp
 from scarecrow.recorder import AudioRecorder
+from scarecrow.sys_audio import SystemAudioCapture, find_blackhole_device
 
 _ = (
     InfoBar.render,
@@ -20,4 +21,6 @@ _ = (
     AudioRecorder.is_recording,
     AudioRecorder.is_paused,
     AudioRecorder.peak_level,
+    SystemAudioCapture,
+    find_blackhole_device,
 )

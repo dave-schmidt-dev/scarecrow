@@ -58,6 +58,11 @@ class Session:
         return self._session_dir / "audio.wav"
 
     @property
+    def audio_sys_path(self) -> Path:
+        """Returns path to system audio WAV (BlackHole) in session dir."""
+        return self._session_dir / "audio_sys.wav"
+
+    @property
     def final_audio_path(self) -> Path:
         """Returns the audio file path — FLAC if compressed, WAV otherwise."""
         flac = self._session_dir / "audio.flac"
@@ -146,6 +151,45 @@ class Session:
             # Keep the WAV if compression fails
             if flac_path.exists():
                 flac_path.unlink(missing_ok=True)
+            return None
+
+    def compress_sys_audio(self) -> Path | None:
+        """Compress audio_sys.wav → audio_sys.flac using streaming read/write.
+
+        Uses block-wise I/O to avoid loading the entire file into memory
+        (2ch 48kHz for 2 hours = ~1.3 GB).
+        """
+        import soundfile as sf
+
+        sys_wav = self.audio_sys_path
+        if not sys_wav.exists():
+            return None
+
+        sys_flac = sys_wav.with_suffix(".flac")
+        try:
+            info = sf.info(sys_wav)
+            with (
+                sf.SoundFile(sys_wav) as src,
+                sf.SoundFile(
+                    sys_flac,
+                    "w",
+                    samplerate=info.samplerate,
+                    channels=info.channels,
+                    format="FLAC",
+                ) as dst,
+            ):
+                while True:
+                    chunk = src.read(frames=65536)
+                    if len(chunk) == 0:
+                        break
+                    dst.write(chunk)
+            sys_wav.unlink()
+            log.info("Compressed %s → %s", sys_wav.name, sys_flac.name)
+            return sys_flac
+        except Exception:
+            log.exception("Failed to compress sys audio to FLAC")
+            if sys_flac.exists():
+                sys_flac.unlink(missing_ok=True)
             return None
 
     def write_end_header(self) -> None:

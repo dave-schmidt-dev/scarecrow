@@ -1,10 +1,11 @@
 # Roadmap
 
-## System audio recording
-- Capture system/app audio (meetings, calls, podcasts) in addition to mic input
-- Combine system audio and mic audio into a single session for full meeting/call recording
-- macOS options: BlackHole virtual audio device, Loopback, or ScreenCaptureKit API
-- Could mix into one stream or record as separate channels
+## System audio recording (Phase 1 done)
+- [x] Capture system audio via BlackHole to separate WAV (`--sys-audio` flag)
+- [x] Dual InfoBar level meters (mic + sys)
+- [x] Streaming FLAC compression on shutdown
+- [ ] Phase 2: Transcribe both channels independently via Parakeet for diarization (mic=local, sys=remote)
+- [ ] Phase 2: Interleave transcripts by timestamp with speaker labels
 
 ## Diarization
 - Speaker identification/labeling in transcripts ("Speaker A", "Speaker B")
