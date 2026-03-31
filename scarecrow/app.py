@@ -718,10 +718,11 @@ class ScarecrowApp(App[None]):
             return
 
         # Speech-frame-ratio gate: skip if too few chunks have speech.
+        # Uses half the silence threshold to avoid filtering quiet-but-real
+        # speech (peak at "med" level ≈ RMS near the silence threshold).
         if chunk_energies:
-            speech_chunks = sum(
-                1 for e in chunk_energies if e >= self._cfg.VAD_SILENCE_THRESHOLD
-            )
+            energy_floor = self._cfg.VAD_SILENCE_THRESHOLD * 0.5
+            speech_chunks = sum(1 for e in chunk_energies if e >= energy_floor)
             speech_ratio = speech_chunks / len(chunk_energies)
             if speech_ratio < self._cfg.VAD_MIN_SPEECH_RATIO:
                 log.debug(

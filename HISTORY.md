@@ -4,10 +4,14 @@ Bug entries are inline under their date heading. A squashed bug must reference a
 
 ## 2026-03-30 (system audio capture via BlackHole)
 
-- **System audio recording (Phase 1):** New `--sys-audio` flag enables recording system audio (BlackHole or any named device) to a separate `audio_sys.wav` alongside the mic recording. Uses an independent `SystemAudioCapture` class with its own PortAudio stream, writer thread, and peak meter — zero modifications to the existing AudioRecorder or transcription pipeline.
+- **System audio recording (Phase 1):** New `--sys-audio` flag enables recording system audio (BlackHole) to a separate `audio_sys.wav` alongside the mic recording. Uses an independent `SystemAudioCapture` class with its own PortAudio stream, writer thread, and peak meter — zero modifications to the existing AudioRecorder or transcription pipeline.
+- **Automatic audio routing via CoreAudio:** On `--sys-audio`, Scarecrow creates a private Multi-Output Device (via `AudioHardwareCreateAggregateDevice` ctypes) that routes system audio to both speakers and BlackHole. No manual Audio MIDI Setup needed. Restored on shutdown with atexit safety net.
 - **Dual InfoBar meters:** When system audio is active, the InfoBar shows separate mic and sys level meters with independent log-scale rendering.
-- **Streaming FLAC compression for sys audio:** `Session.compress_sys_audio()` uses block-wise read/write (~5 MB chunks) instead of loading the entire file into memory. Independent of mic compression — one failing doesn't skip the other.
+- **Streaming FLAC compression for sys audio:** `Session.compress_sys_audio()` uses block-wise read/write (~5 MB chunks) instead of loading the entire file into memory. Independent of mic compression.
+- **Speech-frame-ratio gate fix:** Energy floor lowered to half the silence threshold (0.005 vs 0.01) to avoid filtering quiet-but-real speech that shows "med" on the peak meter.
+- **Quick quit terminal feedback:** `Ctrl+Shift+Q` now prints "Shutting down (quick quit)…" and "Summary skipped" in terminal output.
 - **`--sys-audio` is opt-in:** Default behavior is unchanged. No overhead when the flag is not passed.
+- **New module:** `scarecrow/audio_routing.py` — CoreAudio Multi-Output Device lifecycle via ctypes (zero pip dependencies).
 - **New config:** `SYSTEM_AUDIO_DEVICE: str = "BlackHole"` — device name substring match for BlackHole discovery.
 - **11 new tests** covering device discovery, capture lifecycle, peak decay, WAV writing, streaming compression.
 

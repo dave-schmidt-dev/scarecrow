@@ -85,18 +85,17 @@ def main() -> None:
         print(f"  Failed to load Parakeet model: {exc}", file=sys.stderr)
         sys.exit(1)
 
+    multi_output = None
     if sys_audio:
-        from scarecrow.sys_audio import find_blackhole_device
+        from scarecrow.audio_routing import create_multi_output
 
-        dev = find_blackhole_device(config.config.SYSTEM_AUDIO_DEVICE)
-        if dev is not None:
-            import sounddevice as sd
-
-            dev_name = sd.query_devices(dev)["name"]
-            print(f"  System audio: {dev_name} (device {dev})", flush=True)
+        multi_output = create_multi_output(config.config.SYSTEM_AUDIO_DEVICE)
+        if multi_output:
+            print("  System audio: routing via Multi-Output Device", flush=True)
         else:
             print(
-                f"  System audio: not found ({config.config.SYSTEM_AUDIO_DEVICE})",
+                "  System audio: could not create routing "
+                f"({config.config.SYSTEM_AUDIO_DEVICE} not found?)",
                 flush=True,
             )
 
@@ -116,7 +115,10 @@ def main() -> None:
             if app._shutdown_summary:
                 print(app._shutdown_summary, flush=True)
         else:
-            print("\n  Shutting down…", flush=True)
+            if getattr(app, "_skip_summary", False):
+                print("\n  Shutting down (quick quit)…", flush=True)
+            else:
+                print("\n  Shutting down…", flush=True)
             try:
                 app.cleanup_after_exit()  # Phase 1 safety net (no-op if already ran)
             except Exception:
@@ -130,6 +132,18 @@ def main() -> None:
             if getattr(app, "_summary_path", None):
                 print(f"  Summary: {app._summary_path}", flush=True)
             print("  Done.", flush=True)
+        # Restore original audio output and destroy multi-output device
+        if multi_output is not None:
+            from scarecrow.audio_routing import destroy_multi_output
+
+            print("  Restoring audio output…", flush=True)
+            try:
+                destroy_multi_output(multi_output)
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Failed to destroy multi-output device"
+                )
+            multi_output = None
         print(flush=True)
         print("  Press Enter to close (auto-close in 30s)…", flush=True)
         _wait_for_enter_or_timeout(30)

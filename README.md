@@ -201,6 +201,12 @@ uv run ruff check scarecrow/ tests/  # lint
 uv run vulture scarecrow/ vulture_whitelist.py  # dead code check
 ```
 
+**After editing source files**, rebuild before testing:
+```bash
+uv sync --reinstall-package scarecrow --no-editable
+```
+The non-editable install means the venv has a snapshot copy of the source — edits don't take effect until you rebuild.
+
 **Do not run `pytest` directly** — always use `bash scripts/run_test_suite.sh`. The suite runner isolates each test file in its own subprocess to handle PortAudio teardown cleanly.
 
 Pre-commit hooks run ruff (lint + format) and vulture automatically.
