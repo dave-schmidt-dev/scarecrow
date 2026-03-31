@@ -200,6 +200,8 @@ class ScarecrowApp(App[None]):
         self._summary_path: Path | None = None
         self._batch_executor: ThreadPoolExecutor | None = None
         self._batch_futures: set[Future[str | None]] = set()
+        self._mic_future: Future[str | None] | None = None
+        self._sys_future: Future[str | None] | None = None
         self._batch_window_start: int = 0
         self._shutdown_lock = threading.RLock()
         self._ignore_batch_results = False
@@ -591,10 +593,31 @@ class ScarecrowApp(App[None]):
     def _ensure_batch_executor(self) -> ThreadPoolExecutor:
         if self._batch_executor is None:
             self._batch_executor = ThreadPoolExecutor(
-                max_workers=1,
+                max_workers=2,
                 thread_name_prefix="batch-transcribe",
             )
         return self._batch_executor
+
+    def _reap_source_future(self, source: str) -> bool:
+        """Reap the per-source future. Returns True if the slot is free."""
+        future = self._mic_future if source == "mic" else self._sys_future
+        if future is None:
+            return True
+        if not future.done():
+            return False
+        # Reap it
+        try:
+            future.result(timeout=0)
+        except Exception as exc:
+            log.exception("Batch worker failed (%s)", source)
+            self._warn_transcript(f"Batch transcription failed: {exc}")
+        if source == "mic":
+            self._mic_future = None
+        else:
+            self._sys_future = None
+        # Also remove from the shared set used by shutdown
+        self._batch_futures.discard(future)
+        return True
 
     def _submit_batch_transcription(
         self, audio, batch_elapsed: int, *, source: str = "mic"
@@ -613,17 +636,23 @@ class ScarecrowApp(App[None]):
                 self._set_status("Transcription unavailable", error=True)
             return False
 
-        self._reap_batch_futures()
-        if self._batch_futures:
+        # Per-source busy check — mic and sys can run concurrently
+        if not self._reap_source_future(source):
             log.warning(
-                "Skipping batch tick while previous batch "
-                "transcription is still running"
+                "Skipping %s batch tick while previous %s "
+                "transcription is still running",
+                source,
+                source,
             )
-            self._set_status("Batch busy; carrying audio into the next window.")
             return False
 
         fn = functools.partial(self._transcriber.transcribe_batch, source=source)
         future = self._ensure_batch_executor().submit(fn, audio, batch_elapsed)
+        if source == "mic":
+            self._mic_future = future
+        else:
+            self._sys_future = future
+        # Keep in shared set for shutdown drain
         self._batch_futures.add(future)
         return True
 
@@ -816,8 +845,7 @@ class ScarecrowApp(App[None]):
         if self._audio_recorder is None or self._transcriber is None:
             return
 
-        self._reap_batch_futures()
-        if self._batch_futures:
+        if not self._reap_source_future("mic"):
             return
 
         result = self._audio_recorder.drain_to_silence()
@@ -851,8 +879,7 @@ class ScarecrowApp(App[None]):
         if self._sys_capture is None or self._transcriber is None:
             return
 
-        self._reap_batch_futures()
-        if self._batch_futures:
+        if not self._reap_source_future("sys"):
             return
 
         result = self._sys_capture.drain_to_silence(
@@ -1007,16 +1034,18 @@ class ScarecrowApp(App[None]):
     def _on_vad_poll(self) -> None:
         """Poll for silence boundaries (parakeet backend)."""
         if self.state is AppState.RECORDING:
-            if not self._mic_muted:
-                self._vad_transcribe()
-            # Sys VAD runs after mic — mic gets priority via "batch busy" guard
+            # Sys drains first so its text is in the echo filter before
+            # mic drains — mic bleed is then caught by is_echo().
             if self._sys_capture is not None and not self._sys_muted:
                 self._sys_vad_transcribe()
-        # Always update buffer age display
-        if self._audio_recorder is not None:
-            buf_s = int(self._audio_recorder.buffer_seconds)
-            self._batch_countdown = buf_s
-            self._sync_info_bar()
+            if not self._mic_muted:
+                self._vad_transcribe()
+        # Always update buffer age display (show whichever source has more)
+        rec = self._audio_recorder
+        mic_buf = float(rec.buffer_seconds) if rec else 0.0
+        sys_buf = float(self._sys_capture.buffer_seconds) if self._sys_capture else 0.0
+        self._batch_countdown = int(max(mic_buf, sys_buf))
+        self._sync_info_bar()
 
     def action_pause(self) -> None:
         if self.state is AppState.RECORDING:

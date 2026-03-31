@@ -41,9 +41,9 @@ class Config:
     # TODO: benchmark via bench_librispeech.py
     VAD_MIN_SPEECH_RATIO: float = 0.15
 
-    # System audio VAD — tuned for clean digital audio (no ambient noise)
+    # System audio VAD — same silence window as mic (benchmarked at 750ms)
     SYS_VAD_SILENCE_THRESHOLD: float = 0.003  # lower than mic (no noise floor)
-    SYS_VAD_MIN_SILENCE_MS: int = 1500  # longer than mic — reduce mid-sentence cuts
+    SYS_VAD_MIN_SILENCE_MS: int = 750
     SYS_VAD_MIN_SPEECH_RATIO: float = 0.0  # disabled — no ambient noise to filter
 
     # System audio capture device

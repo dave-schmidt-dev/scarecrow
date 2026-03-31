@@ -119,3 +119,129 @@ def test_prune_on_record_removes_expired() -> None:
 
     # Only the fresh entry should survive
     assert len(ef._recent_sys) == 1
+
+
+# ---------------------------------------------------------------------------
+# Consecutive-run echo detection (partial overlap / offset boundaries)
+# ---------------------------------------------------------------------------
+
+
+def test_consecutive_run_catches_partial_echo() -> None:
+    """Mic echoing 8+ consecutive sys words is suppressed even with low Jaccard."""
+    ef = EchoFilter(min_consecutive_run=8)
+    ef.record_sys(
+        "highway underpasses and other conspicuous locations of course "
+        "philly isn't the only city that deals with graffiti"
+    )
+    # Mic picks up a shifted window — different start, same middle
+    assert (
+        ef.is_echo(
+            "some unrelated preamble words here but of course "
+            "philly isn't the only city that deals with graffiti "
+            "and some trailing words too"
+        )
+        is True
+    )
+
+
+def test_consecutive_run_ignores_short_matches() -> None:
+    """Fewer than min_consecutive_run matching words is not suppressed."""
+    ef = EchoFilter(min_consecutive_run=8)
+    ef.record_sys("the quick brown fox jumps over the lazy dog")
+    # Only 4 consecutive matches — below threshold
+    assert (
+        ef.is_echo(
+            "totally different intro the quick brown fox and then diverges completely"
+        )
+        is False
+    )
+
+
+def test_consecutive_run_own_speech_not_suppressed() -> None:
+    """User's own speech should not be suppressed even when sys is active."""
+    ef = EchoFilter(min_consecutive_run=8)
+    ef.record_sys(
+        "and the quarterly results show a fifteen percent increase "
+        "in revenue compared to the previous fiscal year"
+    )
+    # User responding to the remote speaker — completely different words
+    assert (
+        ef.is_echo(
+            "yeah I think we should focus on the cost reduction "
+            "strategy before the next board meeting on friday"
+        )
+        is False
+    )
+
+
+def test_consecutive_run_with_common_words() -> None:
+    """Common words alone should not trigger a false positive."""
+    ef = EchoFilter(min_consecutive_run=8)
+    ef.record_sys(
+        "the project is on track and we will deliver the results "
+        "by the end of the quarter as planned"
+    )
+    # Different sentence that shares some common words but not consecutively
+    assert (
+        ef.is_echo(
+            "I think the timeline is too aggressive and we need "
+            "to push the deadline by at least two weeks"
+        )
+        is False
+    )
+
+
+# ---------------------------------------------------------------------------
+# Bidirectional echo detection (sys suppressed when mic transcribed first)
+# ---------------------------------------------------------------------------
+
+
+def test_sys_echo_suppressed_when_mic_first() -> None:
+    """Sys text is suppressed if mic already transcribed the same content."""
+    ef = EchoFilter()
+    ef.record_mic("the quick brown fox jumps over the lazy dog")
+    assert ef.is_sys_echo("the quick brown fox jumps over the lazy dog") is True
+
+
+def test_sys_echo_not_suppressed_for_different_text() -> None:
+    """Sys text passes through if it doesn't match recent mic text."""
+    ef = EchoFilter()
+    ef.record_mic("hello this is my own speech about something")
+    assert (
+        ef.is_sys_echo(
+            "the remote speaker is talking about a completely different topic right now"
+        )
+        is False
+    )
+
+
+def test_sys_echo_consecutive_run_catches_partial() -> None:
+    """Sys text with 8+ consecutive words matching mic is suppressed."""
+    ef = EchoFilter(min_consecutive_run=8)
+    ef.record_mic(
+        "big meta social media trial brian mccullough from "
+        "the tech room ride home will talk about the latest tech news"
+    )
+    # Sys drains later with overlapping but shifted content
+    assert (
+        ef.is_sys_echo(
+            "big met a social media trial brian mccullough from "
+            "the tech crew ride home we'll talk about the latest tech news"
+        )
+        is True
+    )
+
+
+def test_bidirectional_first_source_wins() -> None:
+    """Whichever source transcribes first is kept; the other is suppressed."""
+    ef = EchoFilter()
+    text = "the quick brown fox jumps over the lazy dog in the park"
+
+    # Scenario 1: mic first → sys suppressed
+    ef.record_mic(text)
+    assert ef.is_sys_echo(text) is True
+
+    # Scenario 2: sys first → mic suppressed
+    ef2 = EchoFilter()
+    ef2.record_sys(text)
+    assert ef2.is_echo(text) is True

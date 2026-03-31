@@ -11,6 +11,7 @@
 - [x] Per-source mute (Ctrl+M mic, Ctrl+Shift+S sys)
 - [ ] Tune sys audio VAD thresholds with real meeting data
   - Replay tool: `python scripts/replay_test.py <wav> --save-baseline` / `--check-baseline`
+- [ ] Wire up `EchoFilter.record_mic()` / `is_sys_echo()` — bidirectional suppression implemented but not called from app; evaluate whether sys-authoritative approach is sufficient first
 
 ## Diarization
 - Speaker identification/labeling in transcripts ("Speaker A", "Speaker B")

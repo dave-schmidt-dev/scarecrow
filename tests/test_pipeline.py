@@ -242,14 +242,14 @@ def test_sys_drain_to_silence_with_sys_thresholds(tmp_path: Path) -> None:
             # 10 speech chunks (high RMS)
             for _ in range(10):
                 capture._callback_inner(_speech_chunk(channels=2), status=None)
-            # 20 silence chunks — silence RMS is 0.0, well below SYS threshold 0.003
-            # At 100ms/chunk, 20 chunks = 2000ms > SYS_VAD_MIN_SILENCE_MS (1500ms)
-            for _ in range(20):
+            # 8 silence chunks — silence RMS is 0.0, well below SYS threshold 0.003
+            # At 100ms/chunk, 8 chunks = 800ms > SYS_VAD_MIN_SILENCE_MS (750ms)
+            for _ in range(8):
                 capture._callback_inner(_silence_chunk(channels=2), status=None)
 
             result = capture.drain_to_silence(
                 silence_threshold=0.003,
-                min_silence_ms=1500,
+                min_silence_ms=750,
                 max_buffer_seconds=30,
             )
         finally:
