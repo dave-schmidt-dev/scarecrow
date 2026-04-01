@@ -1,6 +1,6 @@
 [project]
 name = "scarecrow"
-version = "0.1.0"
+version = "1.5.0"
 description = "Always-recording TUI for transcription and inline notes"
 requires-python = ">=3.12"
 dependencies = [

@@ -260,7 +260,7 @@ class ScarecrowApp(App[None]):
         "       (°_°)\n"
         "    ──── | ────🎤\n"
         "        | |\n"
-        "     Scarecrow v1.0[/dim]"
+        "     Scarecrow v1.5[/dim]"
     )
 
     def on_mount(self) -> None:
