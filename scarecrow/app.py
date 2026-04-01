@@ -426,19 +426,24 @@ class ScarecrowApp(App[None]):
         if self._audio_recorder is None or self._transcriber is None:
             return
 
-        # Flush sys audio synchronously first so both sources drain
+        # Flush sys audio first so its text is in the echo filter before mic drains.
+        # Route through the executor so all MLX inference stays on one OS thread.
         if self._sys_capture is not None:
             sys_audio = self._sys_capture.drain_buffer()
             if sys_audio is not None and len(sys_audio) > 0:
                 sys_elapsed = self._sys_batch_window_start
                 self._sys_batch_window_start = self._elapsed
                 try:
-                    text = self._transcriber.transcribe_batch(
-                        sys_audio,
-                        sys_elapsed,
+                    fn = functools.partial(
+                        self._transcriber.transcribe_batch,
                         source="sys",
                         emit_callback=False,
                         max_retries=0,
+                    )
+                    text = (
+                        self._ensure_batch_executor()
+                        .submit(fn, sys_audio, sys_elapsed)
+                        .result(timeout=30)
                     )
                 except Exception:
                     log.exception("Flush: sys audio transcription failed")
@@ -593,8 +598,11 @@ class ScarecrowApp(App[None]):
 
     def _ensure_batch_executor(self) -> ThreadPoolExecutor:
         if self._batch_executor is None:
+            # Single worker ensures all MLX/Metal inference runs on the same OS
+            # thread. The Metal backend has thread-local state; calling generate()
+            # from multiple threads — even serially with a lock — causes a SIGSEGV.
             self._batch_executor = ThreadPoolExecutor(
-                max_workers=2,
+                max_workers=1,
                 thread_name_prefix="batch-transcribe",
             )
         return self._batch_executor
@@ -774,8 +782,16 @@ class ScarecrowApp(App[None]):
             self._prune_richlog()
 
     def _flush_final_batch(self, *, include_ui: bool = True) -> None:
+        """Drain and transcribe remaining audio via the executor.
+
+        All calls go through the single-worker executor so MLX Metal inference
+        always runs on the same OS thread. Calling transcribe_batch() directly
+        on the main thread causes a Metal thread-local-state SIGSEGV.
+        """
         if self._transcriber is None:
             return
+
+        executor = self._ensure_batch_executor()
 
         # Flush mic
         if self._audio_recorder is not None:
@@ -783,12 +799,12 @@ class ScarecrowApp(App[None]):
             if audio is not None and len(audio) > 0:
                 batch_elapsed = self._batch_window_start
                 try:
-                    text = self._transcriber.transcribe_batch(
-                        audio,
-                        batch_elapsed,
+                    fn = functools.partial(
+                        self._transcriber.transcribe_batch,
                         emit_callback=False,
                         max_retries=0,
                     )
+                    text = executor.submit(fn, audio, batch_elapsed).result(timeout=30)
                 except Exception as exc:
                     log.exception("Final mic batch transcription failed")
                     if include_ui:
@@ -803,12 +819,14 @@ class ScarecrowApp(App[None]):
             if sys_audio is not None and len(sys_audio) > 0:
                 sys_elapsed = self._sys_batch_window_start
                 try:
-                    text = self._transcriber.transcribe_batch(
-                        sys_audio,
-                        sys_elapsed,
+                    fn = functools.partial(
+                        self._transcriber.transcribe_batch,
                         source="sys",
                         emit_callback=False,
                         max_retries=0,
+                    )
+                    text = executor.submit(fn, sys_audio, sys_elapsed).result(
+                        timeout=30
                     )
                 except Exception:
                     log.exception("Final sys batch transcription failed")
@@ -835,10 +853,13 @@ class ScarecrowApp(App[None]):
             except Exception:
                 log.exception("Batch worker raised during shutdown")
         self._batch_futures.clear()
-        if timed_out and self._batch_executor is not None:
+        if timed_out:
             self._ignore_batch_results = True
-            self._batch_executor.shutdown(wait=False, cancel_futures=False)
-            self._batch_executor = None
+            # Do NOT shutdown/recreate the executor. shutdown(wait=False) leaves
+            # the old thread alive doing MLX Metal work; the next
+            # _ensure_batch_executor() creates a NEW thread, and two threads
+            # hitting the Metal Device singleton concurrently causes SIGSEGV.
+            # We simply abandon the timed-out future and keep the executor alive.
         return not timed_out, captured
 
     def _vad_transcribe(self) -> None:
@@ -1428,7 +1449,11 @@ class ScarecrowApp(App[None]):
 
     def _cleanup_shutdown_executor(self) -> None:
         if self._batch_executor is not None:
-            self._batch_executor.shutdown(wait=False, cancel_futures=False)
+            # wait=True ensures the MLX executor thread exits cleanly before
+            # the transcriber's model is released. wait=False was the original
+            # code but left the thread alive, which caused crashes if a new
+            # executor was subsequently created.
+            self._batch_executor.shutdown(wait=True, cancel_futures=False)
             self._batch_executor = None
 
     def _cleanup_shutdown_transcriber(self, include_ui: bool) -> None:
