@@ -169,8 +169,8 @@ class ScarecrowApp(App[None]):
         Binding("ctrl+p", "pause", "Pause/Resume", show=True),
         Binding("ctrl+m", "mute_mic", "Mute Mic", show=True),
         Binding("ctrl+shift+s", "mute_sys", "Mute Sys", show=True),
-        Binding("ctrl+shift+q", "quick_quit", "Quick Quit", show=True),
         Binding("ctrl+q", "quit", "Quit", show=True),
+        Binding("ctrl+shift+q", "quick_quit", "Quick Quit", show=False),
         Binding("ctrl+shift+d", "discard_quit", "Discard", show=False),
     ]
 
@@ -396,6 +396,10 @@ class ScarecrowApp(App[None]):
         if self.state is not AppState.RECORDING:
             return
         if self._audio_recorder is None:
+            return
+        # Don't restart when mic is intentionally muted — the stream is
+        # stopped on purpose and stale-callback detection is irrelevant.
+        if self._mic_muted:
             return
         device_changed = self._audio_recorder.default_device_changed
         stale = self._audio_recorder.seconds_since_last_callback
@@ -1162,6 +1166,7 @@ class ScarecrowApp(App[None]):
         if self._audio_recorder is None:
             return
         self._mic_muted = not self._mic_muted
+        log.info("Mic %s", "muted" if self._mic_muted else "unmuted")
         if self._mic_muted:
             # Drain buffer before muting — discard if executor busy
             self._reap_batch_futures()
@@ -1184,6 +1189,7 @@ class ScarecrowApp(App[None]):
         if self._sys_capture is None:
             return
         self._sys_muted = not self._sys_muted
+        log.info("Sys %s", "muted" if self._sys_muted else "unmuted")
         if self._sys_muted:
             self._reap_batch_futures()
             if not self._batch_futures:
@@ -1202,11 +1208,13 @@ class ScarecrowApp(App[None]):
         self._sync_info_bar()
 
     def action_quit(self) -> None:
+        log.info("action_quit triggered (ctrl+q)")
         self._shutdown_summary = self._collect_shutdown_metrics()
         self._set_status("Shutting down…")
         self.set_timer(0.3, self._deferred_quit)
 
     def action_quick_quit(self) -> None:
+        log.info("action_quick_quit triggered (ctrl+shift+q)")
         self._skip_summary = True
         self._shutdown_summary = self._collect_shutdown_metrics()
         self._set_status("Shutting down (no summary)…")

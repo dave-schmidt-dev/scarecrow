@@ -2,6 +2,12 @@
 
 Bug entries are inline under their date heading. A squashed bug must reference a regression test.
 
+## 2026-04-01
+
+- **Fixed: muting both sources caused immediate shutdown.** Root cause: Textual renders footer bindings by priority, placing "Quick Quit" (ctrl+shift+q) adjacent to "Mute Sys" (ctrl+shift+s). Clicking "Mute Sys" near the right edge triggered Quick Quit instead. Fix: Quick Quit hidden from footer (`show=False`), still available via keyboard. Regression test: `test_quick_quit_binding_is_hidden_from_footer`.
+- **Fixed: audio output stuck on Scarecrow Output after crash.** When a session exited without cleanup, the Scarecrow Multi-Output Device remained the default output. All subsequent sessions saw "Already using Scarecrow Output" and stored it as the original device, making `restore_output()` a permanent no-op. Fix: detect the built-in output as fallback via `_find_builtin_output()`. Regression tests: `test_already_on_scarecrow_with_builtin_uses_builtin_as_original`, `test_already_on_scarecrow_without_builtin_falls_back`.
+- **Fixed: device-loss detector restarted mic while muted.** `_check_device_loss()` triggered after 3s of no audio callback (normal when muted), calling `restart_stream()` on the intentionally-stopped mic. Fix: skip detection when `_mic_muted` is True. Regression test: `test_check_device_loss_skips_restart_when_mic_muted`.
+
 ## 2026-03-31 (dual-channel transcription, echo filter, mute controls)
 
 - **System audio transcription (Phase 2):** System audio captured via BlackHole is now transcribed through Parakeet alongside the mic. Uses the same single-threaded executor (mic priority — sys audio buffers when executor is busy). Sys transcripts display with a dim `◁` prefix for visual separation.

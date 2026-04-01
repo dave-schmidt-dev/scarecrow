@@ -724,3 +724,106 @@ async def test_post_exit_cleanup_skips_when_disabled(mock_session, mock_rec) -> 
         app._skip_summary = True
         app.post_exit_cleanup()
         mock_session.compress_sys_audio.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _check_device_loss() skips restart when mic is muted (Bug 1)
+# ---------------------------------------------------------------------------
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_check_device_loss_skips_restart_when_mic_muted(
+    mock_session, mock_rec
+) -> None:
+    """_check_device_loss() must not call restart_stream() when mic is muted."""
+    recorder = _mock_recorder()
+    mock_rec.return_value = recorder
+    mock_session.return_value = MagicMock()
+
+    app = ScarecrowApp(transcriber=_mock_transcriber(), sys_audio=False)
+    app._preflight_check = lambda: True  # type: ignore[method-assign]
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        assert app.state is AppState.RECORDING
+        # Mute the mic, then simulate a stale callback window
+        app._mic_muted = True
+        recorder.seconds_since_last_callback = 5.0  # > _DEVICE_LOSS_THRESHOLD (3.0)
+        recorder.default_device_changed = False
+        recorder.restart_stream.reset_mock()
+        app._check_device_loss()
+        recorder.restart_stream.assert_not_called()
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_check_device_loss_restarts_when_mic_not_muted(
+    mock_session, mock_rec
+) -> None:
+    """restart_stream() fires when threshold exceeded and mic not muted."""
+    recorder = _mock_recorder()
+    mock_rec.return_value = recorder
+    mock_session.return_value = MagicMock()
+
+    app = ScarecrowApp(transcriber=_mock_transcriber(), sys_audio=False)
+    app._preflight_check = lambda: True  # type: ignore[method-assign]
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        assert app.state is AppState.RECORDING
+        assert app._mic_muted is False
+        recorder.seconds_since_last_callback = 5.0  # > _DEVICE_LOSS_THRESHOLD (3.0)
+        recorder.default_device_changed = False
+        recorder.restart_stream.reset_mock()
+        app._check_device_loss()
+        recorder.restart_stream.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Footer binding visibility — Quick Quit hidden, Mute Sys visible (Bug 3)
+# ---------------------------------------------------------------------------
+
+
+async def test_quick_quit_binding_is_hidden_from_footer() -> None:
+    """Quick Quit binding must have show=False so it is absent from the footer."""
+    from scarecrow.app import ScarecrowApp
+
+    hidden = [b for b in ScarecrowApp.BINDINGS if b.action == "quick_quit"]
+    assert hidden, "quick_quit binding not found in BINDINGS"
+    assert not hidden[0].show, "quick_quit binding should have show=False"
+
+
+async def test_mute_sys_binding_is_visible_in_footer() -> None:
+    """Mute Sys binding must have show=True so it appears in the footer."""
+    from scarecrow.app import ScarecrowApp
+
+    visible = [b for b in ScarecrowApp.BINDINGS if b.action == "mute_sys"]
+    assert visible, "mute_sys binding not found in BINDINGS"
+    assert visible[0].show, "mute_sys binding should have show=True"
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_quick_quit_action_sets_skip_summary(mock_session, mock_rec) -> None:
+    """action_quick_quit() sets _skip_summary=True when invoked."""
+    recorder = _mock_recorder()
+    mock_rec.return_value = recorder
+    mock_session.return_value = MagicMock()
+
+    session_mock = MagicMock()
+    session_mock.audio_path.exists.return_value = False
+    session_mock.transcript_path.exists.return_value = False
+    mock_session.return_value = session_mock
+
+    app = ScarecrowApp(transcriber=_mock_transcriber(), sys_audio=False)
+    app._preflight_check = lambda: True  # type: ignore[method-assign]
+    async with app.run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        assert app.state is AppState.RECORDING
+        assert app._skip_summary is False
+        # Patch _deferred_quit so the app doesn't actually exit during the test
+        app._deferred_quit = lambda: None  # type: ignore[method-assign]
+        app.action_quick_quit()
+        assert app._skip_summary is True

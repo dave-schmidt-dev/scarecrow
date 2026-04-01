@@ -375,13 +375,27 @@ def activate_scarecrow_output(
     orig_id, _ = get_default_output_device()
     orig_name = _get_string_property(orig_id, _PROP_DEVICE_NAME)
 
-    # Already on Scarecrow Output — nothing to do
+    # Already on Scarecrow Output — a previous session may have crashed
+    # without restoring. Find the built-in output so we can restore it later.
     if orig_id == scarecrow_id:
-        log.info("Already using '%s'", device_name)
-        handle = AudioOutputSwitch(
-            original_output_id=orig_id,
-            scarecrow_output_id=scarecrow_id,
-        )
+        fallback_id = _find_builtin_output()
+        if fallback_id is not None:
+            fallback_name = _get_string_property(fallback_id, _PROP_DEVICE_NAME)
+            log.info(
+                "Already using '%s' — will restore to %s on exit",
+                device_name,
+                fallback_name or f"device {fallback_id}",
+            )
+            handle = AudioOutputSwitch(
+                original_output_id=fallback_id,
+                scarecrow_output_id=scarecrow_id,
+            )
+        else:
+            log.info("Already using '%s'", device_name)
+            handle = AudioOutputSwitch(
+                original_output_id=orig_id,
+                scarecrow_output_id=scarecrow_id,
+            )
         _active_switch = handle
         atexit.register(_atexit_restore)
         return handle
