@@ -886,15 +886,19 @@ class ScarecrowApp(App[None]):
         # speech (peak at "med" level ≈ RMS near the silence threshold).
         # Secondary low-floor check handles reduced-level audio environments
         # (e.g. Mac phone calls where mic RMS is well below VAD threshold).
+        # The low-floor path requires a HIGHER speech ratio (2x) because
+        # weak signals need more evidence of real speech to avoid sending
+        # near-silence to Parakeet (which hallucinates on it).
         if chunk_energies:
             energy_floor = self._cfg.VAD_SILENCE_THRESHOLD * 0.5
             speech_chunks = sum(1 for e in chunk_energies if e >= energy_floor)
             speech_ratio = speech_chunks / len(chunk_energies)
             if speech_ratio < self._cfg.VAD_MIN_SPEECH_RATIO:
-                low_floor = self._cfg.VAD_SILENCE_THRESHOLD * 0.05
+                low_floor = self._cfg.VAD_SILENCE_THRESHOLD * 0.15
+                low_speech_ratio = self._cfg.VAD_MIN_SPEECH_RATIO * 2
                 low_chunks = sum(1 for e in chunk_energies if e >= low_floor)
                 low_ratio = low_chunks / len(chunk_energies)
-                if low_ratio < self._cfg.VAD_MIN_SPEECH_RATIO:
+                if low_ratio < low_speech_ratio:
                     log.debug(
                         "Skipping low-speech buffer (%.0f%% < %.0f%%)",
                         speech_ratio * 100,

@@ -125,6 +125,19 @@ def main() -> None:
                 app.cleanup_after_exit()  # Phase 1 safety net (no-op if already ran)
             except Exception:
                 logging.getLogger(__name__).exception("Phase 1 cleanup failed")
+            # Restore audio output immediately after stopping recording,
+            # before slow Phase 2 work (compression + summarization).
+            if audio_switch is not None:
+                from scarecrow.audio_routing import restore_output
+
+                print("  Restoring audio output…", flush=True)
+                try:
+                    restore_output(audio_switch)
+                    audio_switch = None  # prevent double-restore
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "Failed to restore audio output"
+                    )
             try:
                 app.post_exit_cleanup()  # Phase 2: compress + maybe summarize
             except Exception:
@@ -134,7 +147,7 @@ def main() -> None:
             if getattr(app, "_summary_path", None):
                 print(f"  Summary: {app._summary_path}", flush=True)
             print("  Done.", flush=True)
-        # Restore original audio output
+        # Restore audio output (discard path, or Phase 1 restore skipped)
         if audio_switch is not None:
             from scarecrow.audio_routing import restore_output
 

@@ -1462,6 +1462,156 @@ async def test_batch_transcription_not_triggered_before_interval(
 
 
 # ---------------------------------------------------------------------------
+# Speech-ratio gate: low-floor path filtering
+# ---------------------------------------------------------------------------
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_vad_skips_near_silent_mic_audio(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """_vad_transcribe must skip buffers where all chunks are near-silent.
+
+    Regression: low_floor (0.05x threshold) was so permissive that noise
+    passed the gate, causing Parakeet to hallucinate on silence.
+    """
+    mock_recorder = _mock_recorder()
+    # All chunk energies well below the low floor (0.15 * 0.01 = 0.0015)
+    mock_recorder.drain_to_silence.return_value = (
+        np.zeros(16000, dtype=np.float32),
+        [0.0005] * 10,  # noise — below low_floor
+    )
+    mock_recorder_cls.return_value = mock_recorder
+    mock_session_cls.return_value = MagicMock()
+
+    transcriber = _mock_transcriber()
+
+    async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        app._start_recording()
+        await pilot.pause(delay=0.3)
+        assert app.state is AppState.RECORDING
+
+        if app._batch_timer is not None:
+            app._batch_timer.pause()
+
+        submit_calls: list[bool] = []
+        original_submit = app._submit_batch_transcription
+
+        def track_submit(audio, batch_elapsed):
+            submit_calls.append(True)
+            return original_submit(audio, batch_elapsed)
+
+        app._submit_batch_transcription = track_submit  # type: ignore[method-assign]
+
+        app._vad_transcribe()
+        await pilot.pause()
+
+        assert len(submit_calls) == 0, (
+            "Near-silent audio must be skipped by the speech-ratio gate"
+        )
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_vad_low_floor_requires_higher_speech_ratio(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """Low-floor path requires 2x the normal speech ratio (30% not 15%).
+
+    Simulates a phone call: most chunks are below the primary floor (0.005)
+    but above the low floor (0.0015). With only 20% of chunks having speech
+    at the low-floor level, the buffer must be skipped.
+    """
+    mock_recorder = _mock_recorder()
+    # 2 out of 10 chunks above low_floor (20%), 8 below
+    # 20% is above the normal ratio (15%) but below the 2x ratio (30%)
+    energies = [0.002] * 2 + [0.0005] * 8
+    mock_recorder.drain_to_silence.return_value = (
+        np.zeros(16000, dtype=np.float32),
+        energies,
+    )
+    mock_recorder_cls.return_value = mock_recorder
+    mock_session_cls.return_value = MagicMock()
+
+    transcriber = _mock_transcriber()
+
+    async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        app._start_recording()
+        await pilot.pause(delay=0.3)
+        assert app.state is AppState.RECORDING
+
+        if app._batch_timer is not None:
+            app._batch_timer.pause()
+
+        submit_calls: list[bool] = []
+        original_submit = app._submit_batch_transcription
+
+        def track_submit(audio, batch_elapsed):
+            submit_calls.append(True)
+            return original_submit(audio, batch_elapsed)
+
+        app._submit_batch_transcription = track_submit  # type: ignore[method-assign]
+
+        app._vad_transcribe()
+        await pilot.pause()
+
+        assert len(submit_calls) == 0, (
+            "Low-floor path must require 2x speech ratio (30%), 20% should not pass"
+        )
+
+
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_vad_low_floor_passes_with_sufficient_speech(
+    mock_session_cls, mock_recorder_cls
+) -> None:
+    """Low-floor path proceeds when enough chunks have detectable speech.
+
+    Simulates a phone call with genuine speech: 40% of chunks above the
+    low floor, which exceeds the 2x ratio (30%).
+    """
+    mock_recorder = _mock_recorder()
+    # 4 out of 10 chunks above low_floor (40%), 6 below
+    energies = [0.002] * 4 + [0.0005] * 6
+    mock_recorder.drain_to_silence.return_value = (
+        np.zeros(16000, dtype=np.float32),
+        energies,
+    )
+    mock_recorder_cls.return_value = mock_recorder
+    mock_session_cls.return_value = MagicMock()
+
+    transcriber = _mock_transcriber()
+
+    async with ScarecrowApp(transcriber=transcriber).run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        app._start_recording()
+        await pilot.pause(delay=0.3)
+        assert app.state is AppState.RECORDING
+
+        if app._batch_timer is not None:
+            app._batch_timer.pause()
+
+        submit_calls: list[bool] = []
+        original_submit = app._submit_batch_transcription
+
+        def track_submit(audio, batch_elapsed):
+            submit_calls.append(True)
+            return original_submit(audio, batch_elapsed)
+
+        app._submit_batch_transcription = track_submit  # type: ignore[method-assign]
+
+        app._vad_transcribe()
+        await pilot.pause()
+
+        assert len(submit_calls) == 1, (
+            "Low-floor path must proceed when speech ratio exceeds 2x threshold"
+        )
+
+
+# ---------------------------------------------------------------------------
 # New tests: invalid state transitions are no-ops
 # ---------------------------------------------------------------------------
 
