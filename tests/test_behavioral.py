@@ -788,7 +788,10 @@ async def test_wait_for_batch_workers_survives_timeout() -> None:
         assert completed is False
         assert captured == []
         assert app._batch_futures == set()
-        assert app._batch_executor is None
+        # Executor must NOT be destroyed on timeout — shutdown(wait=False) leaves
+        # the old thread alive; creating a new executor would give two threads
+        # hitting the Metal Device concurrently (SIGSEGV).
+        assert app._batch_executor is not None
         assert app._ignore_batch_results is True
 
 
@@ -1018,7 +1021,7 @@ def test_cleanup_after_exit_shuts_down_batch_executor() -> None:
 
     app.cleanup_after_exit()
 
-    mock_executor.shutdown.assert_called_once_with(wait=False, cancel_futures=False)
+    mock_executor.shutdown.assert_called_once_with(wait=True, cancel_futures=False)
     assert app._batch_executor is None
 
 
