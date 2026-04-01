@@ -74,9 +74,10 @@ class Transcriber:
 
         model = self._model_manager.get_parakeet_model()
         t0 = time.perf_counter()
-        audio_mx = mx.array(audio)
-        mel = get_logmel(audio_mx, model.preprocessor_config)
-        result = model.generate(mel)[0]
+        with self._model_manager.inference_lock:
+            audio_mx = mx.array(audio)
+            mel = get_logmel(audio_mx, model.preprocessor_config)
+            result = model.generate(mel)[0]
         wall = time.perf_counter() - t0
         audio_s = len(audio) / self._cfg.SAMPLE_RATE
         log.debug(

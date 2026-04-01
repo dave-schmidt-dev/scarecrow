@@ -167,8 +167,8 @@ class ScarecrowApp(App[None]):
 
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("ctrl+p", "pause", "Pause/Resume", show=True),
-        Binding("ctrl+m", "mute_mic", "Mute Mic", show=False),
-        Binding("ctrl+shift+s", "mute_sys", "Mute Sys", show=False),
+        Binding("ctrl+m", "mute_mic", "Mute Mic", show=True),
+        Binding("ctrl+shift+s", "mute_sys", "Mute Sys", show=True),
         Binding("ctrl+shift+q", "quick_quit", "Quick Quit", show=True),
         Binding("ctrl+q", "quit", "Quit", show=True),
         Binding("ctrl+shift+d", "discard_quit", "Discard", show=False),
@@ -332,7 +332,8 @@ class ScarecrowApp(App[None]):
             self._audio_recorder.peak_level if self._audio_recorder else 0.0
         )
         bar.sys_peak_level = self._sys_capture.peak_level if self._sys_capture else 0.0
-        bar.has_sys_audio = self._sys_capture is not None
+        has_sys = self._sys_capture is not None
+        bar.has_sys_audio = has_sys
         bar.mic_muted = self._mic_muted
         bar.sys_muted = self._sys_muted
 
@@ -858,17 +859,28 @@ class ScarecrowApp(App[None]):
         # Speech-frame-ratio gate: skip if too few chunks have speech.
         # Uses half the silence threshold to avoid filtering quiet-but-real
         # speech (peak at "med" level ≈ RMS near the silence threshold).
+        # Secondary low-floor check handles reduced-level audio environments
+        # (e.g. Mac phone calls where mic RMS is well below VAD threshold).
         if chunk_energies:
             energy_floor = self._cfg.VAD_SILENCE_THRESHOLD * 0.5
             speech_chunks = sum(1 for e in chunk_energies if e >= energy_floor)
             speech_ratio = speech_chunks / len(chunk_energies)
             if speech_ratio < self._cfg.VAD_MIN_SPEECH_RATIO:
+                low_floor = self._cfg.VAD_SILENCE_THRESHOLD * 0.05
+                low_chunks = sum(1 for e in chunk_energies if e >= low_floor)
+                low_ratio = low_chunks / len(chunk_energies)
+                if low_ratio < self._cfg.VAD_MIN_SPEECH_RATIO:
+                    log.debug(
+                        "Skipping low-speech buffer (%.0f%% < %.0f%%)",
+                        speech_ratio * 100,
+                        self._cfg.VAD_MIN_SPEECH_RATIO * 100,
+                    )
+                    return
                 log.debug(
-                    "Skipping low-speech buffer (%.0f%% < %.0f%%)",
+                    "Low-signal audio (primary=%.0f%%, low=%.0f%%) — proceeding",
                     speech_ratio * 100,
-                    self._cfg.VAD_MIN_SPEECH_RATIO * 100,
+                    low_ratio * 100,
                 )
-                return
 
         batch_elapsed = self._batch_window_start
         self._batch_window_start = self._elapsed

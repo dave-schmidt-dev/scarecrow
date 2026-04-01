@@ -26,6 +26,9 @@ class ModelManager:
     def __init__(self, cfg: Config | None = None) -> None:
         self._parakeet_model = None
         self._lock = threading.Lock()
+        # Serializes MLX Metal inference — the backend is not safe for
+        # concurrent generate() calls from multiple threads.
+        self.inference_lock = threading.Lock()
         self._cfg = cfg or config.config
 
     def prepare(self) -> None:

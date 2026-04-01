@@ -34,6 +34,12 @@ _SCOPE_GLOBAL = int.from_bytes(b"glob", "big")
 _ELEMENT_MAIN = 0
 _PROP_DEVICE_UID = int.from_bytes(b"uid ", "big")
 _PROP_DEVICE_NAME = int.from_bytes(b"lnam", "big")
+_PROP_TRANSPORT_TYPE = int.from_bytes(b"tran", "big")
+
+# kAudioDeviceTransportType values
+_TRANSPORT_BUILTIN = int.from_bytes(b"bltn", "big")
+_TRANSPORT_HDMI = int.from_bytes(b"hdmi", "big")
+_TRANSPORT_DISPLAYPORT = int.from_bytes(b"dprt", "big")
 
 # CoreFoundation constants
 _CF_UTF8 = 0x08000100
@@ -185,6 +191,58 @@ def _get_string_property(device_id: int, selector: int) -> str | None:
     buf = ctypes.create_string_buffer(256)
     if _cf.CFStringGetCString(cfstr, buf, 256, _CF_UTF8):
         return buf.value.decode("utf-8")
+    return None
+
+
+def _get_uint32_property(device_id: int, selector: int) -> int | None:
+    prop = _AudioObjectPropertyAddress(selector, _SCOPE_GLOBAL, _ELEMENT_MAIN)
+    size = ctypes.c_uint32(4)
+    value = ctypes.c_uint32(0)
+    if (
+        _ca.AudioObjectGetPropertyData(
+            device_id,
+            ctypes.byref(prop),
+            0,
+            None,
+            ctypes.byref(size),
+            ctypes.byref(value),
+        )
+        != 0
+    ):
+        return None
+    return value.value
+
+
+def _is_display_output(device_id: int) -> bool:
+    """Return True if the device is an HDMI or DisplayPort output.
+
+    macOS Continuity calls sometimes hijack the default output to a display
+    audio device. We skip those when saving the 'original' output so that
+    Scarecrow restores the real listening device on shutdown.
+    """
+    transport = _get_uint32_property(device_id, _PROP_TRANSPORT_TYPE)
+    return transport in (_TRANSPORT_HDMI, _TRANSPORT_DISPLAYPORT)
+
+
+def _find_builtin_output() -> int | None:
+    """Return the device_id of the first built-in output device, or None."""
+    prop = _AudioObjectPropertyAddress(_PROP_DEVICES, _SCOPE_GLOBAL, _ELEMENT_MAIN)
+    size = ctypes.c_uint32(0)
+    _ca.AudioObjectGetPropertyDataSize(
+        _SYSTEM_OBJECT, ctypes.byref(prop), 0, None, ctypes.byref(size)
+    )
+    n = size.value // 4
+    devs = (ctypes.c_uint32 * n)()
+    _ca.AudioObjectGetPropertyData(
+        _SYSTEM_OBJECT, ctypes.byref(prop), 0, None, ctypes.byref(size), devs
+    )
+    for d in devs:
+        transport = _get_uint32_property(d, _PROP_TRANSPORT_TYPE)
+        if transport == _TRANSPORT_BUILTIN:
+            # Confirm it has output channels
+            name = _get_string_property(d, _PROP_DEVICE_NAME)
+            if name:
+                return d
     return None
 
 
