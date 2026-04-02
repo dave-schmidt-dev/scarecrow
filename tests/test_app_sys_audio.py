@@ -334,13 +334,13 @@ async def test_post_exit_cleanup_skips_when_disabled(mock_session, mock_rec) -> 
 # ---------------------------------------------------------------------------
 
 
-async def test_quick_quit_binding_is_hidden_from_footer() -> None:
-    """Quick Quit binding must have show=False so it is absent from the footer."""
+async def test_quick_quit_binding_is_shown_in_footer() -> None:
+    """Quick Quit binding must have show=True so it appears in the footer."""
     from scarecrow.app import ScarecrowApp
 
-    hidden = [b for b in ScarecrowApp.BINDINGS if b.action == "quick_quit"]
-    assert hidden, "quick_quit binding not found in BINDINGS"
-    assert not hidden[0].show, "quick_quit binding should have show=False"
+    bindings = [b for b in ScarecrowApp.BINDINGS if b.action == "quick_quit"]
+    assert bindings, "quick_quit binding not found in BINDINGS"
+    assert bindings[0].show, "quick_quit binding should have show=True"
 
 
 @patch("scarecrow.app.AudioRecorder")

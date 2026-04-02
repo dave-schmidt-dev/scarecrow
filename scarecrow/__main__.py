@@ -157,6 +157,8 @@ def main() -> None:
                 app.post_exit_cleanup()  # Phase 2: compress + maybe summarize
             except Exception:
                 logging.getLogger(__name__).exception("Phase 2 cleanup failed")
+            # Re-collect metrics after compression so FLAC sizes are shown
+            app._shutdown_summary = app._collect_shutdown_metrics()
             if app._shutdown_summary:
                 print(app._shutdown_summary, flush=True)
             if getattr(app, "_summary_path", None):

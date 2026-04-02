@@ -126,14 +126,18 @@ Ctrl+C uses the same cleanup path as Ctrl+Q.
 
 ### Auto-summarization
 
-When a session ends, Scarecrow generates `summary.md` in the session directory using a local LLM (Gemma 3 27B IT via llama-cpp-python). The summary includes:
+When a session ends, Scarecrow generates `summary.md` in the session directory using a local LLM. The summary includes:
 - Prose summary of the transcript with `/note` entries woven in naturally
 - `/task` entries listed as a Markdown checklist at the bottom
 - Footer with model name, word counts, token usage, and summarization time
 
 `/context` entries provide background information (names, spelling, domain terms) that improves summary quality without appearing in the output.
 
-Summarization requires a Gemma 3 GGUF model in the HuggingFace cache and `llama-cpp-python` (installed automatically). The model is loaded in-process — no server needed.
+Two summarizer backends are available:
+- **GGUF** (default): llama-cpp-python with Gemma 3 27B IT. Requires a GGUF model in the HuggingFace cache.
+- **MLX**: mlx-vlm for Apple Silicon native inference with optional TurboQuant KV-cache compression. Install with `uv sync --extra mlx-summarizer`. Set `SUMMARIZER_BACKEND = "mlx"` in config.
+
+Both backends load the model in-process — no server needed.
 
 If `OBSIDIAN_VAULT_DIR` is set in `scarecrow/config.py` (defaults to `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Transcriptions Summaries`), summaries are automatically copied into that directory. Set it to `None` to disable. **Note:** the default path is inside iCloud Drive, so summaries will sync to the cloud if that vault exists on your machine.
 
@@ -265,7 +269,7 @@ scarecrow/
   recorder.py        # sounddevice audio capture + WAV writing
   runtime.py         # HF offline bootstrap, parakeet model manager
   session.py         # timestamped session dirs + transcript files
-  summarizer.py      # LLM summarization via llama-cpp-python (in-process)
+  summarizer.py      # LLM summarization via llama-cpp-python or mlx-vlm
   transcriber.py     # VAD-based parakeet-mlx batch transcription
   app.tcss           # TUI stylesheet
 assets/

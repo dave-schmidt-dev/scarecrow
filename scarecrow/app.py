@@ -268,8 +268,8 @@ class ScarecrowApp(App[None]):
         Binding("ctrl+p", "pause", "Pause/Resume", show=True),
         Binding("ctrl+v", "vad_menu", "Mute/VAD", show=True),
         Binding("ctrl+q", "quit", "Quit", show=True),
-        Binding("ctrl+shift+q", "quick_quit", "Quick Quit", show=False),
-        Binding("ctrl+shift+d", "discard_quit", "Discard", show=False),
+        Binding("ctrl+shift+q", "quick_quit", "Quick Quit", show=True),
+        Binding("ctrl+shift+d", "discard_quit", "Discard", show=True),
     ]
 
     # VAD sensitivity presets: (threshold, min_silence_ms)
@@ -796,6 +796,7 @@ class ScarecrowApp(App[None]):
             return
         if self._echo_filter.is_echo(text):
             return
+        self._echo_filter.record_mic(text)
         self._post_to_ui(
             functools.partial(self._record_transcript, source="mic"),
             text,
@@ -810,6 +811,8 @@ class ScarecrowApp(App[None]):
         if self._sys_holdoff:
             self._sys_holdoff = False
             log.debug("Sys holdoff: discarding first batch result")
+            return
+        if self._echo_filter.is_sys_echo(text):
             return
         self._post_to_ui(
             functools.partial(self._record_transcript, source="sys"),
@@ -1622,18 +1625,23 @@ class ScarecrowApp(App[None]):
             try:
                 for seg in range(1, n_seg + 1):
                     label = f" (seg {seg})" if n_seg > 1 else ""
-                    mic_path = self._session.audio_path_for_segment(seg)
-                    if mic_path.exists():
-                        sz = mic_path.stat().st_size / (1024 * 1024)
-                        lines.append(
-                            f"  Mic audio{label}:  {mic_path.name} ({sz:.1f} MB)"
-                        )
-                    sys_path = self._session.audio_sys_path_for_segment(seg)
-                    if sys_path.exists():
-                        sz = sys_path.stat().st_size / (1024 * 1024)
-                        lines.append(
-                            f"  Sys audio{label}:  {sys_path.name} ({sz:.1f} MB)"
-                        )
+                    mic_wav = self._session.audio_path_for_segment(seg)
+                    mic_flac = mic_wav.with_suffix(".flac")
+                    # Show FLAC if it exists (post-compression), otherwise WAV
+                    for tag, flac, wav in [
+                        ("Mic audio", mic_flac, mic_wav),
+                        (
+                            "Sys audio",
+                            self._session.audio_sys_path_for_segment(seg).with_suffix(
+                                ".flac"
+                            ),
+                            self._session.audio_sys_path_for_segment(seg),
+                        ),
+                    ]:
+                        path = flac if flac.exists() else wav
+                        if path.exists():
+                            sz = path.stat().st_size / (1024 * 1024)
+                            lines.append(f"  {tag}{label}:  {path.name} ({sz:.1f} MB)")
             except (OSError, TypeError):
                 pass
 

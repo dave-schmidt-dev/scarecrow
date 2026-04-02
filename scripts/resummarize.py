@@ -4,6 +4,7 @@
 Usage:
     python3 scripts/resummarize.py ~/recordings/2026-03-29_14-30-00
     python3 scripts/resummarize.py ~/recordings/2026-03-29_14-30-00 --model gemma
+    python3 scripts/resummarize.py ~/recordings/2026-03-29_14-30-00 --backend mlx
 """
 
 from __future__ import annotations
@@ -22,9 +23,11 @@ def main() -> int:
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
 
-    # Simple arg parsing: positional session-dir, optional --model <name>
+    # Simple arg parsing: positional session-dir, optional --model/--backend
     args = sys.argv[1:]
     model = None
+    backend = None
+
     if "--model" in args:
         idx = args.index("--model")
         if idx + 1 >= len(args):
@@ -33,9 +36,18 @@ def main() -> int:
         model = args[idx + 1]
         args = args[:idx] + args[idx + 2 :]
 
+    if "--backend" in args:
+        idx = args.index("--backend")
+        if idx + 1 >= len(args):
+            print("--backend requires a value (gguf or mlx)", file=sys.stderr)
+            return 1
+        backend = args[idx + 1]
+        args = args[:idx] + args[idx + 2 :]
+
     if len(args) != 1:
         print(
-            f"Usage: {sys.argv[0]} <session-dir> [--model gemma|nemotron]",
+            f"Usage: {sys.argv[0]} <session-dir> "
+            "[--model gemma|nemotron] [--backend gguf|mlx]",
             file=sys.stderr,
         )
         return 1
@@ -74,12 +86,16 @@ def main() -> int:
 
     print(
         f"Summarizing {session_dir} "
-        f"(model={model or 'default'}, segments={n_segments})..."
+        f"(model={model or 'default'}, backend={backend or 'default'}, "
+        f"segments={n_segments})..."
     )
 
     if n_segments > 1 and not model:
         result = summarize_session_segments(
-            session_dir, n_segments, obsidian_dir=OBSIDIAN_VAULT_DIR
+            session_dir,
+            n_segments,
+            obsidian_dir=OBSIDIAN_VAULT_DIR,
+            backend=backend,
         )
     else:
         if n_segments > 1 and model:
@@ -93,6 +109,7 @@ def main() -> int:
             obsidian_dir=OBSIDIAN_VAULT_DIR,
             model=model,
             output_name=output_name,
+            backend=backend,
         )
 
     if result:

@@ -49,6 +49,8 @@ TEST_FILES=(
   tests/test_app_context_menu.py
 )
 
+PASSED=0
+FAIL_FILES=()
 PIDS=()
 for f in "${TEST_FILES[@]}"; do
   logfile="$TMPDIR_LOGS/$(basename "$f" .py).log"
@@ -63,12 +65,19 @@ for i in "${!PIDS[@]}"; do
   if ! wait "$pid"; then
     echo "FAIL: $f"
     cat "$logfile"
+    FAIL_FILES+=("$f")
     FAILED=1
+  else
+    PASSED=$((PASSED + 1))
   fi
 done
 
 rm -rf "$TMPDIR_LOGS"
 
+echo ""
 if [ "$FAILED" -ne 0 ]; then
+  echo "${#FAIL_FILES[@]} failed, $PASSED passed (${#TEST_FILES[@]} files)"
   exit 1
+else
+  echo "$PASSED passed (${#TEST_FILES[@]} files)"
 fi

@@ -1,9 +1,16 @@
-"""Session summarizer — generates summary.md from transcript.jsonl using a local LLM."""
+"""Session summarizer — generates summary.md from transcript.jsonl using a local LLM.
+
+Supports two backends:
+- **gguf** (default): llama-cpp-python with GGUF model files.
+- **mlx**: mlx-vlm for Apple Silicon native inference with optional TurboQuant
+  KV-cache compression.  Requires ``uv sync --extra mlx-summarizer``.
+"""
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import time
 from pathlib import Path
@@ -11,6 +18,11 @@ from pathlib import Path
 from scarecrow import config
 
 log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Obsidian sync
+# ---------------------------------------------------------------------------
 
 
 def _sync_to_obsidian(
@@ -27,9 +39,14 @@ def _sync_to_obsidian(
         log.warning("Failed to sync summary to Obsidian", exc_info=True)
 
 
+# ---------------------------------------------------------------------------
+# GGUF model discovery
+# ---------------------------------------------------------------------------
+
 _MODEL_PATTERNS: dict[str, str] = {
     "nemotron": "*Nemotron*Nano*GGUF",
     "gemma": "*gemma-3-27b-it*GGUF",
+    "gemma4": "*gemma-4-*-GGUF",
 }
 
 
@@ -62,6 +79,11 @@ def _model_name_from_gguf(gguf_path: Path) -> str:
     return gguf_path.stem
 
 
+# ---------------------------------------------------------------------------
+# Token / context helpers
+# ---------------------------------------------------------------------------
+
+
 def _estimate_tokens(text: str) -> int:
     return max(1, len(text) // config.SUMMARIZER_CHARS_PER_TOKEN)
 
@@ -72,6 +94,11 @@ def _compute_ctx_size(input_tokens: int) -> int:
     result = ((result + 1023) // 1024) * 1024
     result = min(result, 524288)  # 512K hard cap
     return result
+
+
+# ---------------------------------------------------------------------------
+# Transcript reading & prompt construction
+# ---------------------------------------------------------------------------
 
 
 def _read_events(transcript_path: Path) -> list[dict]:
@@ -228,6 +255,11 @@ def _build_prompt(events: list[dict], *, is_nemotron: bool = False) -> tuple[str
     return system_prompt, user_content
 
 
+# ---------------------------------------------------------------------------
+# Output cleanup
+# ---------------------------------------------------------------------------
+
+
 def _strip_reasoning(text: str) -> str:
     """Remove chain-of-thought reasoning from model output.
 
@@ -254,6 +286,11 @@ def _strip_reasoning(text: str) -> str:
     # 3. No heading found — model produced only reasoning.
     log.warning("Summarizer output contained no ## headings; treating as failed")
     return ""
+
+
+# ---------------------------------------------------------------------------
+# GGUF backend (llama-cpp-python)
+# ---------------------------------------------------------------------------
 
 
 def _load_model(gguf_path: Path, ctx_size: int):
@@ -344,6 +381,198 @@ def _generate(
             del llm
 
 
+class _GgufBackend:
+    """GGUF-based summarizer backend using llama-cpp-python."""
+
+    def __init__(self, gguf_path: Path, ctx_size: int) -> None:
+        self._gguf_path = gguf_path
+        self._ctx_size = ctx_size
+        self._llm = None
+
+    @property
+    def name(self) -> str:
+        return _model_name_from_gguf(self._gguf_path)
+
+    @property
+    def footer_info(self) -> str:
+        return f"ctx {self._ctx_size}"
+
+    def load(self) -> None:
+        self._llm = _load_model(self._gguf_path, self._ctx_size)
+
+    def generate(self, system_prompt: str, user_content: str) -> tuple[str, int]:
+        return _generate(
+            self._gguf_path,
+            system_prompt,
+            user_content,
+            self._ctx_size,
+            llm=self._llm,
+        )
+
+    def close(self) -> None:
+        if self._llm is not None:
+            del self._llm
+            self._llm = None
+
+
+# ---------------------------------------------------------------------------
+# MLX backend (mlx-vlm)
+# ---------------------------------------------------------------------------
+
+
+class _MlxBackend:
+    """MLX-based summarizer backend using mlx-vlm for Apple Silicon."""
+
+    def __init__(self, model_id: str, kv_bits: int | None = None) -> None:
+        self._model_id = model_id
+        self._kv_bits = kv_bits
+        self._model = None
+        self._processor = None
+
+    @property
+    def name(self) -> str:
+        return self._model_id.split("/")[-1]
+
+    @property
+    def footer_info(self) -> str:
+        if self._kv_bits is not None:
+            return f"mlx · kv_bits {self._kv_bits}"
+        return "mlx"
+
+    def load(self) -> None:
+        try:
+            from mlx_vlm import load
+        except ImportError as e:
+            raise ImportError(
+                "mlx-vlm is required for the MLX summarizer backend. "
+                "Install with: uv sync --extra mlx-summarizer"
+            ) from e
+
+        # Temporarily allow HF Hub network access — runtime.py sets
+        # HF_HUB_OFFLINE=1 at startup to prevent implicit downloads
+        # during recording.  The summarizer runs post-exit so this is safe.
+        old_offline = os.environ.pop("HF_HUB_OFFLINE", None)
+        try:
+            kwargs = {}
+            if self._kv_bits is not None:
+                kwargs["kv_bits"] = self._kv_bits
+            log.info(
+                "Loading MLX model %s (kv_bits=%s)...",
+                self._model_id,
+                self._kv_bits,
+            )
+            try:
+                self._model, self._processor = load(self._model_id, **kwargs)
+            except TypeError:
+                if self._kv_bits is not None:
+                    log.warning(
+                        "mlx-vlm does not support kv_bits=%d; "
+                        "falling back to default KV cache",
+                        self._kv_bits,
+                    )
+                    kwargs.pop("kv_bits", None)
+                    self._model, self._processor = load(self._model_id, **kwargs)
+                else:
+                    raise
+        finally:
+            if old_offline is not None:
+                os.environ["HF_HUB_OFFLINE"] = old_offline
+
+    def generate(self, system_prompt: str, user_content: str) -> tuple[str, int]:
+        try:
+            from mlx_vlm import generate as mlx_generate
+            from mlx_vlm.prompt_utils import apply_chat_template
+        except ImportError as e:
+            raise ImportError(
+                "mlx-vlm is required for the MLX summarizer backend. "
+                "Install with: uv sync --extra mlx-summarizer"
+            ) from e
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+        formatted_prompt = apply_chat_template(
+            self._processor,
+            self._model.config,
+            messages,
+            num_images=0,
+            add_generation_prompt=True,
+        )
+        result = mlx_generate(
+            self._model,
+            self._processor,
+            formatted_prompt,
+            max_tokens=config.SUMMARIZER_OUTPUT_BUDGET,
+            temperature=0.3,
+            repetition_penalty=1.1,
+            top_p=0.95,
+            verbose=False,
+        )
+
+        raw_text = result.text
+        total_tokens = getattr(result, "total_tokens", 0) or (
+            getattr(result, "prompt_tokens", 0)
+            + getattr(result, "generation_tokens", 0)
+        )
+        if not total_tokens:
+            total_tokens = _estimate_tokens(system_prompt + user_content + raw_text)
+
+        log.debug("MLX raw output (first 500 chars): %s", raw_text[:500])
+        text = _strip_reasoning(raw_text)
+        if text:
+            return text, total_tokens
+
+        # Retry with forced prefix — include assistant start in messages.
+        log.warning("MLX completion produced no summary; retrying with forced prefix")
+        prefix = "## Summary\n\n"
+        messages_retry = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+            {"role": "assistant", "content": prefix},
+        ]
+        formatted_retry = apply_chat_template(
+            self._processor,
+            self._model.config,
+            messages_retry,
+            num_images=0,
+        )
+        result2 = mlx_generate(
+            self._model,
+            self._processor,
+            formatted_retry,
+            max_tokens=config.SUMMARIZER_OUTPUT_BUDGET,
+            temperature=0.1,
+            repetition_penalty=1.1,
+            top_p=0.95,
+            verbose=False,
+        )
+        raw_text2 = result2.text
+        text = _strip_reasoning(prefix + raw_text2)
+        if text:
+            return text, total_tokens
+
+        fail_msg = (
+            "## Summary\n\n"
+            "*Auto-summarization produced only reasoning with no structured output. "
+            "Re-run with `scripts/resummarize.py` to retry.*\n"
+        )
+        return fail_msg, total_tokens
+
+    def close(self) -> None:
+        if self._model is not None:
+            del self._model
+            self._model = None
+        if self._processor is not None:
+            del self._processor
+            self._processor = None
+
+
+# ---------------------------------------------------------------------------
+# Error summary
+# ---------------------------------------------------------------------------
+
+
 def _write_error_summary(session_dir: Path, error_msg: str) -> Path:
     summary_path = session_dir / "summary.md"
     content = (
@@ -358,26 +587,78 @@ def _write_error_summary(session_dir: Path, error_msg: str) -> Path:
     return summary_path
 
 
+# ---------------------------------------------------------------------------
+# Backend factory
+# ---------------------------------------------------------------------------
+
+
+def _create_backend(
+    backend_name: str | None = None,
+    *,
+    model: str | None = None,
+    ctx_size: int | None = None,
+) -> _GgufBackend | _MlxBackend:
+    """Create a summarizer backend.
+
+    Args:
+        backend_name: ``"gguf"`` or ``"mlx"``.  Defaults to config value.
+        model: Key from ``_MODEL_PATTERNS`` (GGUF only).
+        ctx_size: Context window size (GGUF only).
+
+    Raises:
+        ValueError: If backend/model combination is invalid.
+        FileNotFoundError: If GGUF model not found in HuggingFace cache.
+    """
+    backend_name = backend_name or config.SUMMARIZER_BACKEND
+
+    if backend_name == "mlx":
+        if model == "nemotron":
+            raise ValueError("Nemotron models are not available for the MLX backend")
+        return _MlxBackend(
+            config.SUMMARIZER_MLX_MODEL_ID,
+            config.SUMMARIZER_MLX_KV_BITS,
+        )
+
+    # GGUF backend
+    model_pattern = _MODEL_PATTERNS.get(model) if model else None
+    gguf = _discover_gguf(model_pattern=model_pattern)
+    if gguf is None:
+        model_label = model or "default"
+        raise FileNotFoundError(
+            f"No GGUF model found for '{model_label}' in "
+            f"~/.cache/huggingface/hub/. Check download."
+        )
+    return _GgufBackend(gguf, ctx_size or config.SUMMARIZER_MIN_CTX)
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
 def summarize_session(
     session_dir: Path,
     *,
     obsidian_dir: Path | None = None,
     model: str | None = None,
     output_name: str = "summary.md",
+    backend: str | None = None,
 ) -> Path | None:
     """Generate summary.md for a completed session.
 
     Reads transcript.jsonl from session_dir, builds a prompt from the events,
-    loads a local GGUF model in-process via llama-cpp-python, generates a
-    summary, and writes summary.md. Returns the path to summary.md on success,
-    or a path to an error summary on failure. Returns None only if an unexpected
-    error occurs before any output can be written.
+    loads a local LLM, generates a summary, and writes summary.md.  Returns
+    the path to summary.md on success, or a path to an error summary on
+    failure.  Returns None only if an unexpected error occurs before any
+    output can be written.
 
     Args:
         model: Key from _MODEL_PATTERNS (e.g. "gemma") or None for default.
+               GGUF backend only.
         output_name: Output filename — allows side-by-side benchmarking
                      (e.g. "summary_gemma.md") without overwriting production
                      summaries.
+        backend: ``"gguf"`` or ``"mlx"``.  Defaults to config value.
     """
     try:
         transcript_path = session_dir / "transcript.jsonl"
@@ -388,9 +669,7 @@ def summarize_session(
         if not events:
             return _write_error_summary(session_dir, "Transcript is empty")
 
-        model_pattern = _MODEL_PATTERNS.get(model) if model else None
         is_nemotron = model == "nemotron"
-
         system_prompt, user_content = _build_prompt(events, is_nemotron=is_nemotron)
         if not user_content.strip():
             return _write_error_summary(session_dir, "No transcribed speech found")
@@ -398,23 +677,21 @@ def summarize_session(
         input_tokens = _estimate_tokens(system_prompt + user_content)
         ctx_size = _compute_ctx_size(input_tokens)
 
-        gguf = _discover_gguf(model_pattern=model_pattern)
-        if gguf is None:
-            model_label = model or "default"
-            return _write_error_summary(
-                session_dir,
-                f"No GGUF model found for '{model_label}' in "
-                f"~/.cache/huggingface/hub/. Check download.",
-            )
+        try:
+            be = _create_backend(backend, model=model, ctx_size=ctx_size)
+        except (ValueError, FileNotFoundError) as exc:
+            return _write_error_summary(session_dir, str(exc))
 
-        model_name = _model_name_from_gguf(gguf)
-        log.info("Loading %s (ctx %d) for summarization...", model_name, ctx_size)
+        model_name = be.name
+        log.info("Loading %s for summarization...", model_name)
 
-        t0 = time.monotonic()
-        summary_text, total_tokens = _generate(
-            gguf, system_prompt, user_content, ctx_size
-        )
-        summarize_seconds = time.monotonic() - t0
+        be.load()
+        try:
+            t0 = time.monotonic()
+            summary_text, total_tokens = be.generate(system_prompt, user_content)
+            summarize_seconds = time.monotonic() - t0
+        finally:
+            be.close()
 
         transcript_words = len(user_content.split())
         summary_words = len(summary_text.split())
@@ -425,7 +702,7 @@ def summarize_session(
             f"{transcript_words} words transcribed, "
             f"summarized in {summary_words} words · "
             f"{total_tokens} tokens used · "
-            f"ctx {ctx_size} · "
+            f"{be.footer_info} · "
             f"{summarize_seconds:.1f}s*\n"
         )
         summary_text += footer
@@ -466,28 +743,18 @@ def _summarize_events(
     session_dir: Path,
     events: list[dict],
     output_name: str,
-    gguf_path: Path,
-    model_name: str,
-    ctx_size: int,
-    *,
-    llm=None,
+    be: _GgufBackend | _MlxBackend,
 ) -> tuple[Path | None, str]:
     """Summarize a list of events and write to *output_name*.
 
-    Returns (path, summary_text). The model is reused if *llm* is provided.
+    Returns (path, summary_text).  The backend must already be loaded.
     """
     system_prompt, user_content = _build_prompt(events)
     if not user_content.strip():
         return None, ""
 
-    input_tokens = _estimate_tokens(system_prompt + user_content)
-    seg_ctx = _compute_ctx_size(input_tokens)
-    effective_ctx = max(ctx_size, seg_ctx)
-
     t0 = time.monotonic()
-    summary_text, total_tokens = _generate(
-        gguf_path, system_prompt, user_content, effective_ctx, llm=llm
-    )
+    summary_text, total_tokens = be.generate(system_prompt, user_content)
     elapsed = time.monotonic() - t0
 
     transcript_words = len(user_content.split())
@@ -495,11 +762,11 @@ def _summarize_events(
     footer = (
         f"\n\n---\n"
         f"*Generated by Scarecrow · "
-        f"model: {model_name} · "
+        f"model: {be.name} · "
         f"{transcript_words} words transcribed, "
         f"summarized in {summary_words} words · "
         f"{total_tokens} tokens used · "
-        f"ctx {effective_ctx} · "
+        f"{be.footer_info} · "
         f"{elapsed:.1f}s*\n"
     )
     summary_text += footer
@@ -515,6 +782,7 @@ def summarize_session_segments(
     n_segments: int,
     *,
     obsidian_dir: Path | None = None,
+    backend: str | None = None,
 ) -> Path | None:
     """Summarize a multi-segment session.
 
@@ -526,7 +794,9 @@ def summarize_session_segments(
     concatenates them into ``summary.md`` with segment headers.
     """
     if n_segments <= 1:
-        return summarize_session(session_dir, obsidian_dir=obsidian_dir)
+        return summarize_session(
+            session_dir, obsidian_dir=obsidian_dir, backend=backend
+        )
 
     try:
         transcript_path = session_dir / "transcript.jsonl"
@@ -537,14 +807,7 @@ def summarize_session_segments(
         if not events:
             return _write_error_summary(session_dir, "Transcript is empty")
 
-        gguf = _discover_gguf()
-        if gguf is None:
-            return _write_error_summary(
-                session_dir, "No GGUF model found in ~/.cache/huggingface/hub/"
-            )
-
-        model_name = _model_name_from_gguf(gguf)
-        # Estimate ctx from the largest segment
+        # Estimate ctx from the largest segment (GGUF needs this at load time)
         segment_events = _extract_segment_events(events, n_segments)
         max_tokens = 0
         for seg_evs in segment_events:
@@ -552,13 +815,17 @@ def summarize_session_segments(
             max_tokens = max(max_tokens, _estimate_tokens(sp + uc))
         ctx_size = _compute_ctx_size(max_tokens)
 
+        try:
+            be = _create_backend(backend, ctx_size=ctx_size)
+        except (ValueError, FileNotFoundError) as exc:
+            return _write_error_summary(session_dir, str(exc))
+
         log.info(
-            "Loading %s (ctx %d) for %d-segment summarization...",
-            model_name,
-            ctx_size,
+            "Loading %s for %d-segment summarization...",
+            be.name,
             n_segments,
         )
-        llm = _load_model(gguf, ctx_size)
+        be.load()
         try:
             combined_parts: list[str] = []
             for i, seg_evs in enumerate(segment_events, 1):
@@ -566,19 +833,11 @@ def summarize_session_segments(
                     continue
                 seg_name = f"summary_seg{i}.md"
                 log.info("Summarizing segment %d/%d...", i, n_segments)
-                _, seg_text = _summarize_events(
-                    session_dir,
-                    seg_evs,
-                    seg_name,
-                    gguf,
-                    model_name,
-                    ctx_size,
-                    llm=llm,
-                )
+                _, seg_text = _summarize_events(session_dir, seg_evs, seg_name, be)
                 if seg_text:
                     combined_parts.append(f"# Segment {i}\n\n{seg_text}")
         finally:
-            del llm
+            be.close()
 
         if not combined_parts:
             return _write_error_summary(session_dir, "No segments produced output")

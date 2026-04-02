@@ -76,11 +76,14 @@ class Config:
         )
     )
 
-    # Summarizer (local LLM via llama-cpp-python, in-process)
+    # Summarizer (local LLM — GGUF via llama-cpp-python or MLX via mlx-vlm)
+    SUMMARIZER_BACKEND: str = "gguf"  # "gguf" or "mlx"
     SUMMARIZER_MODEL_PATTERN: str = "*gemma-3-27b-it*GGUF"
     SUMMARIZER_OUTPUT_BUDGET: int = 4096  # max tokens for summary output
-    SUMMARIZER_MIN_CTX: int = 131072  # 128K context floor
+    SUMMARIZER_MIN_CTX: int = 131072  # 128K context floor (GGUF only)
     SUMMARIZER_CHARS_PER_TOKEN: int = 4  # rough heuristic for token estimation
+    SUMMARIZER_MLX_MODEL_ID: str = "mlx-community/gemma-4-26b-a4b-it-4bit"
+    SUMMARIZER_MLX_KV_BITS: int | None = None  # TurboQuant: 3-4 for compressed KV cache
 
 
 # Module-level instance — all existing ``config.FOO`` references resolve here.
@@ -109,9 +112,12 @@ SYSTEM_AUDIO_DEVICE = config.SYSTEM_AUDIO_DEVICE
 WRITER_QUEUE_SIZE = config.WRITER_QUEUE_SIZE
 DIVIDER_INTERVAL = config.DIVIDER_INTERVAL
 DEFAULT_RECORDINGS_DIR = config.DEFAULT_RECORDINGS_DIR
+SUMMARIZER_BACKEND = config.SUMMARIZER_BACKEND
 SUMMARIZER_MODEL_PATTERN = config.SUMMARIZER_MODEL_PATTERN
 SUMMARIZER_OUTPUT_BUDGET = config.SUMMARIZER_OUTPUT_BUDGET
 SUMMARIZER_MIN_CTX = config.SUMMARIZER_MIN_CTX
 SUMMARIZER_CHARS_PER_TOKEN = config.SUMMARIZER_CHARS_PER_TOKEN
+SUMMARIZER_MLX_MODEL_ID = config.SUMMARIZER_MLX_MODEL_ID
+SUMMARIZER_MLX_KV_BITS = config.SUMMARIZER_MLX_KV_BITS
 SEGMENT_DURATION_SECONDS = config.SEGMENT_DURATION_SECONDS
 OBSIDIAN_VAULT_DIR = config.OBSIDIAN_VAULT_DIR

@@ -12,6 +12,9 @@ dependencies = [
     "llama-cpp-python>=0.3",
 ]
 
+[project.optional-dependencies]
+mlx-summarizer = ["mlx-vlm>=0.4"]
+
 [project.scripts]
 scarecrow = "scarecrow.__main__:main"
 
