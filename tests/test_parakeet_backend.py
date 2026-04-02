@@ -8,37 +8,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 
 from scarecrow.transcriber import Transcriber, TranscriberBindings
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _mock_transcriber():
-    """Return a mock batch-only Transcriber."""
-    mock = MagicMock()
-    mock.is_ready = True
-    mock.shutdown.return_value = None
-
-    def _shutdown(timeout=5):
-        mock.is_ready = False
-        return None
-
-    mock.shutdown.side_effect = _shutdown
-    return mock
-
-
-def _mock_recorder():
-    """Return a mock AudioRecorder that doesn't touch hardware."""
-    mock = MagicMock()
-    mock.is_recording = True
-    mock.is_paused = False
-    mock.peak_level = 0.0
-    mock.start.return_value = None
-    mock.stop.return_value = MagicMock()
-    mock.drain_to_silence.return_value = None
-    return mock
-
+from tests.helpers import _mock_recorder, _mock_transcriber
 
 # ---------------------------------------------------------------------------
 # Test 1: transcribe_batch routes to Parakeet and returns text

@@ -14,63 +14,7 @@ import numpy as np
 from textual.widgets import OptionList, RichLog
 
 from scarecrow.app import AppState, ContextMenuScreen, InfoBar, ScarecrowApp
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _mock_transcriber():
-    mock = MagicMock()
-    mock.is_ready = True
-    mock.consecutive_failures = 0
-    mock.shutdown.return_value = None
-
-    def _shutdown(timeout=5):
-        mock.is_ready = False
-
-    mock.shutdown.side_effect = _shutdown
-    return mock
-
-
-def _mock_recorder():
-    mock = MagicMock()
-    mock.is_recording = True
-    mock.is_paused = False
-    mock.peak_level = 0.0
-    mock.seconds_since_last_callback = 0.0
-    mock.buffer_seconds = 0.0
-    mock._last_warning = None
-    mock._disk_write_failed = False
-    mock.default_device_changed = False
-    mock.start.return_value = None
-    mock.stop.return_value = MagicMock()
-    mock.drain_to_silence.return_value = None
-    mock.drain_buffer.return_value = None
-    return mock
-
-
-def _mock_sys_capture():
-    mock = MagicMock()
-    mock.is_recording = True
-    mock.is_paused = False
-    mock.peak_level = 0.0
-    mock.buffer_seconds = 0.0
-    mock.start.return_value = None
-    mock.stop.return_value = None
-    mock.pause.return_value = None
-    mock.resume.return_value = None
-    mock.drain_to_silence.return_value = None
-    mock.drain_buffer.return_value = None
-    return mock
-
-
-def _sys_app(**kwargs) -> ScarecrowApp:
-    """Return a ScarecrowApp with sys_audio=True and a ready transcriber."""
-    app = ScarecrowApp(transcriber=_mock_transcriber(), sys_audio=True, **kwargs)
-    app._preflight_check = lambda: True  # type: ignore[method-assign]
-    return app
-
+from tests.helpers import _mock_recorder, _mock_sys_capture, _mock_transcriber, _sys_app
 
 # ---------------------------------------------------------------------------
 # _start_recording() with sys audio

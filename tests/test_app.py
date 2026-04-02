@@ -8,18 +8,11 @@ from unittest.mock import MagicMock, patch
 from textual.widgets import RichLog
 
 from scarecrow.app import AppState, InfoBar, ScarecrowApp
+from tests.helpers import _mock_recorder, _mock_transcriber
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _mock_transcriber():
-    """Return a mock Transcriber that doesn't load models."""
-    mock = MagicMock()
-    mock.is_ready = True
-    mock.shutdown.return_value = None
-    return mock
 
 
 def _app(with_transcriber: bool = False) -> ScarecrowApp:
@@ -30,19 +23,6 @@ def _app(with_transcriber: bool = False) -> ScarecrowApp:
         app._preflight_check = lambda: True  # type: ignore[method-assign]
         return app
     return ScarecrowApp()
-
-
-def _mock_recorder():
-    """Return a mock AudioRecorder that doesn't touch hardware."""
-    mock = MagicMock()
-    mock.is_recording = True
-    mock.is_paused = False
-    mock.peak_level = 0.0
-    mock.seconds_since_last_callback = 0.0
-    mock.start.return_value = None
-    mock.stop.return_value = MagicMock()
-    mock.drain_to_silence.return_value = None
-    return mock
 
 
 # ---------------------------------------------------------------------------

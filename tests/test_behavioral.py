@@ -17,56 +17,7 @@ from scarecrow.app import (
     InfoBar,
     ScarecrowApp,
 )
-
-# ---------------------------------------------------------------------------
-# Helpers (mirrors test_app.py pattern — no shared state between modules)
-# ---------------------------------------------------------------------------
-
-
-def _read_jsonl(path: Path) -> list[dict]:
-    import json
-
-    lines = path.read_text(encoding="utf-8").strip().splitlines()
-    return [json.loads(line) for line in lines]
-
-
-def _mock_transcriber():
-    """Return a mock batch-only Transcriber."""
-    mock = MagicMock()
-    mock.is_ready = True
-    mock.consecutive_failures = 0
-    mock.shutdown.return_value = None
-
-    def _shutdown(timeout=5):
-        mock.is_ready = False
-        return None
-
-    mock.shutdown.side_effect = _shutdown
-    return mock
-
-
-def _mock_recorder():
-    """Return a mock AudioRecorder that doesn't touch hardware."""
-    mock = MagicMock()
-    mock.is_recording = True
-    mock.is_paused = False
-    mock.peak_level = 0.0
-    mock.seconds_since_last_callback = 0.0
-    mock.start.return_value = None
-    mock.stop.return_value = MagicMock()
-    mock.drain_to_silence.return_value = None
-    return mock
-
-
-def _app(with_transcriber: bool = False) -> ScarecrowApp:
-    if with_transcriber:
-        app = ScarecrowApp(
-            transcriber=_mock_transcriber(),
-        )
-        app._preflight_check = lambda: True  # type: ignore[method-assign]
-        return app
-    return ScarecrowApp()
-
+from tests.helpers import _app, _mock_recorder, _mock_transcriber, _read_jsonl
 
 # ---------------------------------------------------------------------------
 # 1. RichLog widgets are created with wrap=True and min_width=0
