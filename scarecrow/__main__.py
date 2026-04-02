@@ -55,6 +55,16 @@ def main() -> None:
     if "--sys-audio" in sys.argv:
         sys.argv.remove("--sys-audio")
 
+    # Launch with one source muted
+    mic_muted = False
+    sys_muted = False
+    if "--mic-only" in sys.argv:
+        sys.argv.remove("--mic-only")
+        sys_muted = True
+    if "--sys-only" in sys.argv:
+        sys.argv.remove("--sys-only")
+        mic_muted = True
+
     from scarecrow import config
     from scarecrow.app import ScarecrowApp
     from scarecrow.transcriber import Transcriber
@@ -106,7 +116,12 @@ def main() -> None:
     print("  Starting TUI…", flush=True)
     print(flush=True)
 
-    app = ScarecrowApp(transcriber=transcriber, sys_audio=sys_audio)
+    app = ScarecrowApp(
+        transcriber=transcriber,
+        sys_audio=sys_audio,
+        mic_muted=mic_muted,
+        sys_muted=sys_muted,
+    )
     try:
         app.run()
     except KeyboardInterrupt:

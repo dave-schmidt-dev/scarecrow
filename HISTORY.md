@@ -4,6 +4,8 @@ Bug entries are inline under their date heading. A squashed bug must reference a
 
 ## 2026-04-01 (v1.5)
 
+- **Launch flags `--mic-only` / `--sys-only`:** Start Scarecrow with only one audio source active. The other source begins muted but can be unmuted at runtime via keyboard shortcut or clicking the level meter.
+- **Click-to-mute on level meters:** Left-click the mic or sys level meter in the InfoBar to toggle mute, replacing the need for separate mute buttons.
 - **Fixed: audio output restored late after quit.** `restore_output()` ran after compression and summarization (1-2 min delay). Moved to run immediately after Phase 1 cleanup, before Phase 2 work. Discard path still restores via the existing fallback.
 - **Fixed: mic hallucinations during phone calls.** Low-floor speech gate (0.05x threshold) was so permissive that near-silence passed to Parakeet, which hallucinated numbers and filler words. Raised low_floor to 0.15x and doubled the required speech ratio for the low-floor path. Regression tests: `test_vad_skips_near_silent_mic_audio`, `test_vad_low_floor_requires_higher_speech_ratio`, `test_vad_low_floor_passes_with_sufficient_speech`.
 - **Fixed: muting both sources caused immediate shutdown.** Root cause: Textual renders footer bindings by priority, placing "Quick Quit" (ctrl+shift+q) adjacent to "Mute Sys" (ctrl+shift+s). Clicking "Mute Sys" near the right edge triggered Quick Quit instead. Fix: Quick Quit hidden from footer (`show=False`), still available via keyboard. Regression test: `test_quick_quit_binding_is_hidden_from_footer`.

@@ -13,6 +13,15 @@
   - Replay tool: `python scripts/replay_test.py <wav> --save-baseline` / `--check-baseline`
 - [ ] Wire up `EchoFilter.record_mic()` / `is_sys_echo()` — bidirectional suppression implemented but not called from app; evaluate whether sys-authoritative approach is sufficient first
 
+## Launch-time audio source flags
+- [x] `--mic-only` / `--sys-only` CLI flags to start with one source muted
+- [x] Still configurable at runtime via existing mute toggles
+
+## Level meter interaction
+- [x] Left-click on mic/sys level meter to toggle mute
+- [ ] Right-click on level meter opens context menu: mute toggle + VAD sensitivity adjustment
+- [x] Keep Ctrl+M / Ctrl+Shift+S keyboard shortcuts
+
 ## Diarization
 - Speaker identification/labeling in transcripts ("Speaker A", "Speaker B")
 - Explore pyannote-audio or NeMo diarization models as a post-processing layer

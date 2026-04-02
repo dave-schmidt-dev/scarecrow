@@ -827,3 +827,112 @@ async def test_quick_quit_action_sets_skip_summary(mock_session, mock_rec) -> No
         app._deferred_quit = lambda: None  # type: ignore[method-assign]
         app.action_quick_quit()
         assert app._skip_summary is True
+
+
+# ---------------------------------------------------------------------------
+# Launch flags: --mic-only / --sys-only (initial mute state)
+# ---------------------------------------------------------------------------
+
+
+@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
+@patch("scarecrow.sys_audio.SystemAudioCapture")
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_mic_only_flag_starts_sys_muted(
+    mock_session, mock_rec, mock_sac, mock_bh
+) -> None:
+    """--mic-only flag starts with sys audio muted and paused."""
+    mock_sys = _mock_sys_capture()
+    mock_sac.return_value = mock_sys
+    mock_rec.return_value = _mock_recorder()
+    mock_session.return_value = MagicMock()
+
+    async with _sys_app(sys_muted=True).run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        assert app.state is AppState.RECORDING
+        assert app._sys_muted is True
+        assert app._mic_muted is False
+        mock_sys.pause.assert_called_once()
+
+
+@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
+@patch("scarecrow.sys_audio.SystemAudioCapture")
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_sys_only_flag_starts_mic_muted(
+    mock_session, mock_rec, mock_sac, mock_bh
+) -> None:
+    """--sys-only flag starts with mic muted and paused."""
+    mock_sys = _mock_sys_capture()
+    mock_sac.return_value = mock_sys
+    mock_recorder = _mock_recorder()
+    mock_rec.return_value = mock_recorder
+    mock_session.return_value = MagicMock()
+
+    async with _sys_app(mic_muted=True).run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        assert app.state is AppState.RECORDING
+        assert app._mic_muted is True
+        assert app._sys_muted is False
+        mock_recorder.pause.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# InfoBar click-to-mute
+# ---------------------------------------------------------------------------
+
+
+@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
+@patch("scarecrow.sys_audio.SystemAudioCapture")
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_infobar_click_mic_region_toggles_mute(
+    mock_session, mock_rec, mock_sac, mock_bh
+) -> None:
+    """Clicking the mic region of the InfoBar toggles mic mute."""
+    mock_sys = _mock_sys_capture()
+    mock_sac.return_value = mock_sys
+    mock_rec.return_value = _mock_recorder()
+    mock_session.return_value = MagicMock()
+
+    async with _sys_app().run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        assert app._mic_muted is False
+        bar = app.query_one("#info-bar", InfoBar)
+        # Regions are set during render; mic region should be non-empty
+        mic_s, mic_e = bar._mic_region
+        assert mic_e > mic_s, "mic region should be non-empty after render"
+        # Simulate click in the mic region
+        bar.on_click(MagicMock(x=mic_s, y=0))
+        assert app._mic_muted is True
+
+
+@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
+@patch("scarecrow.sys_audio.SystemAudioCapture")
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_infobar_click_sys_region_toggles_mute(
+    mock_session, mock_rec, mock_sac, mock_bh
+) -> None:
+    """Clicking the sys region of the InfoBar toggles sys mute."""
+    mock_sys = _mock_sys_capture()
+    mock_sac.return_value = mock_sys
+    mock_rec.return_value = _mock_recorder()
+    mock_session.return_value = MagicMock()
+
+    async with _sys_app().run_test(size=(120, 24)) as pilot:
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        assert app._sys_muted is False
+        bar = app.query_one("#info-bar", InfoBar)
+        sys_s, sys_e = bar._sys_region
+        assert sys_e > sys_s, "sys region should be non-empty with wide terminal"
+        bar.on_click(MagicMock(x=sys_s, y=0))
+        assert app._sys_muted is True

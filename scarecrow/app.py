@@ -24,6 +24,7 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.css.query import NoMatches
+from textual.events import Click
 from textual.reactive import reactive
 from textual.widgets import Footer, Input, RichLog, Static
 
@@ -73,6 +74,11 @@ class InfoBar(Static):
     mic_muted: reactive[bool] = reactive(False)
     sys_muted: reactive[bool] = reactive(False)
 
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self._mic_region: tuple[int, int] = (0, 0)
+        self._sys_region: tuple[int, int] = (0, 0)
+
     def _render_meter(self, raw: float) -> tuple[str, str, str, str]:
         """Return (bar_char, color, meter_label, label_style) for a peak level."""
         import math
@@ -109,6 +115,7 @@ class InfoBar(Static):
             text.append(f" {icon}")
         width = self.size.width if self.size.width > 0 else 120
         if self.state is AppState.RECORDING:
+            mic_start = text.cell_len
             text.append(" mic ", style="dim")
             if self.mic_muted:
                 text.append("MUTED", style="dim")
@@ -118,8 +125,10 @@ class InfoBar(Static):
                 )
                 text.append(bar_char, style=color)
                 text.append(f" {meter_label}", style=label_style)
+            self._mic_region = (mic_start, text.cell_len)
             if self.has_sys_audio and width >= 80:
                 text.append("  │  ", style="dim")
+                sys_start = text.cell_len
                 text.append("sys ", style="dim")
                 if self.sys_muted:
                     text.append("MUTED", style="dim")
@@ -129,6 +138,9 @@ class InfoBar(Static):
                     )
                     text.append(sys_bar, style=sys_color)
                     text.append(f" {sys_meter_label}", style=sys_label_style)
+                self._sys_region = (sys_start, text.cell_len)
+            else:
+                self._sys_region = (0, 0)
         text.append("  ")
 
         h = self.elapsed // 3600
@@ -156,6 +168,16 @@ class InfoBar(Static):
             )
 
         return text
+
+    def on_click(self, event: Click) -> None:
+        """Toggle mute when clicking on mic/sys level meters."""
+        x = event.x
+        mic_s, mic_e = self._mic_region
+        sys_s, sys_e = self._sys_region
+        if mic_s <= x < mic_e:
+            self.app.action_mute_mic()
+        elif sys_s <= x < sys_e:
+            self.app.action_mute_sys()
 
 
 class ScarecrowApp(App[None]):
@@ -185,6 +207,8 @@ class ScarecrowApp(App[None]):
         *,
         cfg: Config | None = None,
         sys_audio: bool = True,
+        mic_muted: bool = False,
+        sys_muted: bool = False,
     ) -> None:
         super().__init__()
         self._cfg = cfg or config.config
@@ -220,8 +244,8 @@ class ScarecrowApp(App[None]):
         self._last_paragraph_source: str = ""
         self._sys_batch_window_start: int = 0
         # Per-source mute state
-        self._mic_muted: bool = False
-        self._sys_muted: bool = False
+        self._mic_muted: bool = mic_muted
+        self._sys_muted: bool = sys_muted
         # Echo suppression — suppress mic transcripts that duplicate sys
         self._echo_filter = EchoFilter()
         # Quit-flow state
@@ -518,15 +542,17 @@ class ScarecrowApp(App[None]):
             "\n"
             "[bold]Keybindings:[/bold]\n"
             "  Ctrl+P              Pause / resume\n"
-            "  Ctrl+M              Mute / unmute mic\n"
-            "  Ctrl+Shift+S        Mute / unmute sys audio\n"
+            "  Ctrl+M / click mic  Mute / unmute mic\n"
+            "  Ctrl+Shift+S / click sys  Mute / unmute sys audio\n"
             "  Ctrl+Shift+Q        Quick Quit (skip summary)\n"
             "  Ctrl+Q              Quit\n"
             "  Ctrl+Shift+D        Discard session & quit\n"
             "  Enter               Submit note\n"
             "\n"
             "[bold]Launch flags:[/bold]\n"
-            "  --no-sys-audio      Disable system audio capture"
+            "  --no-sys-audio      Disable system audio capture\n"
+            "  --mic-only          Start with sys audio muted\n"
+            "  --sys-only          Start with mic muted"
         )
         with contextlib.suppress(NoMatches):
             self.query_one("#captions", RichLog).write(help_text)
@@ -1055,6 +1081,12 @@ class ScarecrowApp(App[None]):
         self.state = AppState.RECORDING
         self._tick_timer.resume()
         self._set_status("")
+
+        # Apply initial mute state from launch flags
+        if self._mic_muted and self._audio_recorder is not None:
+            self._audio_recorder.pause()
+        if self._sys_muted and self._sys_capture is not None:
+            self._sys_capture.pause()
 
         # Show session header in transcript pane
         with contextlib.suppress(NoMatches):
