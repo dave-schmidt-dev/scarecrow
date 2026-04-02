@@ -74,9 +74,9 @@ class Config:
     )
 
     # Summarizer (local LLM via llama-cpp-python, in-process)
-    SUMMARIZER_MODEL_PATTERN: str = "*Nemotron*Nano*GGUF"
+    SUMMARIZER_MODEL_PATTERN: str = "*gemma-3-27b-it*GGUF"
     SUMMARIZER_OUTPUT_BUDGET: int = 4096  # max tokens for summary output
-    SUMMARIZER_MIN_CTX: int = 131072  # 128K floor — Mamba-2, no memory cost
+    SUMMARIZER_MIN_CTX: int = 131072  # 128K context floor
     SUMMARIZER_CHARS_PER_TOKEN: int = 4  # rough heuristic for token estimation
 
 

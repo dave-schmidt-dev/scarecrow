@@ -936,3 +936,91 @@ async def test_infobar_click_sys_region_toggles_mute(
         assert sys_e > sys_s, "sys region should be non-empty with wide terminal"
         bar.on_click(MagicMock(x=sys_s, y=0))
         assert app._sys_muted is True
+
+
+# ---------------------------------------------------------------------------
+# Mute/unmute transcript events
+# ---------------------------------------------------------------------------
+
+
+@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
+@patch("scarecrow.sys_audio.SystemAudioCapture")
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_mute_mic_writes_transcript_event(
+    mock_session, mock_rec, mock_sac, mock_bh
+) -> None:
+    """action_mute_mic() writes a mute event to the session transcript."""
+    mock_sys = _mock_sys_capture()
+    mock_sac.return_value = mock_sys
+    mock_rec.return_value = _mock_recorder()
+    session = MagicMock()
+    mock_session.return_value = session
+
+    async with _sys_app().run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        session.append_event.reset_mock()
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        app.action_mute_mic()
+        # Find the mute event among calls
+        mute_calls = [
+            c
+            for c in session.append_event.call_args_list
+            if c[0][0].get("type") == "mute" and c[0][0].get("source") == "mic"
+        ]
+        assert len(mute_calls) == 1
+
+
+@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
+@patch("scarecrow.sys_audio.SystemAudioCapture")
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_unmute_sys_writes_transcript_event(
+    mock_session, mock_rec, mock_sac, mock_bh
+) -> None:
+    """Unmuting sys writes an unmute event to the session transcript."""
+    mock_sys = _mock_sys_capture()
+    mock_sac.return_value = mock_sys
+    mock_rec.return_value = _mock_recorder()
+    session = MagicMock()
+    mock_session.return_value = session
+
+    async with _sys_app().run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        app.action_mute_sys()  # mute
+        session.append_event.reset_mock()
+        app.action_mute_sys()  # unmute
+        unmute_calls = [
+            c
+            for c in session.append_event.call_args_list
+            if c[0][0].get("type") == "unmute" and c[0][0].get("source") == "sys"
+        ]
+        assert len(unmute_calls) == 1
+
+
+@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
+@patch("scarecrow.sys_audio.SystemAudioCapture")
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_launch_flag_mute_writes_transcript_event(
+    mock_session, mock_rec, mock_sac, mock_bh
+) -> None:
+    """--sys-only flag writes initial mute event for mic at recording start."""
+    mock_sys = _mock_sys_capture()
+    mock_sac.return_value = mock_sys
+    mock_rec.return_value = _mock_recorder()
+    session = MagicMock()
+    mock_session.return_value = session
+
+    async with _sys_app(mic_muted=True).run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        mute_calls = [
+            c
+            for c in session.append_event.call_args_list
+            if c[0][0].get("type") == "mute" and c[0][0].get("source") == "mic"
+        ]
+        assert len(mute_calls) == 1

@@ -22,13 +22,24 @@
 - [ ] Right-click on level meter opens context menu: mute toggle + VAD sensitivity adjustment
 - [x] Keep Ctrl+M / Ctrl+Shift+S keyboard shortcuts
 
+## Auto-segmentation for long sessions
+- [ ] Automatically create segment boundaries at ~60 minute marks
+- [ ] Each segment gets its own summary while maintaining full transcript continuity
+- [ ] Supports 2-3 hour lectures/classes without manual splitting
+
+## Summarizer model swap
+- [x] Replace Nemotron-3-Nano with Gemma 3 27B IT (Google) for summarization
+- [x] Nemotron had 57% failure rate: CoT leaking, repetition loops, unreliable structured output
+- [x] Gemma 3 27B: best structured output compliance, 128K context, strong summarization benchmarks
+- [x] Length-scaled prompts: short recordings get concise summaries, long sessions get comprehensive coverage
+
 ## Diarization
 - Speaker identification/labeling in transcripts ("Speaker A", "Speaker B")
 - Explore pyannote-audio or NeMo diarization models as a post-processing layer
 - Would pair well with system audio for meeting transcription
 
 ## Auto-summarization (done)
-- Local LLM summarization on shutdown via Nemotron-3-Nano (in-process via llama-cpp-python)
+- Local LLM summarization on shutdown via Gemma 3 27B IT (in-process via llama-cpp-python)
 - Prompt extracts: executive summary, key points, action items (explicit [TASK] + implicit follow-ups)
 - Handles [NOTE], [TASK], [CONTEXT] tags
 - Auto-syncs summaries to Obsidian vault

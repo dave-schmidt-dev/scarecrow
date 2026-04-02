@@ -27,9 +27,15 @@ def _sync_to_obsidian(
         log.warning("Failed to sync summary to Obsidian", exc_info=True)
 
 
-def _discover_gguf() -> Path | None:
+_MODEL_PATTERNS: dict[str, str] = {
+    "nemotron": "*Nemotron*Nano*GGUF",
+    "gemma": "*gemma-3-27b-it*GGUF",
+}
+
+
+def _discover_gguf(model_pattern: str | None = None) -> Path | None:
     hub_root = Path.home() / ".cache" / "huggingface" / "hub"
-    pattern = f"models--{config.SUMMARIZER_MODEL_PATTERN}"
+    pattern = f"models--{model_pattern or config.SUMMARIZER_MODEL_PATTERN}"
     for model_dir in hub_root.glob(pattern):
         for gguf in model_dir.glob("snapshots/*/*.gguf"):
             if gguf.name.startswith("mmproj"):
@@ -64,7 +70,7 @@ def _compute_ctx_size(input_tokens: int) -> int:
     needed = input_tokens + 500 + config.SUMMARIZER_OUTPUT_BUDGET
     result = max(config.SUMMARIZER_MIN_CTX, needed)
     result = ((result + 1023) // 1024) * 1024
-    result = min(result, 524288)  # 512K hard cap — Nemotron supports 1M
+    result = min(result, 524288)  # 512K hard cap
     return result
 
 
@@ -94,18 +100,18 @@ _IGNORED_EVENT_TYPES = frozenset(
     }
 )
 
-_SYSTEM_PROMPT_BASE = (
+_SYSTEM_PROMPT_TEMPLATE = (
     "Summarize the transcript below. Use ONLY information explicitly stated "
     "in the transcript. Fix obvious speech-to-text typos for names and terms.\n\n"
     "Output ONLY the structured summary below — no preamble, no reasoning, "
     "no thinking. Start directly with ## Summary.\n\n"
     "Use this exact output structure:\n\n"
     "## Summary\n"
-    "1-3 short paragraphs: what was discussed, decided, or accomplished.\n\n"
+    "{summary_guidance}\n\n"
     "## Key Points\n"
     "- Bulleted list of important points, decisions, and highlights.\n"
     "- Synthesize related ideas into single bullets.\n"
-    "- Short recordings: 3-5 bullets. Scale up for longer ones.\n\n"
+    "- {key_points_guidance}\n\n"
     "## Action Items\n"
     "- [ ] Each action item as a Markdown checkbox.\n"
     "Include every [TASK] entry verbatim, plus any commitments or follow-ups "
@@ -120,7 +126,45 @@ _SYSTEM_PROMPT_BASE = (
 )
 
 
-def _build_prompt(events: list[dict]) -> tuple[str, str]:
+def _scale_prompt(transcript_words: int) -> str:
+    """Return the system prompt with detail guidance scaled to transcript length."""
+    if transcript_words < 500:
+        summary_guidance = (
+            "1-2 short paragraphs: what was discussed, decided, or accomplished."
+        )
+        key_points_guidance = "3-5 bullets."
+    elif transcript_words < 3000:
+        summary_guidance = (
+            "2-3 paragraphs: what was discussed, decided, or accomplished."
+        )
+        key_points_guidance = "5-8 bullets."
+    elif transcript_words < 8000:
+        summary_guidance = (
+            "3-5 paragraphs covering all major topics discussed. "
+            "Give each distinct topic its own paragraph."
+        )
+        key_points_guidance = "8-12 bullets. Use **bold labels** for each point."
+    else:
+        summary_guidance = (
+            "5-7 paragraphs covering all major topics discussed. "
+            "Give each distinct topic or segment its own paragraph. "
+            "Do not omit topics for brevity."
+        )
+        key_points_guidance = (
+            "12-18 bullets. Use **bold labels** for each point. "
+            "Cover every significant topic."
+        )
+    return _SYSTEM_PROMPT_TEMPLATE.format(
+        summary_guidance=summary_guidance,
+        key_points_guidance=key_points_guidance,
+    )
+
+
+# Nemotron needs an explicit instruction to suppress chain-of-thought.
+_NEMOTRON_PREFIX = "detailed thinking off\n\n"
+
+
+def _build_prompt(events: list[dict], *, is_nemotron: bool = False) -> tuple[str, str]:
     context_items: list[str] = []
     content_parts: list[str] = []
 
@@ -163,21 +207,30 @@ def _build_prompt(events: list[dict]) -> tuple[str, str]:
         elif event_type == "resume":
             content_parts.append("[Recording resumed]")
 
-    system_prompt = _SYSTEM_PROMPT_BASE
+        elif event_type in ("mute", "unmute"):
+            source = event.get("source", "mic")
+            label = "Mic" if source == "mic" else "Sys audio"
+            action = "muted" if event_type == "mute" else "unmuted"
+            content_parts.append(f"[{label} {action}]")
+
+    user_content = "\n".join(content_parts)
+    transcript_words = len(user_content.split())
+
+    prefix = _NEMOTRON_PREFIX if is_nemotron else ""
+    system_prompt = prefix + _scale_prompt(transcript_words)
     if context_items:
         context_block = "\n\nBackground context provided by the user:\n" + "\n".join(
             f"- {item}" for item in context_items
         )
         system_prompt += context_block
 
-    user_content = "\n".join(content_parts)
     return system_prompt, user_content
 
 
 def _strip_reasoning(text: str) -> str:
-    """Remove chain-of-thought reasoning from Nemotron-Nano output.
+    """Remove chain-of-thought reasoning from model output.
 
-    The model may wrap reasoning in <think>...</think> tags, or emit
+    Some models wrap reasoning in <think>...</think> tags, or emit
     free-form reasoning before the actual structured summary.  We try
     several strategies in order:
       1. Strip <think>…</think> blocks (may appear at the start).
@@ -222,7 +275,7 @@ def _generate(
         verbose=False,
     )
     try:
-        # First try chat completion.
+        # Chat completion — works for all models via embedded chat template.
         response = llm.create_chat_completion(
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -230,6 +283,9 @@ def _generate(
             ],
             max_tokens=config.SUMMARIZER_OUTPUT_BUDGET,
             temperature=0.3,
+            repeat_penalty=1.1,
+            top_k=40,
+            top_p=0.95,
         )
         raw_text = response["choices"][0]["message"]["content"]
         log.debug("Raw model output (first 500 chars): %s", raw_text[:500])
@@ -241,24 +297,27 @@ def _generate(
             return text, total_tokens
 
         # Model produced only reasoning / meta-commentary.  Retry with
-        # raw completion and a forced prefix so it cannot preamble.
+        # a second chat completion that includes the forced prefix as an
+        # assistant message start.  This is model-agnostic (the GGUF
+        # chat template handles token wrapping).
         log.warning("Chat completion produced no summary; retrying with forced prefix")
         prefix = "## Summary\n\n"
-        prompt = (
-            f"<|system|>\n{system_prompt}\n"
-            f"<|user|>\n{user_content}\n"
-            f"<|assistant|>\n{prefix}"
-        )
-        raw = llm(
-            prompt,
+        response2 = llm.create_chat_completion(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+                {"role": "assistant", "content": prefix},
+            ],
             max_tokens=config.SUMMARIZER_OUTPUT_BUDGET,
             temperature=0.1,
-            stop=["<|end|>", "<|user|>", "<|system|>"],
+            repeat_penalty=1.1,
+            top_k=40,
+            top_p=0.95,
         )
-        raw_text2 = raw["choices"][0]["text"]
+        raw_text2 = response2["choices"][0]["message"]["content"]
         log.debug("Retry raw output (first 500 chars): %s", raw_text2[:500])
         text = _strip_reasoning(prefix + raw_text2)
-        usage2 = raw.get("usage", {})
+        usage2 = response2.get("usage", {})
         total_tokens = usage2.get("total_tokens", total_tokens)
         if text:
             return text, total_tokens
@@ -289,7 +348,11 @@ def _write_error_summary(session_dir: Path, error_msg: str) -> Path:
 
 
 def summarize_session(
-    session_dir: Path, *, obsidian_dir: Path | None = None
+    session_dir: Path,
+    *,
+    obsidian_dir: Path | None = None,
+    model: str | None = None,
+    output_name: str = "summary.md",
 ) -> Path | None:
     """Generate summary.md for a completed session.
 
@@ -298,6 +361,12 @@ def summarize_session(
     summary, and writes summary.md. Returns the path to summary.md on success,
     or a path to an error summary on failure. Returns None only if an unexpected
     error occurs before any output can be written.
+
+    Args:
+        model: Key from _MODEL_PATTERNS (e.g. "gemma") or None for default.
+        output_name: Output filename — allows side-by-side benchmarking
+                     (e.g. "summary_gemma.md") without overwriting production
+                     summaries.
     """
     try:
         transcript_path = session_dir / "transcript.jsonl"
@@ -308,20 +377,23 @@ def summarize_session(
         if not events:
             return _write_error_summary(session_dir, "Transcript is empty")
 
-        system_prompt, user_content = _build_prompt(events)
+        model_pattern = _MODEL_PATTERNS.get(model) if model else None
+        is_nemotron = model == "nemotron"
+
+        system_prompt, user_content = _build_prompt(events, is_nemotron=is_nemotron)
         if not user_content.strip():
             return _write_error_summary(session_dir, "No transcribed speech found")
 
         input_tokens = _estimate_tokens(system_prompt + user_content)
         ctx_size = _compute_ctx_size(input_tokens)
 
-        gguf = _discover_gguf()
+        gguf = _discover_gguf(model_pattern=model_pattern)
         if gguf is None:
+            model_label = model or "default"
             return _write_error_summary(
                 session_dir,
-                "Nemotron GGUF model not found in ~/.cache/huggingface/hub/. "
-                "Download it first: "
-                "huggingface-cli download unsloth/Nemotron-3-Nano-30B-A3B-GGUF",
+                f"No GGUF model found for '{model_label}' in "
+                f"~/.cache/huggingface/hub/. Check download.",
             )
 
         model_name = _model_name_from_gguf(gguf)
@@ -347,12 +419,13 @@ def summarize_session(
         )
         summary_text += footer
 
-        summary_path = session_dir / "summary.md"
+        summary_path = session_dir / output_name
         summary_path.write_text(summary_text, encoding="utf-8")
         log.info("Summary written to %s", summary_path)
 
-        vault = obsidian_dir
-        _sync_to_obsidian(summary_path, session_dir.name, vault)
+        # Only sync to Obsidian for production summaries
+        if output_name == "summary.md":
+            _sync_to_obsidian(summary_path, session_dir.name, obsidian_dir)
 
         return summary_path
 

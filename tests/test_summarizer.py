@@ -35,7 +35,7 @@ _requires_model = pytest.mark.skipif(
 
 def test_discover_gguf_finds_model(tmp_path: Path) -> None:
     hub_root = tmp_path / ".cache" / "huggingface" / "hub"
-    model_dir = hub_root / "models--foo--Nemotron-Nano-bar-GGUF"
+    model_dir = hub_root / "models--unsloth--gemma-3-27b-it-GGUF"
     snapshot_dir = model_dir / "snapshots" / "abc123"
     snapshot_dir.mkdir(parents=True)
     gguf_file = snapshot_dir / "model.gguf"
@@ -49,7 +49,7 @@ def test_discover_gguf_finds_model(tmp_path: Path) -> None:
 
 def test_discover_gguf_skips_mmproj(tmp_path: Path) -> None:
     hub_root = tmp_path / ".cache" / "huggingface" / "hub"
-    model_dir = hub_root / "models--foo--Nemotron-Nano-bar-GGUF"
+    model_dir = hub_root / "models--unsloth--gemma-3-27b-it-GGUF"
     snapshot_dir = model_dir / "snapshots" / "abc123"
     snapshot_dir.mkdir(parents=True)
     (snapshot_dir / "mmproj-vision.gguf").touch()
@@ -62,7 +62,7 @@ def test_discover_gguf_skips_mmproj(tmp_path: Path) -> None:
 
 def test_discover_gguf_skips_download_in_progress(tmp_path: Path) -> None:
     hub_root = tmp_path / ".cache" / "huggingface" / "hub"
-    model_dir = hub_root / "models--foo--Nemotron-Nano-bar-GGUF"
+    model_dir = hub_root / "models--unsloth--gemma-3-27b-it-GGUF"
     snapshot_dir = model_dir / "snapshots" / "abc123"
     snapshot_dir.mkdir(parents=True)
     (snapshot_dir / "file.gguf.downloadInProgress").touch()
@@ -159,6 +159,20 @@ def test_build_prompt_pause_resume() -> None:
     _, user_content = _build_prompt(events)
     assert "[Recording paused]" in user_content
     assert "[Recording resumed]" in user_content
+
+
+def test_build_prompt_mute_unmute_events() -> None:
+    events = [
+        {"type": "mute", "source": "mic", "elapsed": 10},
+        {"type": "unmute", "source": "mic", "elapsed": 20},
+        {"type": "mute", "source": "sys", "elapsed": 30},
+        {"type": "unmute", "source": "sys", "elapsed": 40},
+    ]
+    _, user_content = _build_prompt(events)
+    assert "[Mic muted]" in user_content
+    assert "[Mic unmuted]" in user_content
+    assert "[Sys audio muted]" in user_content
+    assert "[Sys audio unmuted]" in user_content
 
 
 def test_build_prompt_session_name_as_context() -> None:

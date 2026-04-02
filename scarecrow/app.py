@@ -1085,8 +1085,10 @@ class ScarecrowApp(App[None]):
         # Apply initial mute state from launch flags
         if self._mic_muted and self._audio_recorder is not None:
             self._audio_recorder.pause()
+            self._write_mute_event("mic", True)
         if self._sys_muted and self._sys_capture is not None:
             self._sys_capture.pause()
+            self._write_mute_event("sys", True)
 
         # Show session header in transcript pane
         with contextlib.suppress(NoMatches):
@@ -1196,6 +1198,19 @@ class ScarecrowApp(App[None]):
             self._set_status("")
             self._sync_info_bar()
 
+    def _write_mute_event(self, source: str, muted: bool) -> None:
+        """Record a mute/unmute event in the session transcript."""
+        if self._session is None:
+            return
+        self._session.append_event(
+            {
+                "type": "mute" if muted else "unmute",
+                "source": source,
+                "elapsed": self._elapsed,
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+            }
+        )
+
     def action_mute_mic(self) -> None:
         if self.state is not AppState.RECORDING:
             return
@@ -1203,6 +1218,7 @@ class ScarecrowApp(App[None]):
             return
         self._mic_muted = not self._mic_muted
         log.info("Mic %s", "muted" if self._mic_muted else "unmuted")
+        self._write_mute_event("mic", self._mic_muted)
         if self._mic_muted:
             # Drain buffer before muting — discard if executor busy
             self._reap_batch_futures()
@@ -1226,6 +1242,7 @@ class ScarecrowApp(App[None]):
             return
         self._sys_muted = not self._sys_muted
         log.info("Sys %s", "muted" if self._sys_muted else "unmuted")
+        self._write_mute_event("sys", self._sys_muted)
         if self._sys_muted:
             self._reap_batch_futures()
             if not self._batch_futures:
