@@ -31,7 +31,7 @@ def main() -> int:
     if "--model" in args:
         idx = args.index("--model")
         if idx + 1 >= len(args):
-            print("--model requires a value (e.g. gemma, nemotron)", file=sys.stderr)
+            print("--model requires a value (e.g. gemma, gemma4)", file=sys.stderr)
             return 1
         model = args[idx + 1]
         args = args[:idx] + args[idx + 2 :]
@@ -47,7 +47,7 @@ def main() -> int:
     if len(args) != 1:
         print(
             f"Usage: {sys.argv[0]} <session-dir> "
-            "[--model gemma|nemotron] [--backend gguf|mlx]",
+            "[--model gemma|gemma4] [--backend gguf|mlx]",
             file=sys.stderr,
         )
         return 1

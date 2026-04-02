@@ -44,7 +44,6 @@ def _sync_to_obsidian(
 # ---------------------------------------------------------------------------
 
 _MODEL_PATTERNS: dict[str, str] = {
-    "nemotron": "*Nemotron*Nano*GGUF",
     "gemma": "*gemma-3-27b-it*GGUF",
     "gemma4": "*gemma-4-*-GGUF",
 }
@@ -68,7 +67,7 @@ def _model_name_from_gguf(gguf_path: Path) -> str:
     # Walk up to the models--owner--repo-GGUF directory
     for parent in (gguf_path, *gguf_path.parents):
         if parent.name.startswith("models--"):
-            # models--unsloth--Nemotron-3-Nano-30B-A3B-GGUF
+            # models--owner--repo-name-GGUF
             parts = parent.name.split("--")
             if len(parts) >= 3:
                 repo = "--".join(parts[2:])
@@ -188,11 +187,7 @@ def _scale_prompt(transcript_words: int) -> str:
     )
 
 
-# Nemotron needs an explicit instruction to suppress chain-of-thought.
-_NEMOTRON_PREFIX = "detailed thinking off\n\n"
-
-
-def _build_prompt(events: list[dict], *, is_nemotron: bool = False) -> tuple[str, str]:
+def _build_prompt(events: list[dict]) -> tuple[str, str]:
     context_items: list[str] = []
     content_parts: list[str] = []
 
@@ -244,8 +239,7 @@ def _build_prompt(events: list[dict], *, is_nemotron: bool = False) -> tuple[str
     user_content = "\n".join(content_parts)
     transcript_words = len(user_content.split())
 
-    prefix = _NEMOTRON_PREFIX if is_nemotron else ""
-    system_prompt = prefix + _scale_prompt(transcript_words)
+    system_prompt = _scale_prompt(transcript_words)
     if context_items:
         context_block = "\n\nBackground context provided by the user:\n" + "\n".join(
             f"- {item}" for item in context_items
@@ -612,8 +606,6 @@ def _create_backend(
     backend_name = backend_name or config.SUMMARIZER_BACKEND
 
     if backend_name == "mlx":
-        if model == "nemotron":
-            raise ValueError("Nemotron models are not available for the MLX backend")
         return _MlxBackend(
             config.SUMMARIZER_MLX_MODEL_ID,
             config.SUMMARIZER_MLX_KV_BITS,
@@ -669,8 +661,7 @@ def summarize_session(
         if not events:
             return _write_error_summary(session_dir, "Transcript is empty")
 
-        is_nemotron = model == "nemotron"
-        system_prompt, user_content = _build_prompt(events, is_nemotron=is_nemotron)
+        system_prompt, user_content = _build_prompt(events)
         if not user_content.strip():
             return _write_error_summary(session_dir, "No transcribed speech found")
 
