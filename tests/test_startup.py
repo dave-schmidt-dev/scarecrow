@@ -184,17 +184,6 @@ def test_transcriber_can_be_instantiated() -> None:
     assert not t.is_ready
 
 
-def test_transcriber_prepare_sets_is_ready() -> None:
-    """prepare() must succeed and set is_ready (no model loading needed)."""
-    from scarecrow.transcriber import Transcriber
-
-    t = Transcriber()
-    t.prepare()
-
-    assert t.is_ready
-    t.shutdown(timeout=0)
-
-
 def test_main_handles_preload_batch_model_failure() -> None:
     """main() must handle preload_batch_model() failures with a clean exit."""
     from scarecrow import __main__

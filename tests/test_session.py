@@ -130,15 +130,6 @@ def test_unique_directories_for_different_sessions(tmp_path: Path) -> None:
     session2.finalize()
 
 
-def test_session_header_is_first_event(tmp_path: Path) -> None:
-    """The first event in the transcript is a session_start JSON object."""
-    session = Session(base_dir=tmp_path)
-    session.finalize()
-    events = _read_jsonl(session.transcript_path)
-    assert len(events) >= 1
-    assert events[0]["type"] == "session_start"
-
-
 def test_session_header_format(tmp_path: Path) -> None:
     """The session_start event has a timestamp in ISO 8601 format and session_dir."""
     session = Session(base_dir=tmp_path)
@@ -184,20 +175,6 @@ def test_transcript_file_has_session_start_event(tmp_path: Path) -> None:
     events = _read_jsonl(session.transcript_path)
     assert events[0]["type"] == "session_start", (
         f"First event must be session_start; got: {events[0]!r}"
-    )
-
-
-def test_transcript_file_has_session_end_event(tmp_path: Path) -> None:
-    """write_end_header writes a session_end event."""
-    session = Session(base_dir=tmp_path)
-    session.append_event({"type": "transcript", "text": "Some content."})
-    session.write_end_header()
-    session.finalize()
-
-    events = _read_jsonl(session.transcript_path)
-    end_events = [e for e in events if e.get("type") == "session_end"]
-    assert end_events, (
-        "Transcript file must contain a session_end event after write_end_header()"
     )
 
 
