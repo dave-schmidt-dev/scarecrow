@@ -26,10 +26,8 @@ run_pytest() {
 TEST_FILES=(
   tests/test_app.py
   tests/test_echo_filter.py
-  tests/test_behavioral.py
   tests/test_jsonl_schema.py
   tests/test_recorder.py
-  tests/test_regressions.py
   tests/test_repo_policy.py
   tests/test_session.py
   tests/test_setup.py
@@ -41,6 +39,11 @@ TEST_FILES=(
   tests/test_audio_routing.py
   tests/test_pipeline.py
   tests/test_transcriber.py
+  tests/test_app_infobar.py
+  tests/test_app_notes.py
+  tests/test_app_shutdown.py
+  tests/test_app_recording.py
+  tests/test_app_vad_events.py
 )
 
 PIDS=()

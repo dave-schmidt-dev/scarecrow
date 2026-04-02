@@ -10,7 +10,7 @@ def test_runner_script_runs_isolated_processes_for_files() -> None:
     assert "env -i" in script
     assert "run_pytest_file.py" in script
     assert "tests/test_app.py" in script
-    assert "tests/test_behavioral.py" in script
+    assert "tests/test_app_recording.py" in script
     assert "tests/test_setup.py" in script
     assert "tests/test_transcriber.py" in script
     assert "tests/test_suite_runner.py" in script
