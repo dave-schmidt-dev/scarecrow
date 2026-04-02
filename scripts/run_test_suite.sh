@@ -35,7 +35,6 @@ TEST_FILES=(
   tests/test_suite_runner.py
   tests/test_summarizer.py
   tests/test_sys_audio.py
-  tests/test_sys_audio_integration.py
   tests/test_audio_routing.py
   tests/test_pipeline.py
   tests/test_transcriber.py
@@ -44,6 +43,10 @@ TEST_FILES=(
   tests/test_app_shutdown.py
   tests/test_app_recording.py
   tests/test_app_vad_events.py
+  tests/test_app_sys_audio.py
+  tests/test_app_mute_controls.py
+  tests/test_app_sys_vad.py
+  tests/test_app_context_menu.py
 )
 
 PIDS=()
