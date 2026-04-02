@@ -276,15 +276,29 @@ scripts/
 examples/
   scarecrow-iterm-profile.json  # iTerm2 dynamic profile template
 tests/
-  test_app.py            # TUI integration tests
-  test_behavioral.py     # behavioral contract tests
-  test_integration.py    # real-model pipeline tests
+  helpers.py             # shared mock factories (_mock_recorder, _mock_transcriber, etc.)
+  test_app.py            # TUI launch and core integration tests
+  test_app_infobar.py    # InfoBar rendering and widget configuration
+  test_app_notes.py      # note submission and note events
+  test_app_shutdown.py   # shutdown, cleanup, flush, circuit breaker
+  test_app_recording.py  # recording state transitions, preflight, divider throttle
+  test_app_vad_events.py # VAD gating, transcript events, JSONL timestamps
+  test_app_sys_audio.py  # sys audio capture lifecycle, echo filter, quit paths
+  test_app_mute_controls.py  # mic and sys mute/unmute controls
+  test_app_sys_vad.py    # system audio VAD and auto-segmentation
+  test_app_context_menu.py   # context menu, click-to-mute, mute transcript events
+  test_audio_routing.py  # audio output device routing
+  test_echo_filter.py    # echo filter unit tests
+  test_integration.py    # real-model pipeline tests (opt-in, @pytest.mark.integration)
+  test_jsonl_schema.py   # JSONL event schema validation
+  test_pipeline.py       # transcription pipeline tests
   test_recorder.py       # audio recorder unit tests
-  test_regressions.py    # regression tests for fixed bugs
   test_repo_policy.py    # repo policy enforcement tests
   test_session.py        # session/file management tests
   test_setup.py          # setup script tests
-  test_summarizer.py     # summarizer unit tests
   test_startup.py        # startup smoke tests (imports, HF offline, model load)
+  test_summarizer.py     # summarizer unit tests
+  test_suite_runner.py   # test runner infrastructure tests
+  test_sys_audio.py      # system audio capture unit tests
   test_transcriber.py    # batch transcription tests
 ```
