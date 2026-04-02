@@ -1,11 +1,11 @@
-"""macOS audio routing — create/destroy Multi-Output Devices via CoreAudio.
+"""macOS audio routing — switch to/from a persistent Multi-Output Device via CoreAudio.
 
-When --sys-audio is used, Scarecrow creates a private Multi-Output Device
-that combines the current system output (speakers/headphones) with BlackHole.
-This routes system audio to BlackHole automatically so the user doesn't need
-to manually configure Audio MIDI Setup.
+When system audio capture is active, Scarecrow switches the default output to a
+pre-existing "Scarecrow Output" Multi-Output Device (created once via Audio MIDI
+Setup) that combines the normal output with BlackHole. This routes system audio
+to BlackHole for capture without the user toggling Audio MIDI Setup each session.
 
-On shutdown, the original default output is restored and the device is destroyed.
+On shutdown (or crash via atexit), the original default output is restored.
 """
 
 from __future__ import annotations

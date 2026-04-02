@@ -4,6 +4,7 @@ Bug entries are inline under their date heading. A squashed bug must reference a
 
 ## 2026-04-02
 
+- **External audit fixes:** Fixed flaky VAD behavioral tests (timer race where `_mic_future` was set by a poll before the test could pause it). Marked real-model tests (`test_startup`, `test_integration`) as `@pytest.mark.integration` so they don't abort the default suite. Added `test_audio_routing.py` to the suite runner. Fixed `__init__.py` version (was `0.1.0`, now `1.5.0` matching `pyproject.toml`). Updated README: Gemma 3 replaces Nemotron refs, JSONL schema examples match enforced schema, Vulture command matches pre-commit hook flags, Obsidian/iCloud sync disclosed. Updated `setup.py` VAD timing (600ms→750ms). Rewrote `audio_routing.py` module docstring to match current persistent-device-switching design.
 - **VAD sensitivity menu (Ctrl+V):** Opens a modal menu to adjust mic and sys VAD sensitivity (Low/Medium/High presets) and toggle mute per source. Presets mutate silence threshold and minimum silence duration at runtime.
 - **Auto-segmentation for long sessions:** Audio files rotate at ~60-minute marks (`SEGMENT_DURATION_SECONDS` config). Each segment gets a separate summary (`summary_seg1.md`, `summary_seg2.md`, …) concatenated into `summary.md`. Transcript remains continuous in a single JSONL. Model loaded once and reused across segments.
 - **Sys audio holdoff:** First sys batch result after startup or unmute is silently discarded, preventing echo-duplicate text while the echo filter primes.

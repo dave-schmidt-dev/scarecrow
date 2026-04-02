@@ -104,7 +104,7 @@ def explain_architecture():
     print("-" * 40)
     print()
     print("Scarecrow uses parakeet-mlx for VAD-based batch transcription.")
-    print("Audio drains at natural speech pauses (600ms+ silence),")
+    print("Audio drains at natural speech pauses (750ms+ silence),")
     print("with a 30-second hard max for continuous speech.")
     print()
     print("Backend: parakeet-mlx (Apple Silicon GPU)")

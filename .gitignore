@@ -15,6 +15,7 @@ uv.lock
 
 # Recordings (local data, not committed)
 recordings/
+reports/
 
 # IDE
 .idea/

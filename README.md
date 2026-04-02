@@ -126,14 +126,16 @@ Ctrl+C uses the same cleanup path as Ctrl+Q.
 
 ### Auto-summarization
 
-When a session ends, Scarecrow generates `summary.md` in the session directory using a local LLM (Nemotron-3-Nano in-process). The summary includes:
+When a session ends, Scarecrow generates `summary.md` in the session directory using a local LLM (Gemma 3 27B IT via llama-cpp-python). The summary includes:
 - Prose summary of the transcript with `/note` entries woven in naturally
 - `/task` entries listed as a Markdown checklist at the bottom
 - Footer with model name, word counts, token usage, and summarization time
 
 `/context` entries provide background information (names, spelling, domain terms) that improves summary quality without appearing in the output.
 
-Summarization requires a Nemotron GGUF model in the HuggingFace cache and `llama-cpp-python` (installed automatically). The model is loaded in-process — no server needed.
+Summarization requires a Gemma 3 GGUF model in the HuggingFace cache and `llama-cpp-python` (installed automatically). The model is loaded in-process — no server needed.
+
+If `OBSIDIAN_VAULT_DIR` is set in `scarecrow/config.py` (defaults to `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Transcriptions Summaries`), summaries are automatically copied into that directory. Set it to `None` to disable. **Note:** the default path is inside iCloud Drive, so summaries will sync to the cloud if that vault exists on your machine.
 
 If the model produces only reasoning with no structured output, the summarizer automatically retries with a forced prefix. If both attempts fail, `summary.md` contains error details and a retry command:
 ```bash
@@ -178,16 +180,20 @@ recordings/
 Each line in `transcript.jsonl` is a JSON object with a `type` field:
 
 ```jsonl
-{"type":"session_start","timestamp":"2026-03-28T14:30:00","session_dir":"/path/to/session"}
-{"type":"transcript","elapsed":0,"text":"Transcribed speech appears here."}
-{"type":"note","tag":"TASK","timestamp":"14:30:20","text":"follow up on X"}
-{"type":"warning","timestamp":"14:30:25","text":"Audio input overflow"}
-{"type":"divider","elapsed":60}
-{"type":"pause","elapsed":75}
-{"type":"session_end","timestamp":"2026-03-28T14:31:00"}
+{"type":"session_start","schema_version":1,"timestamp":"2026-03-28T14:30:00","session_dir":"/path/to/session"}
+{"type":"recording_start","elapsed":0,"timestamp":"2026-03-28T14:30:01"}
+{"type":"transcript","elapsed":5,"timestamp":"2026-03-28T14:30:05","text":"Transcribed speech appears here."}
+{"type":"transcript","elapsed":10,"timestamp":"2026-03-28T14:30:10","text":"System audio text.","source":"sys"}
+{"type":"note","tag":"TASK","elapsed":20,"timestamp":"2026-03-28T14:30:20","text":"follow up on X"}
+{"type":"warning","elapsed":25,"timestamp":"2026-03-28T14:30:25","text":"Audio input overflow"}
+{"type":"divider","elapsed":60,"timestamp":"2026-03-28T14:31:00"}
+{"type":"pause","elapsed":75,"timestamp":"2026-03-28T14:31:15"}
+{"type":"resume","elapsed":80,"timestamp":"2026-03-28T14:31:20"}
+{"type":"session_metrics","elapsed":90,"timestamp":"2026-03-28T14:31:30","word_count":42}
+{"type":"session_end","timestamp":"2026-03-28T14:32:00"}
 ```
 
-Event types: `session_start`, `session_end`, `transcript`, `divider`, `pause`, `note`, `warning`. This format is designed for automated processing (summarization, task extraction) — filter by type, parse fields, no regex needed.
+Event types: `session_start`, `session_end`, `recording_start`, `transcript`, `divider`, `pause`, `resume`, `note`, `warning`, `session_metrics`, `session_renamed`. All events carry a `timestamp`; most carry `elapsed`. `transcript` events may include an optional `source` field (`"mic"` or `"sys"`). This format is designed for automated processing (summarization, task extraction) — filter by type, parse fields, no regex needed.
 
 ### Audio format
 
@@ -199,7 +205,7 @@ Audio is recorded as WAV (raw PCM in the audio callback, zero CPU overhead). On 
 uv sync --no-editable                # install deps
 bash scripts/run_test_suite.sh       # run tests
 uv run ruff check scarecrow/ tests/  # lint
-uv run vulture scarecrow/ vulture_whitelist.py  # dead code check
+uv run vulture scarecrow/ vulture_whitelist.py --min-confidence=80 --ignore-names=inter_op_num_threads,intra_op_num_threads,log_severity_level  # dead code check (matches pre-commit hook)
 ```
 
 **After editing source files**, rebuild before testing:

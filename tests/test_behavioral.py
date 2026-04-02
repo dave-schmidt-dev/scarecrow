@@ -1404,6 +1404,10 @@ async def test_batch_transcription_triggered_at_interval(
         if app._batch_timer is not None:
             app._batch_timer.pause()
 
+        # Clear any mic future set by a timer-triggered call during the
+        # pause above — prevents _reap_source_future from returning False.
+        app._mic_future = None
+
         submit_calls: list[bool] = []
         original_submit = app._submit_batch_transcription
 
@@ -1496,6 +1500,10 @@ async def test_vad_skips_near_silent_mic_audio(
         if app._batch_timer is not None:
             app._batch_timer.pause()
 
+        # Clear any mic future set by a timer-triggered call during the
+        # pause above — ensures the skip is from the speech gate, not a busy future.
+        app._mic_future = None
+
         submit_calls: list[bool] = []
         original_submit = app._submit_batch_transcription
 
@@ -1546,6 +1554,10 @@ async def test_vad_low_floor_requires_higher_speech_ratio(
         if app._batch_timer is not None:
             app._batch_timer.pause()
 
+        # Clear any mic future set by a timer-triggered call during the
+        # pause above — ensures the skip is from the speech gate, not a busy future.
+        app._mic_future = None
+
         submit_calls: list[bool] = []
         original_submit = app._submit_batch_transcription
 
@@ -1593,6 +1605,10 @@ async def test_vad_low_floor_passes_with_sufficient_speech(
 
         if app._batch_timer is not None:
             app._batch_timer.pause()
+
+        # Clear any mic future set by a timer-triggered call during the
+        # pause above — prevents _reap_source_future from returning False.
+        app._mic_future = None
 
         submit_calls: list[bool] = []
         original_submit = app._submit_batch_transcription

@@ -25,6 +25,7 @@ def _resample(audio: np.ndarray, src_sr: int, dst_sr: int = 16000) -> np.ndarray
     return np.interp(new_times, old_times, audio).astype(np.float32)
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not importlib.util.find_spec("parakeet_mlx"),
     reason="parakeet_mlx not installed",

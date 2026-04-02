@@ -27,7 +27,6 @@ TEST_FILES=(
   tests/test_app.py
   tests/test_echo_filter.py
   tests/test_behavioral.py
-  tests/test_integration.py
   tests/test_jsonl_schema.py
   tests/test_parakeet_backend.py
   tests/test_recorder.py
@@ -40,6 +39,7 @@ TEST_FILES=(
   tests/test_summarizer.py
   tests/test_sys_audio.py
   tests/test_sys_audio_integration.py
+  tests/test_audio_routing.py
   tests/test_pipeline.py
   tests/test_transcriber.py
 )

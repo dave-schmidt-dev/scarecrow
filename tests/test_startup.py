@@ -213,6 +213,7 @@ def test_main_handles_preload_batch_model_failure() -> None:
     assert exc_info.value.code == 1
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not importlib.util.find_spec("parakeet_mlx"),
     reason="parakeet_mlx not installed",
