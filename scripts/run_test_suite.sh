@@ -28,7 +28,6 @@ TEST_FILES=(
   tests/test_echo_filter.py
   tests/test_behavioral.py
   tests/test_jsonl_schema.py
-  tests/test_parakeet_backend.py
   tests/test_recorder.py
   tests/test_regressions.py
   tests/test_repo_policy.py

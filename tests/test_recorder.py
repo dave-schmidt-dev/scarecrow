@@ -444,3 +444,222 @@ def test_stop_without_start_is_safe(output_path: Path, mock_sd, mock_sf) -> None
     """stop() without start() must not crash."""
     recorder = AudioRecorder(output_path)
     recorder.stop()  # Should not raise
+
+
+# ---------------------------------------------------------------------------
+# Bug: batch transcription gets 44100Hz audio but Parakeet expects 16000Hz
+# ---------------------------------------------------------------------------
+
+
+def test_drain_buffer_returns_float32(tmp_path: Path) -> None:
+    """drain_buffer must return float32 audio normalized to [-1, 1]."""
+    from scarecrow.recorder import AudioRecorder
+
+    with patch.dict(
+        "sys.modules", {"sounddevice": MagicMock(), "soundfile": MagicMock()}
+    ):
+        recorder = AudioRecorder(tmp_path / "audio.wav", sample_rate=44100)
+        recorder.start()
+
+        # Simulate audio callback with int16 data
+        indata = (np.random.randn(1024, 1) * 10000).astype("int16")
+        recorder._callback(indata, 1024, None, None)
+
+        audio = recorder.drain_buffer()
+        assert audio is not None
+        assert audio.dtype == np.float32
+        assert audio.max() <= 1.0
+        assert audio.min() >= -1.0
+        recorder.stop()
+
+
+def test_drain_buffer_resamples_to_stt_rate(tmp_path: Path) -> None:
+    """drain_buffer downsamples 48kHz recording audio to 16kHz for STT."""
+    from scarecrow.config import Config
+    from scarecrow.recorder import AudioRecorder
+
+    cfg = Config(SAMPLE_RATE=16000, RECORDING_SAMPLE_RATE=48000)
+
+    with patch.dict(
+        "sys.modules", {"sounddevice": MagicMock(), "soundfile": MagicMock()}
+    ):
+        recorder = AudioRecorder(tmp_path / "audio.wav", sample_rate=48000, cfg=cfg)
+        recorder.start()
+
+        # Simulate 1 second of audio at 48000Hz: 48 chunks of 1024 = 49152 samples
+        for _ in range(48):
+            indata = np.zeros((1024, 1), dtype="int16")
+            recorder._callback(indata, 1024, None, None)
+
+        audio = recorder.drain_buffer()
+        assert audio is not None
+        # Output should be ~1/3 of input length (16kHz vs 48kHz)
+        assert len(audio) == pytest.approx(49152 // 3, rel=0.05)
+        recorder.stop()
+
+
+def test_finalize_audio_no_resample_when_rates_match(tmp_path: Path) -> None:
+    """drain_buffer output length is unchanged when recording and STT rates match."""
+    from scarecrow.config import Config
+    from scarecrow.recorder import AudioRecorder
+
+    cfg = Config(SAMPLE_RATE=16000, RECORDING_SAMPLE_RATE=16000)
+
+    with patch.dict(
+        "sys.modules", {"sounddevice": MagicMock(), "soundfile": MagicMock()}
+    ):
+        recorder = AudioRecorder(tmp_path / "audio.wav", sample_rate=16000, cfg=cfg)
+        recorder.start()
+
+        for _ in range(16):
+            indata = np.zeros((1024, 1), dtype="int16")
+            recorder._callback(indata, 1024, None, None)
+
+        audio = recorder.drain_buffer()
+        assert audio is not None
+        assert len(audio) == 16 * 1024
+        recorder.stop()
+
+
+# ---------------------------------------------------------------------------
+# Bug: audio buffer not populated (callback doesn't buffer when paused)
+# ---------------------------------------------------------------------------
+
+
+def test_callback_does_not_buffer_when_paused(tmp_path: Path) -> None:
+    """Paused callback should NOT accumulate audio in the batch buffer."""
+    from scarecrow.recorder import AudioRecorder
+
+    with patch.dict(
+        "sys.modules", {"sounddevice": MagicMock(), "soundfile": MagicMock()}
+    ):
+        recorder = AudioRecorder(tmp_path / "audio.wav")
+        recorder.start()
+        recorder.pause()
+
+        indata = np.zeros((1024, 1), dtype="int16")
+        recorder._callback(indata, 1024, None, None)
+
+        audio = recorder.drain_buffer()
+        assert audio is None
+
+
+def test_callback_buffers_when_recording(tmp_path: Path) -> None:
+    """Recording callback must accumulate audio in the batch buffer."""
+    from scarecrow.config import Config
+    from scarecrow.recorder import AudioRecorder
+
+    cfg = Config(SAMPLE_RATE=16000, RECORDING_SAMPLE_RATE=16000)
+    with patch.dict(
+        "sys.modules", {"sounddevice": MagicMock(), "soundfile": MagicMock()}
+    ):
+        recorder = AudioRecorder(tmp_path / "audio.wav", sample_rate=16000, cfg=cfg)
+        recorder.start()
+
+        indata = np.ones((1024, 1), dtype="int16") * 500
+        recorder._callback(indata, 1024, None, None)
+
+        audio = recorder.drain_buffer()
+        assert audio is not None
+        assert len(audio) == 1024
+
+
+# ---------------------------------------------------------------------------
+# Bug: drain_buffer empties on second call (double-drain returns nothing)
+# ---------------------------------------------------------------------------
+
+
+def test_drain_buffer_empties_after_drain(tmp_path: Path) -> None:
+    """drain_buffer should return None on second call with no new audio."""
+    from scarecrow.recorder import AudioRecorder
+
+    with patch.dict(
+        "sys.modules", {"sounddevice": MagicMock(), "soundfile": MagicMock()}
+    ):
+        recorder = AudioRecorder(tmp_path / "audio.wav")
+        recorder.start()
+
+        indata = np.zeros((1024, 1), dtype="int16")
+        recorder._callback(indata, 1024, None, None)
+
+        first = recorder.drain_buffer()
+        assert first is not None
+
+        second = recorder.drain_buffer()
+        assert second is None
+        recorder.stop()
+
+
+# ---------------------------------------------------------------------------
+# Audio level meter: peak_level tracks mic input
+# ---------------------------------------------------------------------------
+
+
+def test_peak_level_updates_on_audio(tmp_path: Path) -> None:
+    """peak_level should reflect the loudest sample in the last callback."""
+    from scarecrow.recorder import AudioRecorder
+
+    with patch.dict(
+        "sys.modules", {"sounddevice": MagicMock(), "soundfile": MagicMock()}
+    ):
+        recorder = AudioRecorder(tmp_path / "audio.wav")
+        recorder.start()
+
+        assert recorder.peak_level == 0.0
+
+        # Simulate loud audio (half of int16 max)
+        indata = np.ones((1024, 1), dtype="int16") * 16384
+        recorder._callback(indata, 1024, None, None)
+
+        assert recorder.peak_level == pytest.approx(0.5, abs=0.01)
+        recorder.stop()
+
+
+def test_peak_level_zero_when_paused(tmp_path: Path) -> None:
+    """peak_level should be 0 when paused."""
+    from scarecrow.recorder import AudioRecorder
+
+    with patch.dict(
+        "sys.modules", {"sounddevice": MagicMock(), "soundfile": MagicMock()}
+    ):
+        recorder = AudioRecorder(tmp_path / "audio.wav")
+        recorder.start()
+        recorder.pause()
+
+        indata = np.ones((1024, 1), dtype="int16") * 16384
+        recorder._callback(indata, 1024, None, None)
+
+        assert recorder.peak_level == 0.0
+        recorder.stop()
+
+
+# ---------------------------------------------------------------------------
+# Bug: drain_buffer overlap caused duplicate words in batch transcripts
+# The 2s overlap meant the same words appeared at end of one batch and
+# start of the next. drain_buffer must clear completely.
+# ---------------------------------------------------------------------------
+
+
+def test_drain_buffer_clears_completely(tmp_path: Path) -> None:
+    """drain_buffer must return all audio and leave buffer empty — no overlap."""
+    from scarecrow.recorder import AudioRecorder
+
+    with patch.dict(
+        "sys.modules", {"sounddevice": MagicMock(), "soundfile": MagicMock()}
+    ):
+        recorder = AudioRecorder(tmp_path / "audio.wav", sample_rate=16000)
+        recorder.start()
+
+        # Simulate 3 seconds of audio (48 chunks of 1024 = 49152 samples)
+        for _ in range(48):
+            indata = np.ones((1024, 1), dtype="int16") * 100
+            recorder._callback(indata, 1024, None, None)
+
+        first = recorder.drain_buffer()
+        assert first is not None
+        assert len(first) == 48 * 1024
+
+        # Second drain must be empty — no overlap retained
+        second = recorder.drain_buffer()
+        assert second is None
+        recorder.stop()

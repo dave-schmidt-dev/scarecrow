@@ -369,3 +369,44 @@ def test_transcribe_batch_respects_max_retries_zero() -> None:
         f"Expected exactly 1 attempt with max_retries=0, got {call_count}"
     )
     mock_sleep.assert_not_called()
+
+
+def test_batch_passes_audio_directly_at_16khz() -> None:
+    """Batch transcription passes 16kHz audio directly to the parakeet backend."""
+    # Create 1 second of 16kHz audio
+    audio_16k = np.zeros(16000, dtype=np.float32)
+
+    captured: list[np.ndarray] = []
+
+    t = Transcriber()
+    t._ready = True
+    t._model_manager = MagicMock()
+
+    def fake_transcribe_parakeet(audio):
+        captured.append(audio)
+        return "hello world"
+
+    t._transcribe_parakeet = fake_transcribe_parakeet  # type: ignore[method-assign]
+
+    t.transcribe_batch(audio_16k, batch_elapsed=30)
+
+    assert len(captured) == 1
+    assert len(captured[0]) == 16000
+
+
+def test_parakeet_model_lazy_import() -> None:
+    """get_parakeet_model() must call parakeet_mlx.from_pretrained on first use."""
+    from scarecrow.runtime import ModelManager
+
+    manager = ModelManager()
+    assert manager._parakeet_model is None
+
+    mock_model = MagicMock()
+    mock_parakeet = MagicMock()
+    mock_parakeet.from_pretrained.return_value = mock_model
+
+    with patch.dict("sys.modules", {"parakeet_mlx": mock_parakeet}):
+        result = manager.get_parakeet_model()
+
+    mock_parakeet.from_pretrained.assert_called_once()
+    assert result is mock_model
