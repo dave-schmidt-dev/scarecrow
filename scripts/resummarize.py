@@ -50,19 +50,51 @@ def main() -> int:
         print(f"No transcript.jsonl in {session_dir}", file=sys.stderr)
         return 1
 
+    import json
+
     from scarecrow.config import OBSIDIAN_VAULT_DIR
-    from scarecrow.summarizer import summarize_session
+    from scarecrow.summarizer import summarize_session, summarize_session_segments
+
+    # Detect segmented sessions by counting segment_boundary events
+    n_segments = 1
+    with transcript.open(encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+                if ev.get("type") == "segment_boundary":
+                    n_segments += 1
+            except json.JSONDecodeError:
+                pass
 
     # When benchmarking with --model, write to summary_<model>.md
     output_name = f"summary_{model}.md" if model else "summary.md"
 
-    print(f"Summarizing {session_dir} (model={model or 'default'})...")
-    result = summarize_session(
-        session_dir,
-        obsidian_dir=OBSIDIAN_VAULT_DIR,
-        model=model,
-        output_name=output_name,
+    print(
+        f"Summarizing {session_dir} "
+        f"(model={model or 'default'}, segments={n_segments})..."
     )
+
+    if n_segments > 1 and not model:
+        result = summarize_session_segments(
+            session_dir, n_segments, obsidian_dir=OBSIDIAN_VAULT_DIR
+        )
+    else:
+        if n_segments > 1 and model:
+            print(
+                "  Note: --model ignores segment boundaries "
+                "(processing as single transcript)",
+                file=sys.stderr,
+            )
+        result = summarize_session(
+            session_dir,
+            obsidian_dir=OBSIDIAN_VAULT_DIR,
+            model=model,
+            output_name=output_name,
+        )
+
     if result:
         print(f"Summary written to {result}")
         return 0

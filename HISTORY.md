@@ -2,6 +2,15 @@
 
 Bug entries are inline under their date heading. A squashed bug must reference a regression test.
 
+## 2026-04-02
+
+- **VAD sensitivity menu (Ctrl+V):** Opens a modal menu to adjust mic and sys VAD sensitivity (Low/Medium/High presets) and toggle mute per source. Presets mutate silence threshold and minimum silence duration at runtime.
+- **Auto-segmentation for long sessions:** Audio files rotate at ~60-minute marks (`SEGMENT_DURATION_SECONDS` config). Each segment gets a separate summary (`summary_seg1.md`, `summary_seg2.md`, …) concatenated into `summary.md`. Transcript remains continuous in a single JSONL. Model loaded once and reused across segments.
+- **Sys audio holdoff:** First sys batch result after startup or unmute is silently discarded, preventing echo-duplicate text while the echo filter primes.
+- **Mute/unmute status in transcript pane:** Muting or unmuting now prints a timestamped status line (e.g. `Mic MUTED`) in the RichLog for visual continuity.
+- **Shutdown metrics show mic + sys audio:** Shutdown dialog now lists both mic and sys audio files with sizes, per segment if multi-segment.
+- **`resummarize.py` auto-detects segments:** Counts `segment_boundary` events in JSONL and uses `summarize_session_segments()` when detected. `--model` flag bypasses segmentation with a warning.
+
 ## 2026-04-01 (v1.5)
 
 - **Launch flags `--mic-only` / `--sys-only`:** Start Scarecrow with only one audio source active. The other source begins muted but can be unmuted at runtime via keyboard shortcut or clicking the level meter.

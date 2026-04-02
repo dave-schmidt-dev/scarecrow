@@ -342,6 +342,88 @@ def test_rename_empty_name_is_noop(tmp_path: Path) -> None:
     session.finalize()
 
 
+# ---------------------------------------------------------------------------
+# Segment path helpers
+# ---------------------------------------------------------------------------
+
+
+def test_audio_path_for_segment_1(tmp_path: Path) -> None:
+    """Segment 1 returns the standard audio.wav path."""
+    session = Session(base_dir=tmp_path)
+    assert session.audio_path_for_segment(1) == session.session_dir / "audio.wav"
+    session.finalize()
+
+
+def test_audio_path_for_segment_2(tmp_path: Path) -> None:
+    """Segment 2+ returns audio_segN.wav."""
+    session = Session(base_dir=tmp_path)
+    assert session.audio_path_for_segment(2) == session.session_dir / "audio_seg2.wav"
+    assert session.audio_path_for_segment(3) == session.session_dir / "audio_seg3.wav"
+    session.finalize()
+
+
+def test_audio_sys_path_for_segment_1(tmp_path: Path) -> None:
+    """Segment 1 returns the standard audio_sys.wav path."""
+    session = Session(base_dir=tmp_path)
+    expected = session.session_dir / "audio_sys.wav"
+    assert session.audio_sys_path_for_segment(1) == expected
+    session.finalize()
+
+
+def test_audio_sys_path_for_segment_2(tmp_path: Path) -> None:
+    """Segment 2+ returns audio_sys_segN.wav."""
+    session = Session(base_dir=tmp_path)
+    p = session.audio_sys_path_for_segment(2)
+    assert p == session.session_dir / "audio_sys_seg2.wav"
+    session.finalize()
+
+
+def test_write_segment_boundary(tmp_path: Path) -> None:
+    """write_segment_boundary writes a segment_boundary event."""
+    session = Session(base_dir=tmp_path)
+    session.write_segment_boundary(1, 3600)
+    session.finalize()
+    events = _read_jsonl(session.transcript_path)
+    boundaries = [e for e in events if e["type"] == "segment_boundary"]
+    assert len(boundaries) == 1
+    assert boundaries[0]["segment"] == 1
+    assert boundaries[0]["elapsed"] == 3600
+
+
+def test_compress_audio_segment_1(tmp_path: Path) -> None:
+    """compress_audio_segment(1) compresses audio.wav."""
+    import numpy as np
+    import soundfile as sf
+
+    session = Session(base_dir=tmp_path)
+    audio = np.zeros(16000, dtype=np.float32)
+    sf.write(session.audio_path_for_segment(1), audio, 16000)
+    result = session.compress_audio_segment(1)
+    assert result is not None
+    assert result.suffix == ".flac"
+    assert not session.audio_path_for_segment(1).exists()
+    session.finalize()
+
+
+def test_compress_audio_segment_2(tmp_path: Path) -> None:
+    """compress_audio_segment(2) compresses audio_seg2.wav."""
+    import numpy as np
+    import soundfile as sf
+
+    session = Session(base_dir=tmp_path)
+    audio = np.zeros(16000, dtype=np.float32)
+    sf.write(session.audio_path_for_segment(2), audio, 16000)
+    result = session.compress_audio_segment(2)
+    assert result is not None
+    assert result.name == "audio_seg2.flac"
+    session.finalize()
+
+
+# ---------------------------------------------------------------------------
+# Session I/O failure handling
+# ---------------------------------------------------------------------------
+
+
 def test_append_event_handles_open_failure(tmp_path: Path) -> None:
     """append_event must catch OSError from open() and set write_failed."""
     from unittest.mock import patch

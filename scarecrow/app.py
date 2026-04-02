@@ -26,7 +26,9 @@ from textual.binding import Binding
 from textual.css.query import NoMatches
 from textual.events import Click
 from textual.reactive import reactive
-from textual.widgets import Footer, Input, RichLog, Static
+from textual.screen import ModalScreen
+from textual.widgets import Footer, Input, OptionList, RichLog, Static
+from textual.widgets.option_list import Option
 
 from scarecrow import config
 from scarecrow.config import Config
@@ -170,7 +172,9 @@ class InfoBar(Static):
         return text
 
     def on_click(self, event: Click) -> None:
-        """Toggle mute when clicking on mic/sys level meters."""
+        """Click on mic/sys level meters to toggle mute."""
+        if event.button != 1:
+            return
         x = event.x
         mic_s, mic_e = self._mic_region
         sys_s, sys_e = self._sys_region
@@ -178,6 +182,79 @@ class InfoBar(Static):
             self.app.action_mute_mic()
         elif sys_s <= x < sys_e:
             self.app.action_mute_sys()
+
+
+class ContextMenuScreen(ModalScreen[str | None]):
+    """Menu for mute toggle and VAD sensitivity presets."""
+
+    DEFAULT_CSS = """
+    ContextMenuScreen {
+        align: center middle;
+    }
+    ContextMenuScreen OptionList {
+        width: 34;
+        height: auto;
+        max-height: 18;
+        background: $surface;
+        border: solid $accent;
+    }
+    """
+
+    def __init__(self, source: str | None = None, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self._source = source  # None = combined menu (keybinding)
+        self._dismissed = False
+
+    def _build_source_options(self, source: str, prefix: str) -> list[Option | None]:
+        app: ScarecrowApp = self.app  # type: ignore[assignment]
+        is_muted = app._mic_muted if source == "mic" else app._sys_muted
+        mute_label = "Unmute" if is_muted else "Mute"
+        current = app._vad_sensitivity if source == "mic" else app._sys_vad_sensitivity
+        label = "Mic" if source == "mic" else "Sys"
+        opts: list[Option | None] = [
+            Option(
+                f"  {mute_label} {label}",
+                id=f"{prefix}toggle_mute",
+            ),
+        ]
+        for name in ("Low", "Medium", "High"):
+            marker = "\u2022 " if name.lower() == current else "  "
+            key = name.lower()
+            opts.append(Option(f"{marker}{name} sensitivity", id=f"{prefix}vad_{key}"))
+        return opts
+
+    def compose(self) -> ComposeResult:
+        if self._source is not None:
+            options = self._build_source_options(self._source, "")
+        else:
+            options = [
+                Option("  \u2501 Mic \u2501", id="_header_mic"),
+                *self._build_source_options("mic", "mic:"),
+                None,  # separator
+                Option("  \u2501 Sys \u2501", id="_header_sys"),
+                *self._build_source_options("sys", "sys:"),
+            ]
+        yield OptionList(*options)
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        opt_id = event.option.id or ""
+        if opt_id.startswith("_header"):
+            return  # ignore header clicks
+        if not self._dismissed:
+            self._dismissed = True
+            self.dismiss(opt_id)
+
+    def key_escape(self) -> None:
+        if not self._dismissed:
+            self._dismissed = True
+            self.dismiss(None)
+
+    def on_click(self, event: Click) -> None:
+        if self._dismissed:
+            return
+        if not self.query_one(OptionList).region.contains(event.x, event.y):
+            self._dismissed = True
+            self.dismiss(None)
 
 
 class ScarecrowApp(App[None]):
@@ -189,12 +266,23 @@ class ScarecrowApp(App[None]):
 
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("ctrl+p", "pause", "Pause/Resume", show=True),
-        Binding("ctrl+m", "mute_mic", "Mute Mic", show=True),
-        Binding("ctrl+shift+s", "mute_sys", "Mute Sys", show=True),
+        Binding("ctrl+v", "vad_menu", "Mute/VAD", show=True),
         Binding("ctrl+q", "quit", "Quit", show=True),
         Binding("ctrl+shift+q", "quick_quit", "Quick Quit", show=False),
         Binding("ctrl+shift+d", "discard_quit", "Discard", show=False),
     ]
+
+    # VAD sensitivity presets: (threshold, min_silence_ms)
+    _VAD_PRESETS: ClassVar[dict[str, tuple[float, int]]] = {
+        "low": (0.025, 750),
+        "medium": (0.010, 750),
+        "high": (0.004, 600),
+    }
+    _SYS_VAD_PRESETS: ClassVar[dict[str, tuple[float, int]]] = {
+        "low": (0.008, 750),
+        "medium": (0.003, 750),
+        "high": (0.001, 600),
+    }
 
     state: reactive[AppState] = reactive(AppState.IDLE)
     _elapsed: reactive[int] = reactive(0)
@@ -248,6 +336,15 @@ class ScarecrowApp(App[None]):
         self._sys_muted: bool = sys_muted
         # Echo suppression — suppress mic transcripts that duplicate sys
         self._echo_filter = EchoFilter()
+        # Holdoff: discard the first sys batch result after start/unmute
+        # to avoid duplicate text while echo filter primes
+        self._sys_holdoff: bool = True
+        # VAD sensitivity state
+        self._vad_sensitivity: str = "medium"
+        self._sys_vad_sensitivity: str = "medium"
+        # Auto-segmentation state
+        self._current_segment: int = 1
+        self._sys_device_id: int | None = None
         # Quit-flow state
         self._skip_summary: bool = False
         self._discard_mode: bool = False
@@ -337,7 +434,112 @@ class ScarecrowApp(App[None]):
             self._elapsed = int(time.monotonic() - self._recording_start_time)
         self._check_recorder_warnings()
         self._check_device_loss()
+        if self.state is AppState.RECORDING:
+            self._check_segment_boundary()
         self._sync_info_bar()
+
+    def _check_segment_boundary(self) -> None:
+        """Rotate audio files at segment boundaries."""
+        if self.state is AppState.PAUSED:
+            return
+        seg_duration = self._cfg.SEGMENT_DURATION_SECONDS
+        expected = self._elapsed // seg_duration + 1
+        if expected > self._current_segment:
+            self._rotate_segment()
+
+    def _rotate_segment(self) -> None:
+        """Stop current recorders, bump segment, start new recorders."""
+        if self._session is None:
+            return
+
+        log.info(
+            "Rotating segment %d → %d at elapsed=%ds",
+            self._current_segment,
+            self._current_segment + 1,
+            self._elapsed,
+        )
+
+        # 1. Drain VAD buffers
+        if self._audio_recorder and not self._mic_muted:
+            self._audio_recorder.drain_to_silence()
+        if self._sys_capture and not self._sys_muted:
+            self._sys_capture.drain_to_silence()
+
+        # 2. Wait for in-flight batch futures (short timeout)
+        self._reap_batch_futures()
+        for fut in list(self._batch_futures):
+            try:
+                fut.result(timeout=5)
+            except Exception:
+                log.warning("In-flight batch timed out during segment rotation")
+        self._batch_futures.clear()
+
+        # 3. Stop recorders
+        if self._audio_recorder:
+            try:
+                self._audio_recorder.stop()
+            except Exception:
+                log.exception("Failed to stop mic recorder during rotation")
+        if self._sys_capture:
+            try:
+                self._sys_capture.stop()
+            except Exception:
+                log.exception("Failed to stop sys capture during rotation")
+
+        # 4. Write boundary event
+        self._session.write_segment_boundary(self._current_segment, self._elapsed)
+
+        # 5. Increment segment
+        self._current_segment += 1
+
+        # 6. Create and start new recorders
+        new_mic_path = self._session.audio_path_for_segment(self._current_segment)
+        self._audio_recorder = AudioRecorder(
+            output_path=new_mic_path,
+            sample_rate=self._cfg.RECORDING_SAMPLE_RATE,
+            cfg=self._cfg,
+        )
+        try:
+            self._audio_recorder.start()
+        except Exception:
+            log.exception("Failed to start new mic recorder after rotation")
+            self._audio_recorder = None
+
+        if self._sys_audio_enabled and self._sys_device_id is not None:
+            from scarecrow.sys_audio import SystemAudioCapture
+
+            new_sys_path = self._session.audio_sys_path_for_segment(
+                self._current_segment
+            )
+            try:
+                self._sys_capture = SystemAudioCapture(
+                    output_path=new_sys_path,
+                    device=self._sys_device_id,
+                )
+                self._sys_capture.start()
+            except Exception:
+                log.exception("Failed to start new sys capture after rotation")
+                self._sys_capture = None
+
+        # 7. Re-apply mute state to new recorders
+        if self._mic_muted and self._audio_recorder:
+            self._audio_recorder.pause()
+        if self._sys_muted and self._sys_capture:
+            self._sys_capture.pause()
+
+        # 8. Reset batch window starts, divider timer, and sys holdoff
+        self._batch_window_start = self._elapsed
+        self._sys_batch_window_start = self._elapsed
+        self._last_divider_elapsed = self._elapsed - self._cfg.DIVIDER_INTERVAL
+        self._sys_holdoff = True
+
+        # 9. Write segment marker to UI
+        with contextlib.suppress(NoMatches):
+            rl = self.query_one("#captions", RichLog)
+            rl.write(
+                f"\n[dim]── segment {self._current_segment} "
+                f"({self._elapsed // 60}m) ──[/dim]\n"
+            )
 
     def _sync_info_bar(self) -> None:
         if not self.is_mounted:
@@ -604,6 +806,11 @@ class ScarecrowApp(App[None]):
         if self._ignore_batch_results:
             return
         self._echo_filter.record_sys(text)
+        # Discard first sys result after start/unmute to let echo filter prime
+        if self._sys_holdoff:
+            self._sys_holdoff = False
+            log.debug("Sys holdoff: discarding first batch result")
+            return
         self._post_to_ui(
             functools.partial(self._record_transcript, source="sys"),
             text,
@@ -1053,6 +1260,7 @@ class ScarecrowApp(App[None]):
             from scarecrow.sys_audio import SystemAudioCapture, find_blackhole_device
 
             dev = find_blackhole_device(self._cfg.SYSTEM_AUDIO_DEVICE)
+            self._sys_device_id = dev
             if dev is not None:
                 try:
                     self._sys_capture = SystemAudioCapture(
@@ -1211,6 +1419,17 @@ class ScarecrowApp(App[None]):
             }
         )
 
+    def _write_mute_status(self, source: str, muted: bool) -> None:
+        """Write a mute/unmute status line to the RichLog."""
+        action = "MUTED" if muted else "UNMUTED"
+        label = "Mic" if source == "mic" else "Sys audio"
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        styled = f"[dim]{timestamp}[/dim]  [bold yellow]{label} {action}[/bold yellow]"
+        self._current_paragraph = ""
+        self._paragraph_line_count = 0
+        with contextlib.suppress(NoMatches):
+            self.query_one("#captions", RichLog).write(styled)
+
     def action_mute_mic(self) -> None:
         if self.state is not AppState.RECORDING:
             return
@@ -1219,6 +1438,7 @@ class ScarecrowApp(App[None]):
         self._mic_muted = not self._mic_muted
         log.info("Mic %s", "muted" if self._mic_muted else "unmuted")
         self._write_mute_event("mic", self._mic_muted)
+        self._write_mute_status("mic", self._mic_muted)
         if self._mic_muted:
             # Drain buffer before muting — discard if executor busy
             self._reap_batch_futures()
@@ -1243,6 +1463,7 @@ class ScarecrowApp(App[None]):
         self._sys_muted = not self._sys_muted
         log.info("Sys %s", "muted" if self._sys_muted else "unmuted")
         self._write_mute_event("sys", self._sys_muted)
+        self._write_mute_status("sys", self._sys_muted)
         if self._sys_muted:
             self._reap_batch_futures()
             if not self._batch_futures:
@@ -1257,8 +1478,71 @@ class ScarecrowApp(App[None]):
                 self._sys_capture.drain_buffer()
             self._sys_capture.pause()
         else:
+            self._sys_holdoff = True  # prime echo filter before showing sys
             self._sys_capture.resume()
         self._sync_info_bar()
+
+    def action_vad_menu(self) -> None:
+        """Open the combined VAD sensitivity menu via keybinding."""
+        self.push_context_menu(None)
+
+    def push_context_menu(self, source: str | None) -> None:
+        """Open the context menu. *source*=None shows both mic and sys."""
+        if self.state is not AppState.RECORDING:
+            return
+        # Guard against stacking
+        if any(isinstance(s, ContextMenuScreen) for s in self.screen_stack[1:]):
+            return
+        self.push_screen(
+            ContextMenuScreen(source),
+            callback=self._handle_context_menu,
+        )
+
+    def _handle_context_menu(self, result: str | None) -> None:
+        """Apply the user's context menu selection."""
+        if not result:
+            return
+        # Parse prefixed IDs from combined menu ("mic:vad_low")
+        if ":" in result:
+            source, action = result.split(":", 1)
+        else:
+            source, action = "mic", result
+
+        if action == "toggle_mute":
+            if source == "mic":
+                self.action_mute_mic()
+            else:
+                self.action_mute_sys()
+            return
+        # VAD sensitivity presets
+        preset = action.removeprefix("vad_")
+        if source == "mic":
+            if preset not in self._VAD_PRESETS:
+                return
+            self._vad_sensitivity = preset
+            threshold, silence_ms = self._VAD_PRESETS[preset]
+            self._cfg.VAD_SILENCE_THRESHOLD = threshold
+            self._cfg.VAD_MIN_SILENCE_MS = silence_ms
+            log.info(
+                "Mic VAD sensitivity → %s (threshold=%.3f, silence=%dms)",
+                preset,
+                threshold,
+                silence_ms,
+            )
+        else:
+            if preset not in self._SYS_VAD_PRESETS:
+                return
+            self._sys_vad_sensitivity = preset
+            threshold, silence_ms = self._SYS_VAD_PRESETS[preset]
+            self._cfg.SYS_VAD_SILENCE_THRESHOLD = threshold
+            self._cfg.SYS_VAD_MIN_SILENCE_MS = silence_ms
+            log.info(
+                "Sys VAD sensitivity → %s (threshold=%.3f, silence=%dms)",
+                preset,
+                threshold,
+                silence_ms,
+            )
+        self._set_status(f"{source.upper()} sensitivity: {preset}")
 
     def action_quit(self) -> None:
         log.info("action_quit triggered (ctrl+q)")
@@ -1331,10 +1615,27 @@ class ScarecrowApp(App[None]):
             session_dir = self._session.session_dir
             lines.append(f"  Session:     {session_dir}")
 
-            audio_path = self._session.audio_path
-            if audio_path.exists():
-                size_mb = audio_path.stat().st_size / (1024 * 1024)
-                lines.append(f"  Audio:       {audio_path} ({size_mb:.1f} MB)")
+            n_seg = self._current_segment
+            if n_seg > 1:
+                lines.append(f"  Segments:    {n_seg}")
+
+            try:
+                for seg in range(1, n_seg + 1):
+                    label = f" (seg {seg})" if n_seg > 1 else ""
+                    mic_path = self._session.audio_path_for_segment(seg)
+                    if mic_path.exists():
+                        sz = mic_path.stat().st_size / (1024 * 1024)
+                        lines.append(
+                            f"  Mic audio{label}:  {mic_path.name} ({sz:.1f} MB)"
+                        )
+                    sys_path = self._session.audio_sys_path_for_segment(seg)
+                    if sys_path.exists():
+                        sz = sys_path.stat().st_size / (1024 * 1024)
+                        lines.append(
+                            f"  Sys audio{label}:  {sys_path.name} ({sz:.1f} MB)"
+                        )
+            except (OSError, TypeError):
+                pass
 
             transcript_path = self._session.transcript_path
             if transcript_path.exists():
@@ -1419,27 +1720,32 @@ class ScarecrowApp(App[None]):
         if session is None:
             return
         session_dir = session.session_dir
+        n_segments = self._current_segment
 
-        print("  Compressing audio…", flush=True)
-        try:
-            session.compress_audio()
-        except Exception:
-            log.exception("Failed to compress audio")
-
-        if self._sys_audio_enabled:
-            print("  Compressing system audio…", flush=True)
+        for seg in range(1, n_segments + 1):
+            label = f" (seg {seg})" if n_segments > 1 else ""
+            print(f"  Compressing audio{label}…", flush=True)
             try:
-                session.compress_sys_audio()
+                session.compress_audio_segment(seg)
             except Exception:
-                log.exception("Failed to compress system audio")
+                log.exception("Failed to compress audio segment %d", seg)
+
+            if self._sys_audio_enabled:
+                print(f"  Compressing system audio{label}…", flush=True)
+                try:
+                    session.compress_sys_audio_segment(seg)
+                except Exception:
+                    log.exception("Failed to compress sys audio segment %d", seg)
 
         if not self._skip_summary:
             print("  Generating summary…", flush=True)
             try:
-                from scarecrow.summarizer import summarize_session
+                from scarecrow.summarizer import summarize_session_segments
 
-                result = summarize_session(
-                    session_dir, obsidian_dir=self._cfg.OBSIDIAN_VAULT_DIR
+                result = summarize_session_segments(
+                    session_dir,
+                    n_segments,
+                    obsidian_dir=self._cfg.OBSIDIAN_VAULT_DIR,
                 )
                 if result:
                     log.info("Summary: %s", result)

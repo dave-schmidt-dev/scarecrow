@@ -36,3 +36,4 @@ benchmarks/data/
 .claude/settings.local.json
 realtimesst.log
 scarecrow_debug.log
+keys.log

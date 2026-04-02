@@ -80,5 +80,11 @@ def _no_summarizer():
     unit tests are unaffected because they import the function at module
     level before this fixture activates.
     """
-    with patch("scarecrow.summarizer.summarize_session", return_value=None):
+    with (
+        patch("scarecrow.summarizer.summarize_session", return_value=None),
+        patch(
+            "scarecrow.summarizer.summarize_session_segments",
+            return_value=None,
+        ),
+    ):
         yield

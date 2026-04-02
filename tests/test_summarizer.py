@@ -14,11 +14,13 @@ from scarecrow.summarizer import (
     _compute_ctx_size,
     _discover_gguf,
     _estimate_tokens,
+    _extract_segment_events,
     _generate,
     _model_name_from_gguf,
     _strip_reasoning,
     _write_error_summary,
     summarize_session,
+    summarize_session_segments,
 )
 
 _real_gguf = _discover_gguf()
@@ -402,6 +404,124 @@ def test_model_name_from_gguf_extracts_repo() -> None:
 def test_model_name_from_gguf_fallback() -> None:
     path = Path("/some/random/path/mymodel.gguf")
     assert _model_name_from_gguf(path) == "mymodel"
+
+
+# ---------------------------------------------------------------------------
+# Segment extraction
+# ---------------------------------------------------------------------------
+
+
+def test_extract_segment_events_single() -> None:
+    """Single segment (no boundaries) returns all events in one list."""
+    events = [
+        {"type": "transcript", "text": "hello"},
+        {"type": "transcript", "text": "world"},
+    ]
+    result = _extract_segment_events(events, 1)
+    assert len(result) == 1
+    assert len(result[0]) == 2
+
+
+def test_extract_segment_events_two_segments() -> None:
+    """Events split at segment_boundary into two lists."""
+    events = [
+        {"type": "transcript", "text": "seg1"},
+        {"type": "segment_boundary", "segment": 1, "elapsed": 3600},
+        {"type": "transcript", "text": "seg2"},
+    ]
+    result = _extract_segment_events(events, 2)
+    assert len(result) == 2
+    assert result[0][0]["text"] == "seg1"
+    assert result[1][0]["text"] == "seg2"
+
+
+def test_extract_segment_events_boundary_not_included() -> None:
+    """segment_boundary events are not included in any segment's event list."""
+    events = [
+        {"type": "transcript", "text": "a"},
+        {"type": "segment_boundary", "segment": 1},
+        {"type": "transcript", "text": "b"},
+    ]
+    result = _extract_segment_events(events, 2)
+    all_types = [e["type"] for seg in result for e in seg]
+    assert "segment_boundary" not in all_types
+
+
+def test_extract_segment_events_pads_missing() -> None:
+    """If fewer boundaries than expected, pad with empty lists."""
+    events = [{"type": "transcript", "text": "only one"}]
+    result = _extract_segment_events(events, 3)
+    assert len(result) == 3
+    assert len(result[0]) == 1
+    assert len(result[1]) == 0
+    assert len(result[2]) == 0
+
+
+# ---------------------------------------------------------------------------
+# Multi-segment summarization (mocked)
+# ---------------------------------------------------------------------------
+
+
+def test_summarize_session_segments_single_delegates(tmp_path: Path) -> None:
+    """n_segments=1 delegates to summarize_session."""
+    mock_ss = MagicMock(return_value=tmp_path / "summary.md")
+    with patch("scarecrow.summarizer.summarize_session", mock_ss):
+        result = summarize_session_segments(tmp_path, 1)
+
+    mock_ss.assert_called_once_with(tmp_path, obsidian_dir=None)
+    assert result == tmp_path / "summary.md"
+
+
+def test_summarize_session_segments_multi(tmp_path: Path) -> None:
+    """Multi-segment produces per-segment and combined summaries."""
+    events = [
+        {"type": "transcript", "text": "Segment one content."},
+        {"type": "segment_boundary", "segment": 1, "elapsed": 3600},
+        {"type": "transcript", "text": "Segment two content."},
+    ]
+    _write_transcript(tmp_path, events)
+
+    fake_gguf_dir = tmp_path / "models--test--model-GGUF"
+    fake_gguf_dir.mkdir(parents=True)
+    fake_gguf = fake_gguf_dir / "snapshots" / "abc" / "model.gguf"
+    fake_gguf.parent.mkdir(parents=True)
+    fake_gguf.touch()
+
+    call_count = 0
+
+    def mock_generate(gguf, sp, uc, ctx, *, llm=None):
+        nonlocal call_count
+        call_count += 1
+        return f"## Summary\nSegment {call_count} summary", 200
+
+    with (
+        patch("scarecrow.summarizer._discover_gguf", return_value=fake_gguf),
+        patch("scarecrow.summarizer._generate", side_effect=mock_generate),
+        patch("scarecrow.summarizer._load_model", return_value=MagicMock()),
+    ):
+        result = summarize_session_segments(tmp_path, 2)
+
+    assert result is not None
+    assert result.name == "summary.md"
+    content = result.read_text(encoding="utf-8")
+    assert "Segment 1" in content
+    assert "Segment 2" in content
+    # Per-segment files should exist
+    assert (tmp_path / "summary_seg1.md").exists()
+    assert (tmp_path / "summary_seg2.md").exists()
+
+
+def test_segment_boundary_ignored_in_prompt() -> None:
+    """segment_boundary events are ignored when building prompts."""
+    events = [
+        {"type": "transcript", "text": "hello"},
+        {"type": "segment_boundary", "segment": 1, "elapsed": 3600},
+        {"type": "transcript", "text": "world"},
+    ]
+    _, user_content = _build_prompt(events)
+    assert "segment_boundary" not in user_content
+    assert "hello" in user_content
+    assert "world" in user_content
 
 
 # ---------------------------------------------------------------------------

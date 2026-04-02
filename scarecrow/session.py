@@ -62,6 +62,18 @@ class Session:
         """Returns path to system audio WAV (BlackHole) in session dir."""
         return self._session_dir / "audio_sys.wav"
 
+    def audio_path_for_segment(self, n: int) -> Path:
+        """Return audio WAV path for segment *n* (1-based)."""
+        if n == 1:
+            return self._session_dir / "audio.wav"
+        return self._session_dir / f"audio_seg{n}.wav"
+
+    def audio_sys_path_for_segment(self, n: int) -> Path:
+        """Return sys-audio WAV path for segment *n* (1-based)."""
+        if n == 1:
+            return self._session_dir / "audio_sys.wav"
+        return self._session_dir / f"audio_sys_seg{n}.wav"
+
     @property
     def final_audio_path(self) -> Path:
         """Returns the audio file path — FLAC if compressed, WAV otherwise."""
@@ -191,6 +203,71 @@ class Session:
             if sys_flac.exists():
                 sys_flac.unlink(missing_ok=True)
             return None
+
+    def compress_audio_segment(self, n: int) -> Path | None:
+        """Compress audio for segment *n* to FLAC."""
+        import soundfile as sf
+
+        wav_path = self.audio_path_for_segment(n)
+        if not wav_path.exists():
+            return None
+        flac_path = wav_path.with_suffix(".flac")
+        try:
+            data, samplerate = sf.read(wav_path)
+            sf.write(flac_path, data, samplerate, format="FLAC")
+            wav_path.unlink()
+            log.info("Compressed %s → %s", wav_path.name, flac_path.name)
+            return flac_path
+        except Exception:
+            log.exception("Failed to compress segment %d audio to FLAC", n)
+            if flac_path.exists():
+                flac_path.unlink(missing_ok=True)
+            return None
+
+    def compress_sys_audio_segment(self, n: int) -> Path | None:
+        """Compress sys audio for segment *n* to FLAC (streaming)."""
+        import soundfile as sf
+
+        wav_path = self.audio_sys_path_for_segment(n)
+        if not wav_path.exists():
+            return None
+        flac_path = wav_path.with_suffix(".flac")
+        try:
+            info = sf.info(wav_path)
+            with (
+                sf.SoundFile(wav_path) as src,
+                sf.SoundFile(
+                    flac_path,
+                    "w",
+                    samplerate=info.samplerate,
+                    channels=info.channels,
+                    format="FLAC",
+                ) as dst,
+            ):
+                while True:
+                    chunk = src.read(frames=65536)
+                    if len(chunk) == 0:
+                        break
+                    dst.write(chunk)
+            wav_path.unlink()
+            log.info("Compressed %s → %s", wav_path.name, flac_path.name)
+            return flac_path
+        except Exception:
+            log.exception("Failed to compress segment %d sys audio to FLAC", n)
+            if flac_path.exists():
+                flac_path.unlink(missing_ok=True)
+            return None
+
+    def write_segment_boundary(self, segment: int, elapsed: int) -> None:
+        """Write a segment_boundary event to the transcript."""
+        self.append_event(
+            {
+                "type": "segment_boundary",
+                "segment": segment,
+                "elapsed": elapsed,
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+            }
+        )
 
     def write_end_header(self) -> None:
         """Write session end timestamp to transcript."""

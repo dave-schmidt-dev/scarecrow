@@ -75,6 +75,7 @@ sc --no-sys-audio    # launch without system audio capture
 
 **Keybindings** inside the TUI:
 - `Ctrl+P` — pause / resume (releases microphone while paused)
+- `Ctrl+V` — VAD / mute menu (adjust mic/sys sensitivity, mute toggles)
 - `Ctrl+Shift+Q` — quick quit (skip summary, still saves transcript + audio)
 - `Ctrl+Q` — quit (full cleanup + summary)
 - `Ctrl+Shift+D` — discard session & quit (moves session to `.discarded/`)
@@ -157,7 +158,7 @@ Inline notes are typed in the notes pane and submitted with Enter. The tag is de
 
 Transcript dividers show the start time of each audio batch window (not the time the model finishes processing). Dividers appear at most every 60 seconds. Consecutive batch results are joined into flowing paragraphs between dividers.
 
-**System audio capture (on by default):** Scarecrow captures system audio via BlackHole and transcribes both channels through Parakeet. On startup, the default output switches to "Scarecrow Output" (a Multi-Output Device routing audio to speakers + BlackHole); on exit, the original output is restored. Mic transcripts display normally; sys transcripts show with a dim `◁` prefix. An echo filter suppresses mic duplicates when not using headphones. Per-source mute: `Ctrl+M` (mic), `Ctrl+Shift+S` (sys). Requires one-time setup of "Scarecrow Output" in Audio MIDI Setup. Use `--no-sys-audio` to disable.
+**System audio capture (on by default):** Scarecrow captures system audio via BlackHole and transcribes both channels through Parakeet. On startup, the default output switches to "Scarecrow Output" (a Multi-Output Device routing audio to speakers + BlackHole); on exit, the original output is restored. Mic transcripts display normally; sys transcripts show with a dim `◁` prefix. An echo filter suppresses mic duplicates when not using headphones. Per-source mute via `Ctrl+V` menu. Requires one-time setup of "Scarecrow Output" in Audio MIDI Setup. Use `--no-sys-audio` to disable.
 
 ## Session files
 

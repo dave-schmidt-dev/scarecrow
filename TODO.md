@@ -19,13 +19,12 @@
 
 ## Level meter interaction
 - [x] Left-click on mic/sys level meter to toggle mute
-- [ ] Right-click on level meter opens context menu: mute toggle + VAD sensitivity adjustment
-- [x] Keep Ctrl+M / Ctrl+Shift+S keyboard shortcuts
+- [x] Ctrl+V opens VAD / mute menu: mute toggle + Low/Medium/High presets for mic and sys
 
 ## Auto-segmentation for long sessions
-- [ ] Automatically create segment boundaries at ~60 minute marks
-- [ ] Each segment gets its own summary while maintaining full transcript continuity
-- [ ] Supports 2-3 hour lectures/classes without manual splitting
+- [x] Automatically create segment boundaries at ~60 minute marks
+- [x] Each segment gets its own summary while maintaining full transcript continuity
+- [x] Supports 2-3 hour lectures/classes without manual splitting
 
 ## Summarizer model swap
 - [x] Replace Nemotron-3-Nano with Gemma 3 27B IT (Google) for summarization

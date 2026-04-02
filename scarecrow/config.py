@@ -56,6 +56,9 @@ class Config:
     # Minimum seconds between transcript dividers
     DIVIDER_INTERVAL: int = 60
 
+    # Auto-segmentation — rotate audio files at this interval
+    SEGMENT_DURATION_SECONDS: int = 3600
+
     # Storage
     DEFAULT_RECORDINGS_DIR: Path = field(
         default_factory=lambda: Path.home() / "recordings"
@@ -110,4 +113,5 @@ SUMMARIZER_MODEL_PATTERN = config.SUMMARIZER_MODEL_PATTERN
 SUMMARIZER_OUTPUT_BUDGET = config.SUMMARIZER_OUTPUT_BUDGET
 SUMMARIZER_MIN_CTX = config.SUMMARIZER_MIN_CTX
 SUMMARIZER_CHARS_PER_TOKEN = config.SUMMARIZER_CHARS_PER_TOKEN
+SEGMENT_DURATION_SECONDS = config.SEGMENT_DURATION_SECONDS
 OBSIDIAN_VAULT_DIR = config.OBSIDIAN_VAULT_DIR

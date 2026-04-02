@@ -11,9 +11,9 @@ import threading
 from unittest.mock import MagicMock, patch
 
 import numpy as np
-from textual.widgets import RichLog
+from textual.widgets import OptionList, RichLog
 
-from scarecrow.app import AppState, InfoBar, ScarecrowApp
+from scarecrow.app import AppState, ContextMenuScreen, InfoBar, ScarecrowApp
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -569,6 +569,9 @@ async def test_sys_batch_result_writes_to_richlog(
         await pilot.pause(delay=0.3)
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
 
+        # Clear the sys holdoff (first result after start is discarded)
+        app._on_sys_batch_result("holdoff primer", 1)
+
         captions = app.query_one("#captions", RichLog)
         captions.clear()
 
@@ -703,7 +706,7 @@ async def test_post_exit_cleanup_compresses_sys_audio(
         app._sys_audio_enabled = True
         app._skip_summary = True  # avoid hitting summarizer
         app.post_exit_cleanup()
-        mock_session.compress_sys_audio.assert_called_once()
+        mock_session.compress_sys_audio_segment.assert_called_once_with(1)
 
 
 @patch("scarecrow.app.AudioRecorder")
@@ -723,7 +726,7 @@ async def test_post_exit_cleanup_skips_when_disabled(mock_session, mock_rec) -> 
         app._sys_audio_enabled = False
         app._skip_summary = True
         app.post_exit_cleanup()
-        mock_session.compress_sys_audio.assert_not_called()
+        mock_session.compress_sys_audio_segment.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -781,7 +784,7 @@ async def test_check_device_loss_restarts_when_mic_not_muted(
 
 
 # ---------------------------------------------------------------------------
-# Footer binding visibility — Quick Quit hidden, Mute Sys visible (Bug 3)
+# Footer binding visibility — Quick Quit hidden (Bug 3)
 # ---------------------------------------------------------------------------
 
 
@@ -792,15 +795,6 @@ async def test_quick_quit_binding_is_hidden_from_footer() -> None:
     hidden = [b for b in ScarecrowApp.BINDINGS if b.action == "quick_quit"]
     assert hidden, "quick_quit binding not found in BINDINGS"
     assert not hidden[0].show, "quick_quit binding should have show=False"
-
-
-async def test_mute_sys_binding_is_visible_in_footer() -> None:
-    """Mute Sys binding must have show=True so it appears in the footer."""
-    from scarecrow.app import ScarecrowApp
-
-    visible = [b for b in ScarecrowApp.BINDINGS if b.action == "mute_sys"]
-    assert visible, "mute_sys binding not found in BINDINGS"
-    assert visible[0].show, "mute_sys binding should have show=True"
 
 
 @patch("scarecrow.app.AudioRecorder")
@@ -909,7 +903,7 @@ async def test_infobar_click_mic_region_toggles_mute(
         mic_s, mic_e = bar._mic_region
         assert mic_e > mic_s, "mic region should be non-empty after render"
         # Simulate click in the mic region
-        bar.on_click(MagicMock(x=mic_s, y=0))
+        bar.on_click(MagicMock(x=mic_s, y=0, button=1))
         assert app._mic_muted is True
 
 
@@ -934,7 +928,7 @@ async def test_infobar_click_sys_region_toggles_mute(
         bar = app.query_one("#info-bar", InfoBar)
         sys_s, sys_e = bar._sys_region
         assert sys_e > sys_s, "sys region should be non-empty with wide terminal"
-        bar.on_click(MagicMock(x=sys_s, y=0))
+        bar.on_click(MagicMock(x=sys_s, y=0, button=1))
         assert app._sys_muted is True
 
 
@@ -1024,3 +1018,280 @@ async def test_launch_flag_mute_writes_transcript_event(
             if c[0][0].get("type") == "mute" and c[0][0].get("source") == "mic"
         ]
         assert len(mute_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Context menu — _handle_context_menu unit tests
+# ---------------------------------------------------------------------------
+
+
+@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
+@patch("scarecrow.sys_audio.SystemAudioCapture")
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_context_menu_toggle_mute_mic(
+    mock_session, mock_rec, mock_sac, mock_bh
+) -> None:
+    """Context menu 'toggle_mute' for mic calls action_mute_mic."""
+    mock_sac.return_value = _mock_sys_capture()
+    mock_rec.return_value = _mock_recorder()
+    mock_session.return_value = MagicMock()
+
+    async with _sys_app().run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        assert app._mic_muted is False
+        app._handle_context_menu("mic:toggle_mute")
+        assert app._mic_muted is True
+
+
+@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
+@patch("scarecrow.sys_audio.SystemAudioCapture")
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_context_menu_toggle_mute_sys(
+    mock_session, mock_rec, mock_sac, mock_bh
+) -> None:
+    """Context menu 'toggle_mute' for sys calls action_mute_sys."""
+    mock_sac.return_value = _mock_sys_capture()
+    mock_rec.return_value = _mock_recorder()
+    mock_session.return_value = MagicMock()
+
+    async with _sys_app().run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        assert app._sys_muted is False
+        app._handle_context_menu("sys:toggle_mute")
+        assert app._sys_muted is True
+
+
+@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
+@patch("scarecrow.sys_audio.SystemAudioCapture")
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_context_menu_vad_presets_mic(
+    mock_session, mock_rec, mock_sac, mock_bh
+) -> None:
+    """Each VAD preset mutates the correct mic config fields."""
+    mock_sac.return_value = _mock_sys_capture()
+    mock_rec.return_value = _mock_recorder()
+    mock_session.return_value = MagicMock()
+
+    async with _sys_app().run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+
+        for preset, (threshold, silence_ms) in ScarecrowApp._VAD_PRESETS.items():
+            app._handle_context_menu(f"mic:vad_{preset}")
+            assert app._vad_sensitivity == preset
+            assert threshold == app._cfg.VAD_SILENCE_THRESHOLD
+            assert silence_ms == app._cfg.VAD_MIN_SILENCE_MS
+
+
+@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
+@patch("scarecrow.sys_audio.SystemAudioCapture")
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_context_menu_vad_presets_sys(
+    mock_session, mock_rec, mock_sac, mock_bh
+) -> None:
+    """Each VAD preset mutates the correct sys config fields."""
+    mock_sac.return_value = _mock_sys_capture()
+    mock_rec.return_value = _mock_recorder()
+    mock_session.return_value = MagicMock()
+
+    async with _sys_app().run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+
+        for preset, (threshold, silence_ms) in ScarecrowApp._SYS_VAD_PRESETS.items():
+            app._handle_context_menu(f"sys:vad_{preset}")
+            assert app._sys_vad_sensitivity == preset
+            assert threshold == app._cfg.SYS_VAD_SILENCE_THRESHOLD
+            assert silence_ms == app._cfg.SYS_VAD_MIN_SILENCE_MS
+
+
+@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
+@patch("scarecrow.sys_audio.SystemAudioCapture")
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_context_menu_dismiss_no_action(
+    mock_session, mock_rec, mock_sac, mock_bh
+) -> None:
+    """Dismissing the context menu (None result) does nothing."""
+    mock_sac.return_value = _mock_sys_capture()
+    mock_rec.return_value = _mock_recorder()
+    mock_session.return_value = MagicMock()
+
+    async with _sys_app().run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        original_threshold = app._cfg.VAD_SILENCE_THRESHOLD
+        app._handle_context_menu(None)
+        assert original_threshold == app._cfg.VAD_SILENCE_THRESHOLD
+        assert app._mic_muted is False
+
+
+@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
+@patch("scarecrow.sys_audio.SystemAudioCapture")
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_context_menu_push_select_dismiss(
+    mock_session, mock_rec, mock_sac, mock_bh
+) -> None:
+    """Pushing the context menu, selecting an option, and dismissing does not crash."""
+    mock_sac.return_value = _mock_sys_capture()
+    mock_rec.return_value = _mock_recorder()
+    mock_session.return_value = MagicMock()
+
+    async with _sys_app().run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        assert app._mic_muted is False
+
+        # Open the combined menu via action (same as Ctrl+V binding)
+        app.action_vad_menu()
+        await pilot.pause(delay=0.3)
+        assert any(isinstance(s, ContextMenuScreen) for s in app.screen_stack), (
+            "ContextMenuScreen should be on the stack"
+        )
+
+        # Move past the header and select Mute Mic
+        option_list = app.screen.query_one(OptionList)
+        option_list.action_cursor_down()
+        option_list.action_select()
+        await pilot.pause(delay=0.3)
+
+        # Screen should be dismissed without crash
+        assert not any(isinstance(s, ContextMenuScreen) for s in app.screen_stack), (
+            "ContextMenuScreen should be dismissed"
+        )
+
+
+@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
+@patch("scarecrow.sys_audio.SystemAudioCapture")
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_context_menu_escape_dismiss(
+    mock_session, mock_rec, mock_sac, mock_bh
+) -> None:
+    """Pressing Escape dismisses the context menu without action."""
+    mock_sac.return_value = _mock_sys_capture()
+    mock_rec.return_value = _mock_recorder()
+    mock_session.return_value = MagicMock()
+
+    async with _sys_app().run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+
+        app.action_vad_menu()
+        await pilot.pause(delay=0.3)
+        assert any(isinstance(s, ContextMenuScreen) for s in app.screen_stack)
+
+        await pilot.press("escape")
+        await pilot.pause(delay=0.3)
+        assert not any(isinstance(s, ContextMenuScreen) for s in app.screen_stack), (
+            "Escape should dismiss the menu"
+        )
+        assert app._mic_muted is False  # no action taken
+
+
+@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
+@patch("scarecrow.sys_audio.SystemAudioCapture")
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_non_left_click_ignored(
+    mock_session, mock_rec, mock_sac, mock_bh
+) -> None:
+    """Non-left-click on the mic region is ignored (no mute toggle)."""
+    mock_sac.return_value = _mock_sys_capture()
+    mock_rec.return_value = _mock_recorder()
+    mock_session.return_value = MagicMock()
+
+    async with _sys_app().run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        bar = app.query_one("#info-bar", InfoBar)
+        mic_s, mic_e = bar._mic_region
+        assert mic_e > mic_s
+        bar.on_click(MagicMock(x=mic_s, y=0, button=3))
+        assert app._mic_muted is False
+
+
+# ---------------------------------------------------------------------------
+# Auto-segmentation — _check_segment_boundary
+# ---------------------------------------------------------------------------
+
+
+@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
+@patch("scarecrow.sys_audio.SystemAudioCapture")
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_check_segment_boundary_triggers_at_threshold(
+    mock_session, mock_rec, mock_sac, mock_bh
+) -> None:
+    """_check_segment_boundary increments _current_segment at the boundary."""
+    mock_sac.return_value = _mock_sys_capture()
+    mock_rec.return_value = _mock_recorder()
+    mock_session.return_value = MagicMock()
+
+    async with _sys_app().run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        assert app._current_segment == 1
+        # Simulate elapsed time past the boundary
+        app._elapsed = app._cfg.SEGMENT_DURATION_SECONDS + 1
+        app._check_segment_boundary()
+        assert app._current_segment == 2
+
+
+@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
+@patch("scarecrow.sys_audio.SystemAudioCapture")
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_check_segment_boundary_skips_when_paused(
+    mock_session, mock_rec, mock_sac, mock_bh
+) -> None:
+    """_check_segment_boundary does nothing when state is PAUSED."""
+    mock_sac.return_value = _mock_sys_capture()
+    mock_rec.return_value = _mock_recorder()
+    mock_session.return_value = MagicMock()
+
+    async with _sys_app().run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        app.state = AppState.PAUSED
+        app._elapsed = app._cfg.SEGMENT_DURATION_SECONDS + 1
+        app._check_segment_boundary()
+        assert app._current_segment == 1  # No rotation while paused
+
+
+@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
+@patch("scarecrow.sys_audio.SystemAudioCapture")
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_check_segment_boundary_no_trigger_before_threshold(
+    mock_session, mock_rec, mock_sac, mock_bh
+) -> None:
+    """_check_segment_boundary does nothing before the duration is reached."""
+    mock_sac.return_value = _mock_sys_capture()
+    mock_rec.return_value = _mock_recorder()
+    mock_session.return_value = MagicMock()
+
+    async with _sys_app().run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        app._elapsed = app._cfg.SEGMENT_DURATION_SECONDS - 1
+        app._check_segment_boundary()
+        assert app._current_segment == 1
