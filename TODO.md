@@ -32,7 +32,7 @@
 - [x] Gemma 3 27B: best structured output compliance, 128K context, strong summarization benchmarks
 - [x] Length-scaled prompts: short recordings get concise summaries, long sessions get comprehensive coverage
 - [x] Replace Gemma 3 27B (GGUF) with Gemma 4 26B MoE (MLX) — 8x faster, 2.4x less RAM, comparable quality
-- [ ] Remove SUMMARIZER_MIN_CTX (128K floor) — dynamic sizing handles this correctly
+- [x] Remove SUMMARIZER_MIN_CTX (128K floor) — dynamic sizing handles this correctly
 
 ## Diarization
 - Speaker identification/labeling in transcripts ("Speaker A", "Speaker B")

@@ -88,7 +88,7 @@ def _estimate_tokens(text: str) -> int:
 
 def _compute_ctx_size(input_tokens: int) -> int:
     needed = input_tokens + 500 + config.SUMMARIZER_OUTPUT_BUDGET
-    result = max(config.SUMMARIZER_MIN_CTX, needed)
+    result = needed
     result = ((result + 1023) // 1024) * 1024
     result = min(result, 524288)  # 512K hard cap
     return result
@@ -619,7 +619,9 @@ def _create_backend(
             f"No GGUF model found for '{model_label}' in "
             f"~/.cache/huggingface/hub/. Check download."
         )
-    return _GgufBackend(gguf, ctx_size or config.SUMMARIZER_MIN_CTX)
+    if ctx_size is None:
+        raise ValueError("ctx_size is required for GGUF backend")
+    return _GgufBackend(gguf, ctx_size)
 
 
 # ---------------------------------------------------------------------------

@@ -95,16 +95,18 @@ def test_estimate_tokens() -> None:
     assert _estimate_tokens(text) == len(text) // config.SUMMARIZER_CHARS_PER_TOKEN
 
 
-def test_compute_ctx_size_minimum() -> None:
+def test_compute_ctx_size_small_input() -> None:
     result = _compute_ctx_size(1)
-    assert result == config.SUMMARIZER_MIN_CTX
+    expected_needed = 1 + 500 + config.SUMMARIZER_OUTPUT_BUDGET
+    # Should be ceil-aligned to 1024
+    assert result >= expected_needed
+    assert result % 1024 == 0
 
 
 def test_compute_ctx_size_scales_up() -> None:
     result = _compute_ctx_size(150000)
     expected_needed = 150000 + 500 + config.SUMMARIZER_OUTPUT_BUDGET
     assert result >= expected_needed
-    assert result > config.SUMMARIZER_MIN_CTX
 
 
 def test_compute_ctx_size_capped() -> None:
@@ -611,7 +613,7 @@ def test_create_backend_gguf(tmp_path: Path) -> None:
     fake_gguf.touch()
 
     with patch("scarecrow.summarizer._discover_gguf", return_value=fake_gguf):
-        be = _create_backend("gguf")
+        be = _create_backend("gguf", ctx_size=8192)
 
     assert isinstance(be, _GgufBackend)
 
@@ -714,7 +716,7 @@ def test_summarize_session_mlx_backend(tmp_path: Path) -> None:
     call_args = mock_factory.call_args
     assert call_args[0][0] == "mlx"
     assert call_args[1]["model"] is None
-    assert call_args[1]["ctx_size"] >= config.SUMMARIZER_MIN_CTX
+    assert call_args[1]["ctx_size"] > 0
     mock_be.load.assert_called_once()
     mock_be.generate.assert_called_once()
     mock_be.close.assert_called_once()
