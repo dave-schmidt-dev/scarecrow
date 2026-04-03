@@ -218,11 +218,10 @@ async def test_context_menu_vad_presets_mic(
         await pilot.pause(delay=0.3)
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
 
-        for preset, (threshold, silence_ms) in ScarecrowApp._VAD_PRESETS.items():
+        for preset, gain in ScarecrowApp._MIC_PRESETS.items():
             app._handle_context_menu(f"mic:vad_{preset}")
             assert app._vad_sensitivity == preset
-            assert threshold == app._cfg.VAD_SILENCE_THRESHOLD
-            assert silence_ms == app._cfg.VAD_MIN_SILENCE_MS
+            assert gain == app._cfg.MIC_GAIN
 
 
 @patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
@@ -242,11 +241,10 @@ async def test_context_menu_vad_presets_sys(
         await pilot.pause(delay=0.3)
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
 
-        for preset, (threshold, silence_ms) in ScarecrowApp._SYS_VAD_PRESETS.items():
+        for preset, gain in ScarecrowApp._SYS_PRESETS.items():
             app._handle_context_menu(f"sys:vad_{preset}")
             assert app._sys_vad_sensitivity == preset
-            assert threshold == app._cfg.SYS_VAD_SILENCE_THRESHOLD
-            assert silence_ms == app._cfg.SYS_VAD_MIN_SILENCE_MS
+            assert gain == app._cfg.SYS_GAIN
 
 
 @patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)

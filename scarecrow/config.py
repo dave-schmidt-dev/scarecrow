@@ -33,6 +33,7 @@ class Config:
     #     no improvement beyond). Reduces mid-sentence splits vs 600ms.
     #   30s max buffer: hard drain rarely triggers with 750ms silence; provides
     #     headroom for sustained speech without pauses.
+    MIC_GAIN: float = 1.0  # input gain multiplier (1.0 = no change)
     VAD_SILENCE_THRESHOLD: float = 0.01  # RMS below this counts as silence
     VAD_MIN_SILENCE_MS: int = 750  # consecutive silence before triggering drain
     VAD_MAX_BUFFER_SECONDS: int = 30  # hard drain if no silence found by this point
@@ -42,6 +43,7 @@ class Config:
     VAD_MIN_SPEECH_RATIO: float = 0.15
 
     # System audio VAD — same silence window as mic (benchmarked at 750ms)
+    SYS_GAIN: float = 0.25  # system audio gain — BlackHole is near full-scale
     SYS_VAD_SILENCE_THRESHOLD: float = 0.003  # lower than mic (no noise floor)
     SYS_VAD_MIN_SILENCE_MS: int = 750
     SYS_VAD_MIN_SPEECH_RATIO: float = 0.0  # disabled — no ambient noise to filter
@@ -99,11 +101,13 @@ CHANNELS = config.CHANNELS
 SUBTYPE = config.SUBTYPE
 PARAKEET_MODEL = config.PARAKEET_MODEL
 BATCH_INTERVAL = config.BATCH_INTERVAL
+MIC_GAIN = config.MIC_GAIN
 VAD_SILENCE_THRESHOLD = config.VAD_SILENCE_THRESHOLD
 VAD_MIN_SILENCE_MS = config.VAD_MIN_SILENCE_MS
 VAD_MAX_BUFFER_SECONDS = config.VAD_MAX_BUFFER_SECONDS
 VAD_POLL_INTERVAL_MS = config.VAD_POLL_INTERVAL_MS
 VAD_MIN_SPEECH_RATIO = config.VAD_MIN_SPEECH_RATIO
+SYS_GAIN = config.SYS_GAIN
 SYS_VAD_SILENCE_THRESHOLD = config.SYS_VAD_SILENCE_THRESHOLD
 SYS_VAD_MIN_SILENCE_MS = config.SYS_VAD_MIN_SILENCE_MS
 SYS_VAD_MIN_SPEECH_RATIO = config.SYS_VAD_MIN_SPEECH_RATIO

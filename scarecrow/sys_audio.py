@@ -69,6 +69,7 @@ class SystemAudioCapture:
         self._paused = False
         self._held_peak: float = 0.0
         self._peak_decay: float = 0.15
+        self._gain: float = 1.0
         self._start_monotonic: float = 0.0
 
         # Transcription buffer — mono int16 chunks + per-chunk RMS
@@ -301,23 +302,34 @@ class SystemAudioCapture:
                 return
 
         data_copy = indata.copy()
+        gain = self._gain
+        if gain != 1.0:
+            data_copy = np.clip(
+                data_copy.astype(np.int32) * gain, -32768, 32767
+            ).astype(np.int16)
         with contextlib.suppress(queue.Full):
             self._write_queue.put_nowait(("audio", data_copy))
 
-        # Peak level across all channels
-        peak = float(np.abs(indata.astype(np.int32)).max()) / 32768.0
+        # Peak level across all channels (post-gain so meter
+        # reflects what Parakeet hears and responds to gain changes)
+        peak = float(np.abs(data_copy.astype(np.int32)).max()) / 32768.0
         with self._lock:
             if peak > self._held_peak:
                 self._held_peak = peak
 
-        # Downmix to mono for transcription buffer
+        # Downmix to mono for transcription buffer (post-gain)
         if self._channels > 1:
             mono = (data_copy.astype(np.int32).mean(axis=1)).astype(np.int16)
         else:
             mono = data_copy.reshape(-1)
 
-        # RMS for VAD (normalized to [0, 1] matching mic recorder scale)
-        rms = float(np.sqrt(np.mean((mono.astype(np.float32) / 32768.0) ** 2)))
+        # RMS for VAD uses pre-gain indata so thresholds stay calibrated
+        # regardless of gain setting (consistent with mic recorder)
+        if self._channels > 1:
+            raw_mono = (indata.astype(np.int32).mean(axis=1)).astype(np.int16)
+        else:
+            raw_mono = indata.reshape(-1)
+        rms = float(np.sqrt(np.mean((raw_mono.astype(np.float32) / 32768.0) ** 2)))
 
         with self._buffer_lock:
             self._audio_chunks.append(mono)

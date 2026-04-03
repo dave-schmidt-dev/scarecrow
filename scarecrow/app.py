@@ -104,7 +104,7 @@ class InfoBar(Static):
         elif scaled < 0.4:
             meter_label, label_style = "low  ", "green"
         elif scaled < 0.75:
-            meter_label, label_style = "med  ", "yellow"
+            meter_label, label_style = "norm ", "yellow"
         else:
             meter_label, label_style = "HIGH ", f"bold {color}"
         return bars[idx], color, meter_label, label_style
@@ -217,7 +217,7 @@ class ContextMenuScreen(ModalScreen[str | None]):
                 id=f"{prefix}toggle_mute",
             ),
         ]
-        for name in ("Low", "Medium", "High"):
+        for name in ("Low", "Normal", "High"):
             marker = "\u2022 " if name.lower() == current else "  "
             key = name.lower()
             opts.append(Option(f"{marker}{name} sensitivity", id=f"{prefix}vad_{key}"))
@@ -252,7 +252,11 @@ class ContextMenuScreen(ModalScreen[str | None]):
     def on_click(self, event: Click) -> None:
         if self._dismissed:
             return
-        if not self.query_one(OptionList).region.contains(event.x, event.y):
+        # Use screen coordinates for reliable hit-testing inside a
+        # centered ModalScreen (event.x/y can differ from screen coords).
+        if not self.query_one(OptionList).region.contains(
+            event.screen_x, event.screen_y
+        ):
             self._dismissed = True
             self.dismiss(None)
 
@@ -272,16 +276,17 @@ class ScarecrowApp(App[None]):
         Binding("ctrl+shift+d", "discard_quit", "Discard", show=True),
     ]
 
-    # VAD sensitivity presets: (threshold, min_silence_ms)
-    _VAD_PRESETS: ClassVar[dict[str, tuple[float, int]]] = {
-        "low": (0.025, 750),
-        "medium": (0.010, 750),
-        "high": (0.004, 600),
+    # VAD sensitivity presets: input gain multiplier
+    _MIC_PRESETS: ClassVar[dict[str, float]] = {
+        "low": 0.5,
+        "normal": 1.0,
+        "high": 2.0,
     }
-    _SYS_VAD_PRESETS: ClassVar[dict[str, tuple[float, int]]] = {
-        "low": (0.008, 750),
-        "medium": (0.003, 750),
-        "high": (0.001, 600),
+    # Sys presets are lower — BlackHole digital loopback is near full-scale
+    _SYS_PRESETS: ClassVar[dict[str, float]] = {
+        "low": 0.125,
+        "normal": 0.25,
+        "high": 0.5,
     }
 
     state: reactive[AppState] = reactive(AppState.IDLE)
@@ -340,8 +345,8 @@ class ScarecrowApp(App[None]):
         # to avoid duplicate text while echo filter primes
         self._sys_holdoff: bool = True
         # VAD sensitivity state
-        self._vad_sensitivity: str = "medium"
-        self._sys_vad_sensitivity: str = "medium"
+        self._vad_sensitivity: str = "normal"
+        self._sys_vad_sensitivity: str = "normal"
         # Auto-segmentation state
         self._current_segment: int = 1
         self._sys_device_id: int | None = None
@@ -516,6 +521,7 @@ class ScarecrowApp(App[None]):
                     output_path=new_sys_path,
                     device=self._sys_device_id,
                 )
+                self._sys_capture._gain = self._cfg.SYS_GAIN
                 self._sys_capture.start()
             except Exception:
                 log.exception("Failed to start new sys capture after rotation")
@@ -1119,7 +1125,7 @@ class ScarecrowApp(App[None]):
 
         # Speech-frame-ratio gate: skip if too few chunks have speech.
         # Uses half the silence threshold to avoid filtering quiet-but-real
-        # speech (peak at "med" level ≈ RMS near the silence threshold).
+        # speech (peak at "norm" level ≈ RMS near the silence threshold).
         # Secondary low-floor check handles reduced-level audio environments
         # (e.g. Mac phone calls where mic RMS is well below VAD threshold).
         # The low-floor path requires a HIGHER speech ratio (2x) because
@@ -1270,6 +1276,7 @@ class ScarecrowApp(App[None]):
                         output_path=self._session.audio_sys_path,
                         device=dev,
                     )
+                    self._sys_capture._gain = self._cfg.SYS_GAIN
                     self._sys_capture.start()
                 except Exception:
                     log.warning("Failed to start system audio capture", exc_info=True)
@@ -1433,6 +1440,29 @@ class ScarecrowApp(App[None]):
         with contextlib.suppress(NoMatches):
             self.query_one("#captions", RichLog).write(styled)
 
+    def _write_sensitivity_event(self, source: str, preset: str) -> None:
+        """Record a sensitivity change in the transcript and session JSONL."""
+        label = "Mic" if source == "mic" else "Sys audio"
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        styled = (
+            f"[dim]{timestamp}[/dim]  "
+            f"[bold cyan]{label} sensitivity → {preset}[/bold cyan]"
+        )
+        self._current_paragraph = ""
+        self._paragraph_line_count = 0
+        with contextlib.suppress(NoMatches):
+            self.query_one("#captions", RichLog).write(styled)
+        if self._session is not None:
+            self._session.append_event(
+                {
+                    "type": "sensitivity",
+                    "source": source,
+                    "preset": preset,
+                    "elapsed": self._elapsed,
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
+                }
+            )
+
     def action_mute_mic(self) -> None:
         if self.state is not AppState.RECORDING:
             return
@@ -1517,34 +1547,23 @@ class ScarecrowApp(App[None]):
             else:
                 self.action_mute_sys()
             return
-        # VAD sensitivity presets
+        # VAD sensitivity presets (input gain)
         preset = action.removeprefix("vad_")
+        presets = self._SYS_PRESETS if source == "sys" else self._MIC_PRESETS
+        if preset not in presets:
+            return
+        gain = presets[preset]
         if source == "mic":
-            if preset not in self._VAD_PRESETS:
-                return
             self._vad_sensitivity = preset
-            threshold, silence_ms = self._VAD_PRESETS[preset]
-            self._cfg.VAD_SILENCE_THRESHOLD = threshold
-            self._cfg.VAD_MIN_SILENCE_MS = silence_ms
-            log.info(
-                "Mic VAD sensitivity → %s (threshold=%.3f, silence=%dms)",
-                preset,
-                threshold,
-                silence_ms,
-            )
+            self._cfg.MIC_GAIN = gain
+            log.info("Mic VAD sensitivity → %s (gain=%.1fx)", preset, gain)
         else:
-            if preset not in self._SYS_VAD_PRESETS:
-                return
             self._sys_vad_sensitivity = preset
-            threshold, silence_ms = self._SYS_VAD_PRESETS[preset]
-            self._cfg.SYS_VAD_SILENCE_THRESHOLD = threshold
-            self._cfg.SYS_VAD_MIN_SILENCE_MS = silence_ms
-            log.info(
-                "Sys VAD sensitivity → %s (threshold=%.3f, silence=%dms)",
-                preset,
-                threshold,
-                silence_ms,
-            )
+            self._cfg.SYS_GAIN = gain
+            if self._sys_capture:
+                self._sys_capture._gain = gain
+            log.info("Sys VAD sensitivity → %s (gain=%.1fx)", preset, gain)
+        self._write_sensitivity_event(source, preset)
         self._set_status(f"{source.upper()} sensitivity: {preset}")
 
     def action_quit(self) -> None:

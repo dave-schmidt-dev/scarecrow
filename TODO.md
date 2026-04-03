@@ -19,7 +19,7 @@
 
 ## Level meter interaction
 - [x] Left-click on mic/sys level meter to toggle mute
-- [x] Ctrl+V opens VAD / mute menu: mute toggle + Low/Medium/High presets for mic and sys
+- [x] Ctrl+V opens VAD / mute menu: mute toggle + Low/Normal/High sensitivity (input gain) for mic and sys
 
 ## Auto-segmentation for long sessions
 - [x] Automatically create segment boundaries at ~60 minute marks

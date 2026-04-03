@@ -112,6 +112,11 @@ class AudioRecorder:
             else:
                 # Copy once, share between queue and transcription buffer
                 data_copy = indata.copy()
+                gain = self._cfg.MIC_GAIN
+                if gain != 1.0:
+                    data_copy = np.clip(
+                        data_copy.astype(np.int32) * gain, -32768, 32767
+                    ).astype(np.int16)
                 try:
                     self._write_queue.put_nowait(("audio", data_copy))
                 except queue.Full:
@@ -123,8 +128,9 @@ class AudioRecorder:
                         logging.getLogger(__name__).error(
                             "Write queue full, dropping audio frame"
                         )
-                # Track peak level for audio meter
-                peak = float(np.abs(indata.astype(np.int32)).max()) / 32768.0
+                # Track peak level for audio meter (post-gain so meter
+                # reflects what Parakeet hears and responds to gain changes)
+                peak = float(np.abs(data_copy.astype(np.int32)).max()) / 32768.0
                 self._peak_level = peak
                 if peak > self._held_peak:
                     self._held_peak = peak
