@@ -155,22 +155,6 @@ def _build_run_specs(
 
     for backend in backends:
         if backend == "gguf":
-            # Default GGUF — gemma-3-27b pattern
-            gguf_gemma3 = _discover_gguf(model_pattern=_MODEL_PATTERNS["gemma"])
-            if gguf_gemma3 is not None:
-                specs.append(
-                    RunSpec(
-                        label="gguf/gemma-3",
-                        backend="gguf",
-                        model_key="gemma",
-                    )
-                )
-            else:
-                print(
-                    "  [skip] gguf/gemma-3: no GGUF found for pattern "
-                    f"{_MODEL_PATTERNS['gemma']!r}"
-                )
-
             # gemma4 GGUF — only if available
             gguf_gemma4 = _discover_gguf(model_pattern=_MODEL_PATTERNS["gemma4"])
             if gguf_gemma4 is not None:
@@ -426,9 +410,8 @@ def _detect_backends() -> list[str]:
     available: list[str] = []
 
     # GGUF: check if any known model exists
-    gguf_gemma3 = _discover_gguf(model_pattern=_MODEL_PATTERNS["gemma"])
     gguf_gemma4 = _discover_gguf(model_pattern=_MODEL_PATTERNS["gemma4"])
-    if gguf_gemma3 or gguf_gemma4:
+    if gguf_gemma4:
         available.append("gguf")
 
     # MLX: check if mlx-vlm is installed

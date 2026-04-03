@@ -44,7 +44,6 @@ def _sync_to_obsidian(
 # ---------------------------------------------------------------------------
 
 _MODEL_PATTERNS: dict[str, str] = {
-    "gemma": "*gemma-3-27b-it*GGUF",
     "gemma4": "*gemma-4-*-GGUF",
 }
 

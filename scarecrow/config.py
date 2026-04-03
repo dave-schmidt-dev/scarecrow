@@ -76,9 +76,9 @@ class Config:
         )
     )
 
-    # Summarizer (local LLM — GGUF via llama-cpp-python or MLX via mlx-vlm)
-    SUMMARIZER_BACKEND: str = "gguf"  # "gguf" or "mlx"
-    SUMMARIZER_MODEL_PATTERN: str = "*gemma-3-27b-it*GGUF"
+    # Summarizer (local LLM — MLX via mlx-vlm, or GGUF via llama-cpp-python)
+    SUMMARIZER_BACKEND: str = "mlx"  # "mlx" or "gguf"
+    SUMMARIZER_MODEL_PATTERN: str = "*gemma-4-*-GGUF"  # GGUF fallback pattern
     SUMMARIZER_OUTPUT_BUDGET: int = 4096  # max tokens for summary output
     SUMMARIZER_MIN_CTX: int = 131072  # 128K context floor (GGUF only)
     SUMMARIZER_CHARS_PER_TOKEN: int = 4  # rough heuristic for token estimation

@@ -3,7 +3,7 @@
 
 Usage:
     python3 scripts/resummarize.py ~/recordings/2026-03-29_14-30-00
-    python3 scripts/resummarize.py ~/recordings/2026-03-29_14-30-00 --model gemma
+    python3 scripts/resummarize.py ~/recordings/2026-03-29_14-30-00 --model gemma4
     python3 scripts/resummarize.py ~/recordings/2026-03-29_14-30-00 --backend mlx
 """
 
@@ -31,7 +31,7 @@ def main() -> int:
     if "--model" in args:
         idx = args.index("--model")
         if idx + 1 >= len(args):
-            print("--model requires a value (e.g. gemma, gemma4)", file=sys.stderr)
+            print("--model requires a value (e.g. gemma4)", file=sys.stderr)
             return 1
         model = args[idx + 1]
         args = args[:idx] + args[idx + 2 :]
@@ -46,8 +46,7 @@ def main() -> int:
 
     if len(args) != 1:
         print(
-            f"Usage: {sys.argv[0]} <session-dir> "
-            "[--model gemma|gemma4] [--backend gguf|mlx]",
+            f"Usage: {sys.argv[0]} <session-dir> [--model gemma4] [--backend gguf|mlx]",
             file=sys.stderr,
         )
         return 1
