@@ -47,6 +47,68 @@ log = logging.getLogger(__name__)
 BATCH_INTERVAL_SECONDS = config.BATCH_INTERVAL
 RICHLOG_MAX_LINES = 500
 
+_BT_KEYWORDS = (
+    "airpod",
+    "beats",
+    "bose",
+    "jabra",
+    "sony",
+    "jbl",
+    "sennheiser",
+    "plantronics",
+    "poly",
+    "anker",
+    "nothing ear",
+    "galaxy bud",
+)
+
+
+def _is_bluetooth_input() -> tuple[bool, str]:
+    """Return (is_bt, device_name) for the current default input device.
+
+    Uses system_profiler SPBluetoothDataType for reliable transport-type
+    detection; falls back to keyword matching if that fails.
+    """
+    import json as _json
+    import subprocess
+
+    import sounddevice as sd
+
+    try:
+        dev_info = sd.query_devices(sd.default.device[0])
+        dev_name: str = (
+            dev_info.get("name", "") if isinstance(dev_info, dict) else str(dev_info)
+        )
+    except Exception:
+        return False, ""
+
+    # Primary: CoreAudio transport type via system_profiler
+    try:
+        result = subprocess.run(
+            ["system_profiler", "SPBluetoothDataType", "-json"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        data = _json.loads(result.stdout)
+        bt_section = data.get("SPBluetoothDataType", [{}])[0]
+        # Devices appear under various keys; check all device_title entries
+        bt_devices = bt_section.get("device_title", [])
+        bt_names = [next(iter(d.keys())) for d in bt_devices if isinstance(d, dict)]
+        for bt_name in bt_names:
+            if dev_name.startswith(bt_name) or bt_name.startswith(dev_name):
+                return True, dev_name
+        # system_profiler succeeded but device not found in BT list
+        return False, dev_name
+    except Exception:
+        pass
+
+    # Fallback: keyword match on device name
+    low = dev_name.lower()
+    if any(kw in low for kw in _BT_KEYWORDS):
+        return True, dev_name
+    return False, dev_name
+
 
 class AppState(Enum):
     IDLE = auto()
@@ -185,7 +247,7 @@ class InfoBar(Static):
 
 
 class ContextMenuScreen(ModalScreen[str | None]):
-    """Menu for mute toggle and VAD sensitivity presets."""
+    """Menu for mute toggle and input gain presets."""
 
     DEFAULT_CSS = """
     ContextMenuScreen {
@@ -194,7 +256,7 @@ class ContextMenuScreen(ModalScreen[str | None]):
     ContextMenuScreen OptionList {
         width: 34;
         height: auto;
-        max-height: 18;
+        max-height: 26;
         background: $surface;
         border: solid $accent;
     }
@@ -220,13 +282,59 @@ class ContextMenuScreen(ModalScreen[str | None]):
         for name in ("Low", "Normal", "High"):
             marker = "\u2022 " if name.lower() == current else "  "
             key = name.lower()
-            opts.append(Option(f"{marker}{name} sensitivity", id=f"{prefix}vad_{key}"))
+            opts.append(Option(f"{marker}{name} gain", id=f"{prefix}vad_{key}"))
+        return opts
+
+    def _build_input_device_options(self) -> list[Option | None]:
+        """Build input device selection options, capped at 8 devices."""
+        import sounddevice as sd
+
+        app: ScarecrowApp = self.app  # type: ignore[assignment]
+        # Prefer the explicitly tracked device ID (set after each switch).
+        # Fall back to the recorder's opened device, then the system default.
+        active_id: int | None = app._mic_device_id
+        if active_id is None and app._audio_recorder is not None:
+            active_id = app._audio_recorder._opened_device_id
+        if active_id is None:
+            with contextlib.suppress(Exception):
+                active_id = sd.default.device[0]
+
+        try:
+            all_devices = sd.query_devices()
+        except Exception:
+            return []
+
+        # Normalize to list (sounddevice may return a dict for single device)
+        if isinstance(all_devices, dict):
+            all_devices = [all_devices]
+
+        sys_dev_id = app._sys_device_id  # BlackHole device — exclude
+        input_devices: list[tuple[int, str]] = []
+        for i, dev in enumerate(all_devices):
+            if not isinstance(dev, dict):
+                continue
+            if dev.get("max_input_channels", 0) <= 0:
+                continue
+            if i == sys_dev_id:
+                continue
+            name: str = dev.get("name", f"Device {i}")
+            if "blackhole" in name.lower():
+                continue
+            input_devices.append((i, name))
+            if len(input_devices) >= 8:
+                break
+
+        opts: list[Option | None] = []
+        for dev_id, name in input_devices:
+            marker = "\u2022 " if dev_id == active_id else "  "
+            opts.append(Option(f"{marker}{name}", id=f"input_device:{dev_id}"))
         return opts
 
     def compose(self) -> ComposeResult:
         if self._source is not None:
-            options = self._build_source_options(self._source, "")
+            options: list[Option | None] = self._build_source_options(self._source, "")
         else:
+            input_opts = self._build_input_device_options()
             options = [
                 Option("  \u2501 Mic \u2501", id="_header_mic"),
                 *self._build_source_options("mic", "mic:"),
@@ -234,6 +342,12 @@ class ContextMenuScreen(ModalScreen[str | None]):
                 Option("  \u2501 Sys \u2501", id="_header_sys"),
                 *self._build_source_options("sys", "sys:"),
             ]
+            if input_opts:
+                options += [
+                    None,  # separator
+                    Option("  \u2501 Input \u2501", id="_header_input"),
+                    *input_opts,
+                ]
         yield OptionList(*options)
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
@@ -270,7 +384,7 @@ class ScarecrowApp(App[None]):
 
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("ctrl+p", "pause", "Pause/Resume", show=True),
-        Binding("ctrl+v", "vad_menu", "Mute/VAD", show=True),
+        Binding("ctrl+v", "vad_menu", "Mute/Gain", show=True),
         Binding("ctrl+q", "quit", "Quit", show=True),
         Binding("ctrl+shift+q", "quick_quit", "Quick Quit", show=True),
         Binding("ctrl+shift+d", "discard_quit", "Discard", show=True),
@@ -344,12 +458,15 @@ class ScarecrowApp(App[None]):
         # Holdoff: discard the first sys batch result after start/unmute
         # to avoid duplicate text while echo filter primes
         self._sys_holdoff: bool = True
-        # VAD sensitivity state
+        # Gain preset state
         self._vad_sensitivity: str = "normal"
         self._sys_vad_sensitivity: str = "normal"
         # Auto-segmentation state
         self._current_segment: int = 1
+        self._rotation_pending: bool = False
+        self._rotation_poll_count: int = 0
         self._sys_device_id: int | None = None
+        self._mic_device_id: int | None = None  # tracks active mic device for menu
         # Quit-flow state
         self._skip_summary: bool = False
         self._discard_mode: bool = False
@@ -430,6 +547,17 @@ class ScarecrowApp(App[None]):
             self._show_error("Batch transcriber not initialized.")
             return False
 
+        # Bluetooth input warning (non-blocking — never prevents startup)
+        is_bt, bt_name = _is_bluetooth_input()
+        if is_bt:
+            log.warning("Bluetooth input detected: %s", bt_name)
+            self.notify(
+                f"Bluetooth input: {bt_name}"
+                " — consider switching to built-in mic (Ctrl+V)",
+                severity="warning",
+                timeout=8,
+            )
+
         return True
 
     _DEVICE_LOSS_THRESHOLD: ClassVar[float] = 3.0  # seconds without callback
@@ -447,15 +575,24 @@ class ScarecrowApp(App[None]):
         """Rotate audio files at segment boundaries."""
         if self.state is AppState.PAUSED:
             return
+        if self._rotation_pending:
+            return
         seg_duration = self._cfg.SEGMENT_DURATION_SECONDS
         expected = self._elapsed // seg_duration + 1
         if expected > self._current_segment:
             self._rotate_segment()
 
     def _rotate_segment(self) -> None:
-        """Stop current recorders, bump segment, start new recorders."""
+        """Begin segment rotation — drain buffers and submit for transcription.
+
+        Uses a non-blocking two-phase approach to avoid freezing the UI:
+        1. Drain audio buffers and submit for transcription
+        2. Poll until transcription is done, then finalize (swap recorders)
+        """
         if self._session is None:
             return
+
+        self._rotation_pending = True
 
         log.info(
             "Rotating segment %d → %d at elapsed=%ds",
@@ -464,22 +601,59 @@ class ScarecrowApp(App[None]):
             self._elapsed,
         )
 
-        # 1. Drain VAD buffers
-        if self._audio_recorder and not self._mic_muted:
-            self._audio_recorder.drain_to_silence()
-        if self._sys_capture and not self._sys_muted:
-            self._sys_capture.drain_to_silence()
-
-        # 2. Wait for in-flight batch futures (short timeout)
+        # 1. Reap any already-completed futures to free submit slots
+        self._reap_source_future("mic")
+        self._reap_source_future("sys")
         self._reap_batch_futures()
-        for fut in list(self._batch_futures):
-            try:
-                fut.result(timeout=5)
-            except Exception:
-                log.warning("In-flight batch timed out during segment rotation")
-        self._batch_futures.clear()
 
-        # 3. Stop recorders
+        # 2. Hard-drain all buffered audio and submit for transcription
+        #    (drain_buffer, not drain_to_silence — we want everything)
+        if self._audio_recorder and not self._mic_muted:
+            audio = self._audio_recorder.drain_buffer()
+            if audio is not None and len(audio) > 0:
+                batch_elapsed = self._batch_window_start
+                self._batch_window_start = self._elapsed
+                self._submit_batch_transcription(audio, batch_elapsed)
+        if self._sys_capture and not self._sys_muted:
+            sys_audio = self._sys_capture.drain_buffer()
+            if sys_audio is not None and len(sys_audio) > 0:
+                sys_elapsed = self._sys_batch_window_start
+                self._sys_batch_window_start = self._elapsed
+                self._submit_batch_transcription(sys_audio, sys_elapsed, source="sys")
+
+        # 3. Poll for flush completion (non-blocking)
+        self._rotation_poll_count = 0
+        self.set_timer(0.1, self._poll_rotation_flush)
+
+    _ROTATION_POLL_LIMIT: ClassVar[int] = 100  # 10s at 0.1s intervals
+
+    def _poll_rotation_flush(self) -> None:
+        """Check if segment rotation flush transcriptions are complete."""
+        self._rotation_poll_count += 1
+        mic_done = self._mic_future is None or self._mic_future.done()
+        sys_done = self._sys_future is None or self._sys_future.done()
+        if not (mic_done and sys_done):
+            if self._rotation_poll_count < self._ROTATION_POLL_LIMIT:
+                self.set_timer(0.1, self._poll_rotation_flush)
+                return
+            log.warning(
+                "Rotation flush timed out after %ds",
+                self._rotation_poll_count // 10,
+            )
+        # Reap the completed futures
+        self._reap_batch_futures()
+        # Schedule finalization after a short delay so that queued
+        # call_from_thread callbacks (_record_transcript) are processed
+        # by the event loop before we write the boundary event.
+        self.set_timer(0.05, self._finalize_rotation)
+
+    def _finalize_rotation(self) -> None:
+        """Complete segment rotation: write boundary, swap recorders."""
+        if self._session is None:
+            self._rotation_pending = False
+            return
+
+        # 1. Stop recorders
         if self._audio_recorder:
             try:
                 self._audio_recorder.stop()
@@ -491,13 +665,13 @@ class ScarecrowApp(App[None]):
             except Exception:
                 log.exception("Failed to stop sys capture during rotation")
 
-        # 4. Write boundary event
+        # 2. Write boundary event (transcript flush has already landed)
         self._session.write_segment_boundary(self._current_segment, self._elapsed)
 
-        # 5. Increment segment
+        # 3. Increment segment
         self._current_segment += 1
 
-        # 6. Create and start new recorders
+        # 4. Create and start new recorders
         new_mic_path = self._session.audio_path_for_segment(self._current_segment)
         self._audio_recorder = AudioRecorder(
             output_path=new_mic_path,
@@ -527,25 +701,28 @@ class ScarecrowApp(App[None]):
                 log.exception("Failed to start new sys capture after rotation")
                 self._sys_capture = None
 
-        # 7. Re-apply mute state to new recorders
+        # 5. Re-apply mute state to new recorders
         if self._mic_muted and self._audio_recorder:
             self._audio_recorder.pause()
         if self._sys_muted and self._sys_capture:
             self._sys_capture.pause()
 
-        # 8. Reset batch window starts, divider timer, and sys holdoff
+        # 6. Reset batch window starts, divider timer, and sys holdoff
         self._batch_window_start = self._elapsed
         self._sys_batch_window_start = self._elapsed
         self._last_divider_elapsed = self._elapsed - self._cfg.DIVIDER_INTERVAL
         self._sys_holdoff = True
 
-        # 9. Write segment marker to UI
+        # 7. Write segment marker to UI
         with contextlib.suppress(NoMatches):
             rl = self.query_one("#captions", RichLog)
             rl.write(
-                f"\n[dim]── segment {self._current_segment} "
-                f"({self._elapsed // 60}m) ──[/dim]\n"
+                f"\n[bold]── segment {self._current_segment} "
+                f"({self._elapsed // 60}m) ──[/bold]\n"
             )
+
+        self._rotation_pending = False
+        log.info("Segment rotation complete → segment %d", self._current_segment)
 
     def _sync_info_bar(self) -> None:
         if not self.is_mounted:
@@ -1326,7 +1503,7 @@ class ScarecrowApp(App[None]):
 
     def _on_vad_poll(self) -> None:
         """Poll for silence boundaries (parakeet backend)."""
-        if self.state is AppState.RECORDING:
+        if self.state is AppState.RECORDING and not self._rotation_pending:
             # Sys drains first so its text is in the echo filter before
             # mic drains — mic bleed is then caught by is_echo().
             if self._sys_capture is not None and not self._sys_muted:
@@ -1445,8 +1622,7 @@ class ScarecrowApp(App[None]):
         label = "Mic" if source == "mic" else "Sys audio"
         timestamp = datetime.now().strftime("%H:%M:%S")
         styled = (
-            f"[dim]{timestamp}[/dim]  "
-            f"[bold cyan]{label} sensitivity → {preset}[/bold cyan]"
+            f"[dim]{timestamp}[/dim]  [bold cyan]{label} gain → {preset}[/bold cyan]"
         )
         self._current_paragraph = ""
         self._paragraph_line_count = 0
@@ -1535,6 +1711,16 @@ class ScarecrowApp(App[None]):
         """Apply the user's context menu selection."""
         if not result:
             return
+
+        # Input device switch ("input_device:7")
+        if result.startswith("input_device:"):
+            try:
+                dev_id = int(result.split(":", 1)[1])
+            except (ValueError, IndexError):
+                return
+            self._switch_input_device(dev_id)
+            return
+
         # Parse prefixed IDs from combined menu ("mic:vad_low")
         if ":" in result:
             source, action = result.split(":", 1)
@@ -1547,7 +1733,7 @@ class ScarecrowApp(App[None]):
             else:
                 self.action_mute_sys()
             return
-        # VAD sensitivity presets (input gain)
+        # Input gain presets
         preset = action.removeprefix("vad_")
         presets = self._SYS_PRESETS if source == "sys" else self._MIC_PRESETS
         if preset not in presets:
@@ -1556,15 +1742,103 @@ class ScarecrowApp(App[None]):
         if source == "mic":
             self._vad_sensitivity = preset
             self._cfg.MIC_GAIN = gain
-            log.info("Mic VAD sensitivity → %s (gain=%.1fx)", preset, gain)
+            log.info("Mic gain → %s (%.1fx)", preset, gain)
         else:
             self._sys_vad_sensitivity = preset
             self._cfg.SYS_GAIN = gain
             if self._sys_capture:
                 self._sys_capture._gain = gain
-            log.info("Sys VAD sensitivity → %s (gain=%.1fx)", preset, gain)
+            log.info("Sys gain → %s (%.1fx)", preset, gain)
         self._write_sensitivity_event(source, preset)
-        self._set_status(f"{source.upper()} sensitivity: {preset}")
+        self._set_status(f"{source.upper()} gain: {preset}")
+
+    def _switch_input_device(self, device_id: int) -> None:
+        """Switch the mic recorder to a different input device.
+
+        Reuses the segment rotation machinery: drains buffers, waits for
+        in-flight futures, stops the current recorder, then starts a new one
+        on the next segment audio path (to avoid overwriting existing audio).
+        """
+        import sounddevice as sd
+
+        if self._session is None or self._audio_recorder is None:
+            return
+
+        # No-op if already recording from this device
+        if self._audio_recorder._opened_device_id == device_id:
+            return
+
+        try:
+            dev_name: str = sd.query_devices(device_id).get(
+                "name", f"Device {device_id}"
+            )
+        except Exception:
+            dev_name = f"Device {device_id}"
+
+        log.info("Switching input device → %d (%s)", device_id, dev_name)
+
+        # 1. Drain VAD buffer
+        if not self._mic_muted:
+            self._audio_recorder.drain_to_silence()
+
+        # 2. Wait for in-flight batch futures
+        self._reap_batch_futures()
+        for fut in list(self._batch_futures):
+            try:
+                fut.result(timeout=5)
+            except Exception:
+                log.warning("In-flight batch timed out during device switch")
+        self._batch_futures.clear()
+
+        # 3. Stop current mic recorder
+        try:
+            self._audio_recorder.stop()
+        except Exception:
+            log.exception("Failed to stop mic recorder during device switch")
+
+        # 4. Write device-change event to transcript
+        self._session.append_event(
+            {
+                "type": "input_device_changed",
+                "device_id": device_id,
+                "device_name": dev_name,
+                "elapsed": self._elapsed,
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+            }
+        )
+
+        # 5. Bump segment so the new recorder writes to a fresh audio file
+        #    (avoids overwriting audio already written by the previous recorder)
+        self._current_segment += 1
+        new_mic_path = self._session.audio_path_for_segment(self._current_segment)
+
+        # 6. Start new recorder with explicit device
+        self._audio_recorder = AudioRecorder(
+            output_path=new_mic_path,
+            sample_rate=self._cfg.RECORDING_SAMPLE_RATE,
+            device=device_id,
+            cfg=self._cfg,
+        )
+        try:
+            self._audio_recorder.start()
+        except Exception:
+            log.exception("Failed to start recorder on new device")
+            self._audio_recorder = None
+            self._set_status(f"Failed to switch to {dev_name}", error=True)
+            return
+
+        # 7. Re-apply mute state
+        if self._mic_muted:
+            self._audio_recorder.pause()
+
+        # 8. Track active device for Ctrl+V menu indicator
+        self._mic_device_id = device_id
+
+        # 9. Reset batch window
+        self._batch_window_start = self._elapsed
+
+        self.notify(f"Input switched: {dev_name}", timeout=4)
+        log.info("Input device switch complete → %s", dev_name)
 
     def action_quit(self) -> None:
         log.info("action_quit triggered (ctrl+q)")

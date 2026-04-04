@@ -197,7 +197,36 @@ Each line in `transcript.jsonl` is a JSON object with a `type` field:
 {"type":"session_end","timestamp":"2026-03-28T14:32:00"}
 ```
 
-Event types: `session_start`, `session_end`, `recording_start`, `transcript`, `divider`, `pause`, `resume`, `note`, `warning`, `session_metrics`, `session_renamed`. All events carry a `timestamp`; most carry `elapsed`. `transcript` events may include an optional `source` field (`"mic"` or `"sys"`). This format is designed for automated processing (summarization, task extraction) — filter by type, parse fields, no regex needed.
+Event types: `session_start`, `session_end`, `recording_start`, `transcript`, `divider`, `pause`, `resume`, `note`, `warning`, `session_metrics`, `session_renamed`, `segment_boundary`, `input_device_changed`. All events carry a `timestamp`; most carry `elapsed`. `transcript` events may include an optional `source` field (`"mic"` or `"sys"`). This format is designed for automated processing (summarization, task extraction) — filter by type, parse fields, no regex needed.
+
+### Long sessions (auto-segmentation)
+
+For sessions longer than 60 minutes, Scarecrow automatically rotates audio files at the boundary without interrupting recording or transcription. Each segment gets its own summary (`summary_seg1.md`, `summary_seg2.md`, …), and a combined `summary.md` is written at shutdown.
+
+```
+recordings/
+  2026-03-28_09-00-00_lecture/
+    audio.flac          # segment 1 mic audio
+    audio_seg2.flac     # segment 2 mic audio (after 60-min mark)
+    audio_sys.flac      # segment 1 system audio
+    audio_sys_seg2.flac # segment 2 system audio
+    transcript.jsonl    # single continuous transcript with segment_boundary events
+    summary_seg1.md     # per-segment summary
+    summary_seg2.md
+    summary.md          # combined summary (all segments)
+```
+
+Segment boundaries are marked in `transcript.jsonl` as `segment_boundary` events:
+
+```jsonl
+{"type":"segment_boundary","segment":2,"elapsed":3600,"timestamp":"..."}
+```
+
+To change the segment length (default 60 min):
+
+```bash
+SCARECROW_SEGMENT_DURATION_SECONDS=7200 scarecrow  # 2-hour segments
+```
 
 ### Audio format
 

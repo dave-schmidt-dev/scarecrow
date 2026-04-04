@@ -16,6 +16,7 @@ from scarecrow.summarizer import (
     _discover_gguf,
     _estimate_tokens,
     _extract_segment_events,
+    _fmt_duration,
     _generate,
     _GgufBackend,
     _MlxBackend,
@@ -125,26 +126,26 @@ def _make_event(event_type: str, **kwargs) -> dict:
 
 def test_build_prompt_transcript_text() -> None:
     events = [_make_event("transcript", text="Hello from transcript")]
-    _, user_content = _build_prompt(events)
+    _, user_content, _ = _build_prompt(events)
     assert "Hello from transcript" in user_content
 
 
 def test_build_prompt_context_in_system_only() -> None:
     events = [_make_event("note", tag="CONTEXT", text="Speaker is named Alice")]
-    system_prompt, user_content = _build_prompt(events)
+    system_prompt, user_content, _ = _build_prompt(events)
     assert "Speaker is named Alice" in system_prompt
     assert "Speaker is named Alice" not in user_content
 
 
 def test_build_prompt_notes_inline() -> None:
     events = [_make_event("note", tag="NOTE", text="Important observation")]
-    _, user_content = _build_prompt(events)
+    _, user_content, _ = _build_prompt(events)
     assert "[NOTE: Important observation]" in user_content
 
 
 def test_build_prompt_tasks_inline() -> None:
     events = [_make_event("note", tag="TASK", text="Follow up with team")]
-    _, user_content = _build_prompt(events)
+    _, user_content, _ = _build_prompt(events)
     assert "[TASK: Follow up with team]" in user_content
 
 
@@ -154,7 +155,7 @@ def test_build_prompt_divider_adds_blank_line() -> None:
         _make_event("divider"),
         _make_event("transcript", text="After divider"),
     ]
-    _, user_content = _build_prompt(events)
+    _, user_content, _ = _build_prompt(events)
     assert "\n\n" in user_content
 
 
@@ -163,7 +164,7 @@ def test_build_prompt_pause_resume() -> None:
         _make_event("pause"),
         _make_event("resume"),
     ]
-    _, user_content = _build_prompt(events)
+    _, user_content, _ = _build_prompt(events)
     assert "[Recording paused]" in user_content
     assert "[Recording resumed]" in user_content
 
@@ -175,7 +176,7 @@ def test_build_prompt_mute_unmute_events() -> None:
         {"type": "mute", "source": "sys", "elapsed": 30},
         {"type": "unmute", "source": "sys", "elapsed": 40},
     ]
-    _, user_content = _build_prompt(events)
+    _, user_content, _ = _build_prompt(events)
     assert "[Mic muted]" in user_content
     assert "[Mic unmuted]" in user_content
     assert "[Sys audio muted]" in user_content
@@ -187,7 +188,7 @@ def test_build_prompt_session_name_as_context() -> None:
         _make_event("session_renamed", name="Weekly standup", slug="weekly-standup"),
         _make_event("transcript", text="Let's get started."),
     ]
-    system_prompt, user_content = _build_prompt(events)
+    system_prompt, user_content, _ = _build_prompt(events)
     assert "Weekly standup" in system_prompt
     assert "Weekly standup" not in user_content
 
@@ -522,10 +523,105 @@ def test_segment_boundary_ignored_in_prompt() -> None:
         {"type": "segment_boundary", "segment": 1, "elapsed": 3600},
         {"type": "transcript", "text": "world"},
     ]
-    _, user_content = _build_prompt(events)
+    _, user_content, _ = _build_prompt(events)
     assert "segment_boundary" not in user_content
     assert "hello" in user_content
     assert "world" in user_content
+
+
+# ---------------------------------------------------------------------------
+# _fmt_duration
+# ---------------------------------------------------------------------------
+
+
+def test_fmt_duration_zero() -> None:
+    assert _fmt_duration(0) == "0s"
+
+
+def test_fmt_duration_sub_minute() -> None:
+    assert _fmt_duration(45) == "45s"
+
+
+def test_fmt_duration_exactly_one_minute() -> None:
+    assert _fmt_duration(60) == "1 min"
+
+
+def test_fmt_duration_minutes() -> None:
+    assert _fmt_duration(2520) == "42 min"
+
+
+def test_fmt_duration_hours() -> None:
+    assert _fmt_duration(3900) == "1h 5m"
+
+
+def test_fmt_duration_exactly_one_hour() -> None:
+    assert _fmt_duration(3600) == "1h 0m"
+
+
+# ---------------------------------------------------------------------------
+# session_metrics extraction
+# ---------------------------------------------------------------------------
+
+
+def test_build_prompt_extracts_elapsed_from_session_metrics() -> None:
+    events = [
+        {"type": "session_start", "timestamp": "2026-01-01T10:00:00"},
+        {"type": "transcript", "text": "Hello world"},
+        {"type": "session_metrics", "elapsed": 2520, "word_count": 2},
+        {"type": "session_end", "timestamp": "2026-01-01T10:42:00"},
+    ]
+    _, user_content, elapsed = _build_prompt(events)
+    assert elapsed == 2520
+    assert "Hello world" in user_content
+
+
+def test_build_prompt_elapsed_zero_when_no_session_metrics() -> None:
+    events = [
+        {"type": "transcript", "text": "Just a transcript"},
+    ]
+    _, _, elapsed = _build_prompt(events)
+    assert elapsed == 0
+
+
+def test_build_prompt_session_metrics_not_in_user_content() -> None:
+    events = [
+        {"type": "session_metrics", "elapsed": 300, "word_count": 50},
+        {"type": "transcript", "text": "Actual content"},
+    ]
+    _, user_content, _ = _build_prompt(events)
+    assert "session_metrics" not in user_content
+    assert "Actual content" in user_content
+
+
+def test_summarize_session_footer_contains_session_duration(tmp_path: Path) -> None:
+    """summary.md footer includes session duration derived from session_metrics."""
+    events = [
+        {"type": "session_start", "timestamp": "2026-01-01T10:00:00"},
+        {"type": "transcript", "text": "Hello, this is the meeting."},
+        {"type": "session_metrics", "elapsed": 2520, "word_count": 6},
+        {"type": "session_end", "timestamp": "2026-01-01T10:42:00"},
+    ]
+    _write_transcript(tmp_path, events)
+
+    fake_gguf_dir = tmp_path / "models--unsloth--gemma-4-27b-it-GGUF"
+    fake_gguf_dir.mkdir(parents=True)
+    fake_gguf = fake_gguf_dir / "snapshots" / "abc" / "model.gguf"
+    fake_gguf.parent.mkdir(parents=True)
+    fake_gguf.touch()
+
+    with (
+        patch("scarecrow.summarizer._discover_gguf", return_value=fake_gguf),
+        patch("scarecrow.summarizer._load_model", return_value=MagicMock()),
+        patch(
+            "scarecrow.summarizer._generate",
+            return_value=("## Summary\nMeeting summary", 400),
+        ),
+    ):
+        result = summarize_session(tmp_path, backend="gguf")
+
+    assert result is not None
+    content = result.read_text(encoding="utf-8")
+    assert "session: 42 min" in content
 
 
 # ---------------------------------------------------------------------------
@@ -745,6 +841,53 @@ def test_mlx_backend_footer_info_without_kv_bits() -> None:
     """_MlxBackend.footer_info returns 'mlx' when no kv_bits is set."""
     be = _MlxBackend("some/model-id")
     assert be.footer_info == "mlx"
+
+
+def test_summarize_session_segments_empty_segment_placeholder(tmp_path: Path) -> None:
+    """Empty segments get a placeholder summary and consistent numbering."""
+    events = [
+        {"type": "transcript", "text": "Segment one content."},
+        {"type": "segment_boundary", "segment": 1, "elapsed": 3600},
+        # Segment 2 is empty — no transcripts between boundaries
+        {"type": "segment_boundary", "segment": 2, "elapsed": 7200},
+        {"type": "transcript", "text": "Segment three content."},
+    ]
+    _write_transcript(tmp_path, events)
+
+    fake_gguf_dir = tmp_path / "models--test--model-GGUF"
+    fake_gguf_dir.mkdir(parents=True)
+    fake_gguf = fake_gguf_dir / "snapshots" / "abc" / "model.gguf"
+    fake_gguf.parent.mkdir(parents=True)
+    fake_gguf.touch()
+
+    call_count = 0
+
+    def mock_generate(gguf, sp, uc, ctx, *, llm=None):
+        nonlocal call_count
+        call_count += 1
+        return f"## Summary\nSegment {call_count} summary", 200
+
+    with (
+        patch("scarecrow.summarizer._discover_gguf", return_value=fake_gguf),
+        patch("scarecrow.summarizer._generate", side_effect=mock_generate),
+        patch("scarecrow.summarizer._load_model", return_value=MagicMock()),
+    ):
+        result = summarize_session_segments(tmp_path, 3)
+
+    assert result is not None
+    content = result.read_text(encoding="utf-8")
+    # All three segment headers must be present — no gaps
+    assert "# Segment 1" in content
+    assert "# Segment 2" in content
+    assert "# Segment 3" in content
+    # Segment 2 has a placeholder
+    assert "No speech detected" in content
+    # Per-segment files for all three
+    assert (tmp_path / "summary_seg1.md").exists()
+    assert (tmp_path / "summary_seg2.md").exists()
+    assert (tmp_path / "summary_seg3.md").exists()
+    seg2_content = (tmp_path / "summary_seg2.md").read_text(encoding="utf-8")
+    assert "No speech detected" in seg2_content
 
 
 def test_summarize_session_segments_passes_backend(tmp_path: Path) -> None:

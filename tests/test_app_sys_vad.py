@@ -155,7 +155,11 @@ async def test_check_segment_boundary_triggers_at_threshold(
         # Simulate elapsed time past the boundary
         app._elapsed = app._cfg.SEGMENT_DURATION_SECONDS + 1
         app._check_segment_boundary()
+        # Rotation is now async — wait for timers to fire
+        assert app._rotation_pending is True
+        await pilot.pause(delay=1.0)
         assert app._current_segment == 2
+        assert app._rotation_pending is False
 
 
 @patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)

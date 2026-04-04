@@ -25,6 +25,8 @@
 - [x] Automatically create segment boundaries at ~60 minute marks
 - [x] Each segment gets its own summary while maintaining full transcript continuity
 - [x] Supports 2-3 hour lectures/classes without manual splitting
+- [x] BUG: transcription drops after segment rotation — _rotate_segment() discarded drain results instead of submitting for transcription
+- [x] BUG: summary file numbering skips segment 3 — empty segments now get a placeholder summary
 
 ## Summarizer model swap
 - [x] Replace Nemotron-3-Nano with Gemma 3 27B IT (Google) for summarization
@@ -60,6 +62,14 @@
 ## Todoist integration
 - Push [TASK] items to Todoist
 
+## Transcript footer
+- [x] Add session duration to summary.md footer (e.g. `· session: 42 min`)
+
+## Startup mic selection
+- [x] Warn on launch if Bluetooth device is active input (system_profiler + keyword fallback)
+- [x] Input source selector in Ctrl+V menu — switch mic device mid-session
+
 ## Daily/weekly reporting
-- Aggregate summaries across sessions
+- [x] `scripts/report.py` — CLI aggregates sessions, syncs to Obsidian; `--today`, `--day`, `--this-week`, `--week YYYY-WNN`
+- [ ] Modify weekly summary script (segment-aware aggregation, handle multi-segment sessions)
 

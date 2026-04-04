@@ -119,7 +119,6 @@ _IGNORED_EVENT_TYPES = frozenset(
     {
         "session_start",
         "session_end",
-        "session_metrics",
         "recording_start",
         "warning",
         "segment_boundary",
@@ -186,12 +185,25 @@ def _scale_prompt(transcript_words: int) -> str:
     )
 
 
-def _build_prompt(events: list[dict]) -> tuple[str, str]:
+def _fmt_duration(seconds: int) -> str:
+    """Format a session duration in seconds to a human-readable string."""
+    if seconds < 60:
+        return f"{seconds}s" if seconds > 0 else "0s"
+    h, m = divmod(seconds // 60, 60)
+    return f"{h}h {m}m" if h else f"{m} min"
+
+
+def _build_prompt(events: list[dict]) -> tuple[str, str, int]:
     context_items: list[str] = []
     content_parts: list[str] = []
+    elapsed_seconds = 0
 
     for event in events:
         event_type = event.get("type", "")
+
+        if event_type == "session_metrics":
+            elapsed_seconds = int(event.get("elapsed", 0))
+            continue
 
         if event_type in _IGNORED_EVENT_TYPES:
             continue
@@ -245,7 +257,7 @@ def _build_prompt(events: list[dict]) -> tuple[str, str]:
         )
         system_prompt += context_block
 
-    return system_prompt, user_content
+    return system_prompt, user_content, elapsed_seconds
 
 
 # ---------------------------------------------------------------------------
@@ -662,7 +674,7 @@ def summarize_session(
         if not events:
             return _write_error_summary(session_dir, "Transcript is empty")
 
-        system_prompt, user_content = _build_prompt(events)
+        system_prompt, user_content, elapsed_seconds = _build_prompt(events)
         if not user_content.strip():
             return _write_error_summary(session_dir, "No transcribed speech found")
 
@@ -695,7 +707,8 @@ def summarize_session(
             f"summarized in {summary_words} words · "
             f"{total_tokens} tokens used · "
             f"{be.footer_info} · "
-            f"{summarize_seconds:.1f}s*\n"
+            f"{summarize_seconds:.1f}s · "
+            f"session: {_fmt_duration(elapsed_seconds)}*\n"
         )
         summary_text += footer
 
@@ -741,7 +754,7 @@ def _summarize_events(
 
     Returns (path, summary_text).  The backend must already be loaded.
     """
-    system_prompt, user_content = _build_prompt(events)
+    system_prompt, user_content, _ = _build_prompt(events)
     if not user_content.strip():
         return None, ""
 
@@ -803,7 +816,7 @@ def summarize_session_segments(
         segment_events = _extract_segment_events(events, n_segments)
         max_tokens = 0
         for seg_evs in segment_events:
-            sp, uc = _build_prompt(seg_evs)
+            sp, uc, _ = _build_prompt(seg_evs)
             max_tokens = max(max_tokens, _estimate_tokens(sp + uc))
         ctx_size = _compute_ctx_size(max_tokens)
 
@@ -821,13 +834,20 @@ def summarize_session_segments(
         try:
             combined_parts: list[str] = []
             for i, seg_evs in enumerate(segment_events, 1):
-                if not seg_evs:
-                    continue
                 seg_name = f"summary_seg{i}.md"
+                if not seg_evs:
+                    placeholder = "## Summary\n\nNo speech detected in this segment.\n"
+                    (session_dir / seg_name).write_text(placeholder, encoding="utf-8")
+                    combined_parts.append(f"# Segment {i}\n\n{placeholder}")
+                    continue
                 log.info("Summarizing segment %d/%d...", i, n_segments)
                 _, seg_text = _summarize_events(session_dir, seg_evs, seg_name, be)
                 if seg_text:
                     combined_parts.append(f"# Segment {i}\n\n{seg_text}")
+                else:
+                    placeholder = "## Summary\n\nNo speech detected in this segment.\n"
+                    (session_dir / seg_name).write_text(placeholder, encoding="utf-8")
+                    combined_parts.append(f"# Segment {i}\n\n{placeholder}")
         finally:
             be.close()
 

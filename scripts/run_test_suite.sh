@@ -47,6 +47,7 @@ TEST_FILES=(
   tests/test_app_mute_controls.py
   tests/test_app_sys_vad.py
   tests/test_app_context_menu.py
+  tests/test_report.py
 )
 
 PASSED=0

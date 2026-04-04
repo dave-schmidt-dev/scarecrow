@@ -34,6 +34,7 @@ class AudioRecorder:
         sample_rate: int = config.config.RECORDING_SAMPLE_RATE,
         channels: int | None = None,
         *,
+        device: int | None = None,
         cfg: Config | None = None,
     ) -> None:
         _cfg = cfg or config.config
@@ -41,6 +42,7 @@ class AudioRecorder:
         self._sample_rate = sample_rate
         self._stt_sample_rate = _cfg.SAMPLE_RATE
         self._channels = channels if channels is not None else _cfg.CHANNELS
+        self._device_id = device
 
         self._stream: sd.InputStream | None = None
         self._sound_file: sf.SoundFile | None = None
@@ -212,8 +214,11 @@ class AudioRecorder:
             channels=self._channels,
             dtype="int16",
             callback=self._callback,
+            device=self._device_id,
         )
-        self._opened_device_id = sd.default.device[0]
+        self._opened_device_id = (
+            self._device_id if self._device_id is not None else sd.default.device[0]
+        )
 
         with self._lock:
             self._recording = True
