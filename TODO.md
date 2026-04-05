@@ -11,6 +11,9 @@
 - [x] Per-source mute (Ctrl+M mic, Ctrl+Shift+S sys)
 - [ ] Tune sys audio VAD thresholds with real meeting data
   - Replay tool: `python scripts/replay_test.py <wav> --save-baseline` / `--check-baseline`
+  - Test data: `recordings/2026-04-04_09-37-38_itn101-class-with-professor-isaac-davis/audio_sys.flac` (60 min, 619 sys transcript events, 9,161 words ground truth)
+  - Current settings produce 608 VAD drains in 60 min (~1 every 6s) — may be too aggressive
+  - Sweep: silence threshold (0.003 → 0.005, 0.008, 0.01), min_buffer_seconds (5 → 8, 10), speech ratio (0.0 → 0.05, 0.10)
 - [x] Wire up `EchoFilter.record_mic()` / `is_sys_echo()` — bidirectional suppression wired in app.py (2026-04-02)
 
 ## Launch-time audio source flags
@@ -27,6 +30,12 @@
 - [x] Supports 2-3 hour lectures/classes without manual splitting
 - [x] BUG: transcription drops after segment rotation — _rotate_segment() discarded drain results instead of submitting for transcription
 - [x] BUG: summary file numbering skips segment 3 — empty segments now get a placeholder summary
+
+## TurboQuant KV-cache compression
+- [ ] Evaluate TurboQuant (mlx-vlm `kv_bits` parameter) for summarizer inference
+  - Could reduce memory pressure for Gemma 4 26B during summarization
+  - `_MlxBackend` already accepts `kv_bits` from config (`SUMMARIZER_MLX_KV_BITS`)
+  - Test summary quality at kv_bits=4 and kv_bits=8 vs baseline (no compression)
 
 ## Summarizer model swap
 - [x] Replace Nemotron-3-Nano with Gemma 3 27B IT (Google) for summarization
