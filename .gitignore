@@ -36,6 +36,8 @@ benchmarks/kv_eval_results/
 
 # Claude Code
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/worktrees/
 realtimesst.log
 scarecrow_debug.log
 keys.log
