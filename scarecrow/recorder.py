@@ -112,15 +112,19 @@ class AudioRecorder:
                     self._write_queue.put_nowait(("silence", silence))
                 self._peak_level = 0.0
             else:
-                # Copy once, share between queue and transcription buffer
-                data_copy = indata.copy()
+                # raw: pre-gain copy of the PortAudio buffer view — written to
+                # disk so replaying the FLAC produces the original signal level.
+                raw = indata.copy()
+                # data_copy: post-gain audio for transcription and peak meter.
                 gain = self._cfg.MIC_GAIN
                 if gain != 1.0:
                     data_copy = np.clip(
-                        data_copy.astype(np.int32) * gain, -32768, 32767
+                        raw.astype(np.int32) * gain, -32768, 32767
                     ).astype(np.int16)
+                else:
+                    data_copy = raw
                 try:
-                    self._write_queue.put_nowait(("audio", data_copy))
+                    self._write_queue.put_nowait(("audio", raw))
                 except queue.Full:
                     if not self._disk_write_failed:
                         self._disk_write_failed = True
@@ -136,11 +140,9 @@ class AudioRecorder:
                 self._peak_level = peak
                 if peak > self._held_peak:
                     self._held_peak = peak
-                # Compute RMS for VAD
-                rms = float(
-                    np.sqrt(np.mean((indata.astype(np.float32) / 32768.0) ** 2))
-                )
-                # Buffer for batch transcription (shares the same copy)
+                # Compute RMS for VAD (pre-gain, matches FLAC replay level)
+                rms = float(np.sqrt(np.mean((raw.astype(np.float32) / 32768.0) ** 2)))
+                # Buffer for batch transcription (post-gain, as Parakeet hears)
                 with self._buffer_lock:
                     self._audio_chunks.append(data_copy)
                     self._chunk_energies.append(rms)

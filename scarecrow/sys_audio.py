@@ -301,14 +301,22 @@ class SystemAudioCapture:
                     self._write_queue.put_nowait(("silence", silence))
                 return
 
-        data_copy = indata.copy()
+        # CRITICAL: indata is a PortAudio buffer view — copy immediately.
+        # raw holds pre-gain audio and is written to disk so that replaying
+        # the FLAC produces the same signal levels as the live session.
+        raw = indata.copy()
+        with contextlib.suppress(queue.Full):
+            self._write_queue.put_nowait(("audio", raw))
+
+        # Apply gain to a separate copy used only for the transcription
+        # buffer and peak meter.
         gain = self._gain
         if gain != 1.0:
-            data_copy = np.clip(
-                data_copy.astype(np.int32) * gain, -32768, 32767
-            ).astype(np.int16)
-        with contextlib.suppress(queue.Full):
-            self._write_queue.put_nowait(("audio", data_copy))
+            data_copy = np.clip(raw.astype(np.int32) * gain, -32768, 32767).astype(
+                np.int16
+            )
+        else:
+            data_copy = raw
 
         # Peak level across all channels (post-gain so meter
         # reflects what Parakeet hears and responds to gain changes)
@@ -323,12 +331,12 @@ class SystemAudioCapture:
         else:
             mono = data_copy.reshape(-1)
 
-        # RMS for VAD uses pre-gain indata so thresholds stay calibrated
+        # RMS for VAD uses pre-gain audio so thresholds stay calibrated
         # regardless of gain setting (consistent with mic recorder)
         if self._channels > 1:
-            raw_mono = (indata.astype(np.int32).mean(axis=1)).astype(np.int16)
+            raw_mono = (raw.astype(np.int32).mean(axis=1)).astype(np.int16)
         else:
-            raw_mono = indata.reshape(-1)
+            raw_mono = raw.reshape(-1)
         rms = float(np.sqrt(np.mean((raw_mono.astype(np.float32) / 32768.0) ** 2)))
 
         with self._buffer_lock:

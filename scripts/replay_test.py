@@ -183,10 +183,9 @@ def _make_sys_capture(
     # Manually set recording state (same bypass as mic recorder)
     capture._recording = True
     capture._paused = False
-    # Note: FLAC files contain post-gain audio (0.25x). During replay,
-    # the callback sees this as "raw" input, so RMS is ~4x lower than
-    # live. This affects absolute VAD behavior but relative comparisons
-    # between threshold settings remain valid for sweep tuning.
+    # Note: As of 2026-04-05 fix, FLAC files now contain pre-gain audio,
+    # so replay signal levels match live capture exactly. Gain is only
+    # applied to the transcription buffer, not to disk.
     return capture
 
 

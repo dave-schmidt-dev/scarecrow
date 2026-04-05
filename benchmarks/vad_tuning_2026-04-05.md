@@ -1,3 +1,17 @@
+## INVALIDATED
+
+These results are not suitable for production config decisions:
+
+1. **FLAC gain bug:** Sys audio FLACs stored post-gain audio (SYS_GAIN=0.25x), but the live VAD computes RMS from pre-gain input. Replay saw 4x lower signal levels than live, making absolute threshold values meaningless.
+2. **Insensitive primary metric:** SequenceMatcher ratio ranged only 0.031 across a 20x threshold sweep — insufficient resolution to differentiate configurations.
+3. **Single recording:** All data from one 60-min ITN101 lecture. Results may be speaker/room specific.
+
+Relative rankings between configs may still be directionally valid (both sides of the comparison saw the same audio). Vocab metrics (dropped/novel) are more meaningful than seq_match but are still unique-word set diffs, not token-level.
+
+Config reverted to conservative defaults. See HISTORY.md 2026-04-05 for details.
+
+---
+
 # VAD Tuning Results — 2026-04-05
 
 ## Test Data
@@ -87,3 +101,77 @@ SYS_VAD_MIN_BUFFER_SECONDS = 8.0  # promoted to config
 - SequenceMatcher operates on word-level token lists (not character-level).
 - Reference used `load_wav(target_rate=16000)` → float32 → Parakeet directly (no VAD).
 - All sweeps used `--source sys` on the same 60-min audio file.
+
+## Fine-grained sweep: sys silence_threshold (silence=1500ms, buffer=8s)
+
+| Threshold | Drains | Avg Seg | Seq Match | Word Ratio | Dropped | Novel |
+|-----------|--------|---------|-----------|------------|---------|-------|
+| 0.0005 | 276 | 13.0s | 0.934 | 1.01x | 46 | 84 |
+| 0.00075 | 280 | 12.8s | 0.932 | 1.01x | 45 | 83 |
+| 0.001 | 287 | 12.5s | 0.932 | 1.01x | 46 | 82 |
+| 0.00125 | 289 | 12.5s | 0.933 | 1.01x | 43 | 84 |
+| 0.0015 | 290 | 12.4s | 0.931 | 1.01x | 46 | 84 |
+| 0.00175 | 293 | 12.3s | 0.932 | 1.01x | 44 | 82 |
+| 0.002 | 295 | 12.2s | 0.932 | 1.01x | 41 | 81 |
+
+## Fine-grained sweep: sys min_silence_ms (threshold=0.001, buffer=8s)
+
+| min_silence_ms | Drains | Avg Seg | Seq Match | Word Ratio | Dropped | Novel |
+|----------------|--------|---------|-----------|------------|---------|-------|
+| 1250 | 321 | 11.2s | 0.933 | 1.01x | 33 | 76 |
+| 1375 | 304 | 11.8s | 0.934 | 1.01x | 39 | 76 |
+| 1500 | 287 | 12.5s | 0.932 | 1.01x | 46 | 82 |
+| 1625 | 272 | 13.2s | 0.931 | 1.02x | 44 | 83 |
+| 1750 | 259 | 13.9s | 0.932 | 1.01x | 53 | 89 |
+
+## Fine-grained sweep: sys min_buffer_seconds (threshold=0.001, silence=1500ms)
+
+| min_buffer | Drains | Avg Seg | Seq Match | Word Ratio | Dropped | Novel |
+|------------|--------|---------|-----------|------------|---------|-------|
+| 6s | 320 | 11.3s | 0.932 | 1.01x | 46 | 80 |
+| 7s | 302 | 11.9s | 0.934 | 1.01x | 44 | 84 |
+| 8s | 287 | 12.5s | 0.932 | 1.01x | 46 | 82 |
+| 9s | 274 | 13.1s | 0.934 | 1.01x | 45 | 75 |
+| 10s | 260 | 13.8s | 0.937 | 1.01x | 44 | 80 |
+
+## Mic: baseline (current config) vs sys-optimized values
+
+| Config | Drains | Avg Seg | Seq Match | Word Ratio | Dropped | Novel |
+|--------|--------|---------|-----------|------------|---------|-------|
+| current (0.01/750/0.5) | 218 | 5.3s | 0.880 | 1.03x | 45 | 81 |
+| sys-opt (0.001/1500/8) | 74 | 16.9s | 0.916 | 1.00x | 41 | 57 |
+
+## Mic sweep: silence_threshold (silence=750ms, buffer=0.5s)
+
+| Threshold | Drains | Avg Seg | Seq Match | Word Ratio | Dropped | Novel |
+|-----------|--------|---------|-----------|------------|---------|-------|
+| 0.001 | 159 | 7.6s | 0.902 | 1.02x | 43 | 68 |
+| 0.003 | 181 | 6.6s | 0.892 | 1.03x | 47 | 73 |
+| 0.005 | 191 | 6.2s | 0.897 | 1.02x | 49 | 72 |
+| 0.007 | 205 | 5.7s | 0.889 | 1.03x | 41 | 77 |
+| 0.009 | 215 | 5.4s | 0.887 | 1.03x | 45 | 78 |
+| 0.011 | 231 | 5.0s | 0.878 | 1.03x | 41 | 90 |
+| 0.013 | 247 | 4.6s | 0.871 | 1.03x | 49 | 101 |
+
+## Mic sweep: min_silence_ms (threshold=0.001, buffer=0.5s)
+
+| min_silence_ms | Drains | Avg Seg | Seq Match | Word Ratio | Dropped | Novel |
+|----------------|--------|---------|-----------|------------|---------|-------|
+| 500 | 231 | 5.0s | 0.883 | 1.03x | 45 | 85 |
+| 750 | 159 | 7.6s | 0.902 | 1.02x | 43 | 68 |
+| 1000 | 120 | 10.2s | 0.902 | 1.01x | 41 | 59 |
+| 1250 | 90 | 13.8s | 0.902 | 1.00x | 49 | 61 |
+| 1500 | 74 | 16.9s | 0.916 | 1.00x | 41 | 57 |
+| 1750 | 66 | 19.1s | 0.905 | 0.98x | 51 | 46 |
+| 2000 | 60 | 21.1s | 0.904 | 0.98x | 49 | 48 |
+
+## Mic sweep: min_buffer_seconds (threshold=0.001, silence=1500ms)
+
+| min_buffer | Drains | Avg Seg | Seq Match | Word Ratio | Dropped | Novel |
+|------------|--------|---------|-----------|------------|---------|-------|
+| 1s | 74 | 16.9s | 0.916 | 1.00x | 41 | 57 |
+| 3s | 74 | 16.9s | 0.916 | 1.00x | 41 | 57 |
+| 5s | 74 | 16.9s | 0.916 | 1.00x | 41 | 57 |
+| 7s | 74 | 16.9s | 0.916 | 1.00x | 41 | 57 |
+| 9s | 74 | 16.9s | 0.916 | 1.00x | 41 | 57 |
+| 11s | 74 | 16.9s | 0.916 | 1.00x | 41 | 57 |

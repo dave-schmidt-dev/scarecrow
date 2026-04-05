@@ -169,9 +169,6 @@ async def test_sys_batch_result_writes_to_richlog(
         await pilot.pause(delay=0.3)
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
 
-        # Clear the sys holdoff (first result after start is discarded)
-        app._on_sys_batch_result("holdoff primer", 1)
-
         captions = app.query_one("#captions", RichLog)
         captions.clear()
 

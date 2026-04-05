@@ -42,12 +42,13 @@ class Config:
     # TODO: benchmark via bench_librispeech.py
     VAD_MIN_SPEECH_RATIO: float = 0.15
 
-    # System audio VAD — tuned via replay_test.py sweep (2026-04-05)
-    # See benchmarks/vad_tuning_2026-04-05.md for full results
+    # System audio VAD — conservative defaults pending proper benchmark
+    # (Prior sweep invalidated: FLAC stored post-gain audio,
+    #  primary metric lacked resolution)
     SYS_GAIN: float = 0.25  # system audio gain — BlackHole is near full-scale
-    SYS_VAD_SILENCE_THRESHOLD: float = 0.001  # lower = longer chunks, better accuracy
-    SYS_VAD_MIN_SILENCE_MS: int = 1500  # wait 1.5s of silence before draining
-    SYS_VAD_MIN_BUFFER_SECONDS: float = 8.0  # accumulate 8s before any drain
+    SYS_VAD_SILENCE_THRESHOLD: float = 0.003  # lower than mic (no noise floor)
+    SYS_VAD_MIN_SILENCE_MS: int = 750
+    SYS_VAD_MIN_BUFFER_SECONDS: float = 5.0  # promoted from hardcoded value in app.py
     SYS_VAD_MIN_SPEECH_RATIO: float = 0.0  # disabled — no ambient noise to filter
 
     # System audio capture device

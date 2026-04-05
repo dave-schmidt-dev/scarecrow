@@ -455,9 +455,6 @@ class ScarecrowApp(App[None]):
         self._sys_muted: bool = sys_muted
         # Echo suppression — suppress mic transcripts that duplicate sys
         self._echo_filter = EchoFilter()
-        # Holdoff: discard the first sys batch result after start/unmute
-        # to avoid duplicate text while echo filter primes
-        self._sys_holdoff: bool = True
         # Gain preset state
         self._vad_sensitivity: str = "normal"
         self._sys_vad_sensitivity: str = "normal"
@@ -711,7 +708,6 @@ class ScarecrowApp(App[None]):
         self._batch_window_start = self._elapsed
         self._sys_batch_window_start = self._elapsed
         self._last_divider_elapsed = self._elapsed - self._cfg.DIVIDER_INTERVAL
-        self._sys_holdoff = True
 
         # 7. Write segment marker to UI
         with contextlib.suppress(NoMatches):
@@ -990,11 +986,6 @@ class ScarecrowApp(App[None]):
         if self._ignore_batch_results:
             return
         self._echo_filter.record_sys(text)
-        # Discard first sys result after start/unmute to let echo filter prime
-        if self._sys_holdoff:
-            self._sys_holdoff = False
-            log.debug("Sys holdoff: discarding first batch result")
-            return
         if self._echo_filter.is_sys_echo(text):
             return
         self._post_to_ui(
@@ -1471,6 +1462,7 @@ class ScarecrowApp(App[None]):
         self._recording_start_time = time.monotonic()
         self._elapsed = 0
         self._batch_window_start = 0
+        self._sys_batch_window_start = 0
         self._batch_countdown = BATCH_INTERVAL_SECONDS
         self._word_count = 0
         self.state = AppState.RECORDING
@@ -1687,7 +1679,6 @@ class ScarecrowApp(App[None]):
                 self._sys_capture.drain_buffer()
             self._sys_capture.pause()
         else:
-            self._sys_holdoff = True  # prime echo filter before showing sys
             self._sys_capture.resume()
         self._sync_info_bar()
 

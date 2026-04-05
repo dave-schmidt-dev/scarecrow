@@ -663,3 +663,55 @@ def test_drain_buffer_clears_completely(tmp_path: Path) -> None:
         second = recorder.drain_buffer()
         assert second is None
         recorder.stop()
+
+
+# ---------------------------------------------------------------------------
+# Pre-gain FLAC invariant: disk=pre-gain, buffer=post-gain, RMS=pre-gain
+# ---------------------------------------------------------------------------
+
+
+def test_callback_disk_pregain_buffer_postgain(tmp_path: Path) -> None:
+    """Three-way invariant when MIC_GAIN != 1.0:
+    1. Write queue (disk) receives pre-gain audio (original samples).
+    2. Transcription buffer receives post-gain audio (gain-adjusted).
+    3. RMS (chunk_energies) is computed from pre-gain audio.
+    """
+    from scarecrow.config import Config
+    from scarecrow.recorder import AudioRecorder
+
+    cfg = Config(SAMPLE_RATE=16000, RECORDING_SAMPLE_RATE=16000, MIC_GAIN=0.5)
+    mocks = {"sounddevice": MagicMock(), "soundfile": MagicMock()}
+    with patch.dict("sys.modules", mocks):
+        recorder = AudioRecorder(
+            tmp_path / "audio.wav",
+            sample_rate=16000,
+            cfg=cfg,
+        )
+        recorder.start()
+
+        indata = np.full((1024, 1), 1000, dtype=np.int16)
+        recorder._callback(indata, 1024, None, None)
+
+        # 1. Disk queue receives pre-gain audio (1000)
+        tag, queued = recorder._write_queue.get_nowait()
+        assert tag == "audio"
+        assert queued.shape == indata.shape
+        assert np.all(queued == 1000), "write queue: pre-gain"
+
+        # 2. Transcription buffer receives post-gain (500)
+        assert len(recorder._audio_chunks) == 1
+        chunk = recorder._audio_chunks[0]
+        assert np.all(chunk == 500), "audio_chunks: post-gain"
+
+        # 3. RMS from pre-gain signal (1000 / 32768)
+        assert len(recorder._chunk_energies) == 1
+        pregain = np.full((1024, 1), 1000, dtype=np.float32)
+        expected_rms = float(
+            np.sqrt(np.mean((pregain / 32768.0) ** 2)),
+        )
+        assert recorder._chunk_energies[0] == pytest.approx(
+            expected_rms,
+            rel=1e-5,
+        )
+
+        recorder.stop()

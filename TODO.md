@@ -9,16 +9,10 @@
 - [x] Left-aligned mic, right-aligned italic sys transcripts in TUI
 - [x] JSONL `"source": "mic"|"sys"` field on transcript events
 - [x] Per-source mute (Ctrl+M mic, Ctrl+Shift+S sys)
-- [x] Tune sys audio VAD thresholds with real meeting data
-  - Benchmarked via `replay_test.py --save-reference` / `--compare-reference` against ITN101 class (60 min sys audio)
-  - Swept silence threshold, min silence duration, and min buffer seconds
-  - Results: `benchmarks/vad_tuning_2026-04-05.md`
-  - Changes: threshold 0.003→0.001, silence 750→1500ms, buffer 5→8s (seq match 0.911→0.932, drains 608→287)
-- [ ] Fine-tune sys VAD with smaller intervals around current targets
-  - Threshold: sweep 0.0005–0.002 in 0.00025 steps (current: 0.001)
-  - Min silence: sweep 1250–1750ms in 125ms steps (current: 1500)
-  - Min buffer: sweep 6–10s in 1s steps (current: 8)
-  - Test against additional recordings for generalizability
+- [ ] Tune sys audio VAD thresholds properly
+  - Prior sweep invalidated: FLAC stored post-gain audio (4x signal mismatch), primary metric (seq_match) lacked resolution
+  - Config reverted to conservative defaults (0.003/750/5.0) pending proper benchmark
+  - Next: fix FLAC pre-gain bug (done), upgrade metrics to WER-style token-level scoring, validate across multiple recordings
 - [x] Wire up `EchoFilter.record_mic()` / `is_sys_echo()` — bidirectional suppression wired in app.py (2026-04-02)
 
 ## Launch-time audio source flags

@@ -552,3 +552,45 @@ def test_drain_to_silence_returns_none_when_no_silence_found(
     )
 
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Pre-gain FLAC invariant: disk=pre-gain, buffer=post-gain, RMS=pre-gain
+# ---------------------------------------------------------------------------
+
+
+def test_callback_disk_pregain_buffer_postgain(
+    output_path: Path, mock_sd, mock_sf
+) -> None:
+    """Three-way invariant when gain != 1.0:
+    1. Write queue (disk) receives pre-gain audio (original samples).
+    2. Transcription buffer receives post-gain audio (gain-adjusted mono).
+    3. RMS (chunk_energies) is computed from pre-gain audio.
+    """
+    capture = _make_capture(output_path, mock_sd, mock_sf)
+    capture._recording = True
+    capture._gain = 0.5
+
+    indata = np.full((1024, 2), 1000, dtype=np.int16)
+    capture._callback_inner(indata, status=None)
+
+    # 1. Disk queue receives pre-gain audio — original sample values (1000)
+    tag, queued = capture._write_queue.get_nowait()
+    assert tag == "audio"
+    assert queued.shape == indata.shape
+    assert np.all(queued == 1000), "write queue must hold pre-gain audio"
+
+    # 2. Transcription buffer receives post-gain mono (1000 * 0.5 = 500)
+    assert len(capture._audio_chunks) == 1
+    mono = capture._audio_chunks[0]
+    assert mono.ndim == 1
+    assert len(mono) == 1024
+    assert np.all(mono == 500), "audio_chunks must hold post-gain mono audio"
+
+    # 3. RMS is computed from pre-gain signal (1000 / 32768)
+    assert len(capture._chunk_energies) == 1
+    pregain = np.full(1024, 1000, dtype=np.float32)
+    expected_rms = float(
+        np.sqrt(np.mean((pregain / 32768.0) ** 2)),
+    )
+    assert capture._chunk_energies[0] == pytest.approx(expected_rms, rel=1e-5)
