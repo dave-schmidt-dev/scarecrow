@@ -23,8 +23,9 @@ reports/
 *.swp
 *.swo
 
-# Benchmark data (LibriSpeech, etc.)
+# Benchmark data and results
 benchmarks/data/
+benchmarks/kv_eval_results/
 
 # Caches
 .pytest_cache/

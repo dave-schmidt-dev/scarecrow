@@ -32,11 +32,14 @@
 - [x] BUG: transcription drops after segment rotation — _rotate_segment() discarded drain results instead of submitting for transcription
 - [x] BUG: summary file numbering skips segment 3 — empty segments now get a placeholder summary
 
-## TurboQuant KV-cache compression
-- [ ] Evaluate TurboQuant (mlx-vlm `kv_bits` parameter) for summarizer inference
-  - Could reduce memory pressure for Gemma 4 26B during summarization
-  - `_MlxBackend` already accepts `kv_bits` from config (`SUMMARIZER_MLX_KV_BITS`)
-  - Test summary quality at kv_bits=4 and kv_bits=8 vs baseline (no compression)
+## TurboQuant KV-cache compression (evaluated — not worth enabling)
+- [x] Evaluate TurboQuant (mlx-vlm `kv_bits` parameter) for summarizer inference
+  - Fixed bug: kv_bits was passed to `load()` (ignored) instead of `generate()` (where mlx-vlm uses it)
+  - Fixed: must use `kv_quant_scheme="turboquant"` — default "uniform" crashes on Gemma 4's RotatingKVCache
+  - Benchmarked kv_bits=4 and kv_bits=8 across 3 transcripts (2K/8K/19K words)
+  - Result: negligible memory savings (<0.1 GB on 18 GB footprint), kv_bits=8 is 14% slower
+  - KV cache is tiny relative to model weights at these context lengths — not worth enabling
+  - Leave `SUMMARIZER_MLX_KV_BITS = None`; results in `benchmarks/kv_eval_results/`
 
 ## Summarizer model swap
 - [x] Replace Nemotron-3-Nano with Gemma 3 27B IT (Google) for summarization

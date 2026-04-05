@@ -81,7 +81,7 @@ class Config:
     SUMMARIZER_OUTPUT_BUDGET: int = 4096  # max tokens for summary output
     SUMMARIZER_CHARS_PER_TOKEN: int = 4  # rough heuristic for token estimation
     SUMMARIZER_MLX_MODEL_ID: str = "mlx-community/gemma-4-26b-a4b-it-4bit"
-    SUMMARIZER_MLX_KV_BITS: int | None = None  # TurboQuant: 3-4 for compressed KV cache
+    SUMMARIZER_MLX_KV_BITS: float | None = None  # TurboQuant KV cache quantization bits
 
 
 # Module-level instance — all existing ``config.FOO`` references resolve here.

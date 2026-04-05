@@ -450,7 +450,7 @@ class _GgufBackend:
 class _MlxBackend:
     """MLX-based summarizer backend using mlx-vlm for Apple Silicon."""
 
-    def __init__(self, model_id: str, kv_bits: int | None = None) -> None:
+    def __init__(self, model_id: str, kv_bits: float | None = None) -> None:
         self._model_id = model_id
         self._kv_bits = kv_bits
         self._model = None
@@ -480,27 +480,12 @@ class _MlxBackend:
         # during recording.  The summarizer runs post-exit so this is safe.
         old_offline = os.environ.pop("HF_HUB_OFFLINE", None)
         try:
-            kwargs = {}
-            if self._kv_bits is not None:
-                kwargs["kv_bits"] = self._kv_bits
             log.info(
                 "Loading MLX model %s (kv_bits=%s)...",
                 self._model_id,
                 self._kv_bits,
             )
-            try:
-                self._model, self._processor = load(self._model_id, **kwargs)
-            except TypeError:
-                if self._kv_bits is not None:
-                    log.warning(
-                        "mlx-vlm does not support kv_bits=%d; "
-                        "falling back to default KV cache",
-                        self._kv_bits,
-                    )
-                    kwargs.pop("kv_bits", None)
-                    self._model, self._processor = load(self._model_id, **kwargs)
-                else:
-                    raise
+            self._model, self._processor = load(self._model_id)
         finally:
             if old_offline is not None:
                 os.environ["HF_HUB_OFFLINE"] = old_offline
@@ -526,6 +511,10 @@ class _MlxBackend:
             num_images=0,
             add_generation_prompt=True,
         )
+        kv_kwargs = {}
+        if self._kv_bits is not None:
+            kv_kwargs["kv_bits"] = self._kv_bits
+            kv_kwargs["kv_quant_scheme"] = "turboquant"
         result = mlx_generate(
             self._model,
             self._processor,
@@ -535,6 +524,7 @@ class _MlxBackend:
             repetition_penalty=1.1,
             top_p=0.95,
             verbose=False,
+            **kv_kwargs,
         )
 
         raw_text = result.text
@@ -573,6 +563,7 @@ class _MlxBackend:
             repetition_penalty=1.1,
             top_p=0.95,
             verbose=False,
+            **kv_kwargs,
         )
         raw_text2 = result2.text
         text = _strip_reasoning(prefix + raw_text2)

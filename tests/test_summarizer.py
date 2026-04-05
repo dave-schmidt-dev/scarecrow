@@ -849,6 +849,77 @@ def test_mlx_backend_footer_info_without_kv_bits() -> None:
     assert be.footer_info == "mlx"
 
 
+def test_mlx_backend_generate_passes_kv_bits() -> None:
+    """_MlxBackend.generate() passes kv_bits to mlx_vlm.generate when set."""
+    be = _MlxBackend("my-model/gemma-4", kv_bits=4)
+    be._model = MagicMock()
+    be._processor = MagicMock()
+
+    mock_result = MagicMock()
+    mock_result.text = "## Summary\nGood summary"
+    mock_result.total_tokens = 280
+    mock_result.prompt_tokens = 200
+    mock_result.generation_tokens = 80
+
+    mock_apply = MagicMock(return_value="<formatted prompt>")
+    mock_generate = MagicMock(return_value=mock_result)
+
+    mock_mlx_vlm = MagicMock()
+    mock_mlx_vlm.generate = mock_generate
+    mock_prompt_utils = MagicMock()
+    mock_prompt_utils.apply_chat_template = mock_apply
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "mlx_vlm": mock_mlx_vlm,
+            "mlx_vlm.prompt_utils": mock_prompt_utils,
+        },
+    ):
+        text, _tokens = be.generate("system prompt", "user content")
+
+    assert "Good summary" in text
+    # Verify kv_bits and kv_quant_scheme were passed through to mlx_vlm.generate
+    call_kwargs = mock_generate.call_args[1]
+    assert call_kwargs["kv_bits"] == 4
+    assert call_kwargs["kv_quant_scheme"] == "turboquant"
+
+
+def test_mlx_backend_generate_omits_kv_bits_when_none() -> None:
+    """_MlxBackend.generate() does not pass kv_bits when it is None."""
+    be = _MlxBackend("my-model/gemma-4")
+    be._model = MagicMock()
+    be._processor = MagicMock()
+
+    mock_result = MagicMock()
+    mock_result.text = "## Summary\nGood summary"
+    mock_result.total_tokens = 280
+    mock_result.prompt_tokens = 200
+    mock_result.generation_tokens = 80
+
+    mock_apply = MagicMock(return_value="<formatted prompt>")
+    mock_generate = MagicMock(return_value=mock_result)
+
+    mock_mlx_vlm = MagicMock()
+    mock_mlx_vlm.generate = mock_generate
+    mock_prompt_utils = MagicMock()
+    mock_prompt_utils.apply_chat_template = mock_apply
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "mlx_vlm": mock_mlx_vlm,
+            "mlx_vlm.prompt_utils": mock_prompt_utils,
+        },
+    ):
+        text, _tokens = be.generate("system prompt", "user content")
+
+    assert "Good summary" in text
+    call_kwargs = mock_generate.call_args[1]
+    assert "kv_bits" not in call_kwargs
+    assert "kv_quant_scheme" not in call_kwargs
+
+
 def test_summarize_session_segments_empty_segment_placeholder(tmp_path: Path) -> None:
     """Empty segments get a placeholder file; synthesis uses non-empty segments only."""
     events = [
