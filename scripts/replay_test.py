@@ -200,6 +200,7 @@ def replay(
     source: str,
     cfg: Config,
     vad_only: bool,
+    min_buffer_override: float | None = None,
 ) -> list[SegmentResult]:
     """Feed WAV through the pipeline chunk by chunk.
 
@@ -210,12 +211,14 @@ def replay(
         silence_threshold = cfg.SYS_VAD_SILENCE_THRESHOLD
         min_silence_ms = cfg.SYS_VAD_MIN_SILENCE_MS
         min_speech_ratio = cfg.SYS_VAD_MIN_SPEECH_RATIO
-        min_buffer_seconds = 5.0
+        min_buffer_seconds = cfg.SYS_VAD_MIN_BUFFER_SECONDS
     else:
         silence_threshold = cfg.VAD_SILENCE_THRESHOLD
         min_silence_ms = cfg.VAD_MIN_SILENCE_MS
         min_speech_ratio = cfg.VAD_MIN_SPEECH_RATIO
         min_buffer_seconds = 0.5
+    if min_buffer_override is not None:
+        min_buffer_seconds = min_buffer_override
 
     target_rate = cfg.RECORDING_SAMPLE_RATE
     samples, sr = load_wav(wav_path, target_rate=target_rate)
@@ -767,6 +770,13 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="MS",
         help="Override VAD minimum silence duration in ms (default: from config)",
     )
+    p.add_argument(
+        "--min-buffer",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="Override minimum buffer before VAD drain (default: 5.0s sys, 0.5s mic)",
+    )
     return p
 
 
@@ -810,6 +820,7 @@ def main() -> int:
         source=args.source,
         cfg=cfg,
         vad_only=vad_only,
+        min_buffer_override=args.min_buffer,
     )
 
     if args.compare_reference:

@@ -1346,7 +1346,7 @@ class ScarecrowApp(App[None]):
             silence_threshold=self._cfg.SYS_VAD_SILENCE_THRESHOLD,
             min_silence_ms=self._cfg.SYS_VAD_MIN_SILENCE_MS,
             max_buffer_seconds=self._cfg.VAD_MAX_BUFFER_SECONDS,
-            min_buffer_seconds=5.0,
+            min_buffer_seconds=self._cfg.SYS_VAD_MIN_BUFFER_SECONDS,
         )
         if result is None:
             return

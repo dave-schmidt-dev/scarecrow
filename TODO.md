@@ -9,11 +9,11 @@
 - [x] Left-aligned mic, right-aligned italic sys transcripts in TUI
 - [x] JSONL `"source": "mic"|"sys"` field on transcript events
 - [x] Per-source mute (Ctrl+M mic, Ctrl+Shift+S sys)
-- [ ] Tune sys audio VAD thresholds with real meeting data
-  - Replay tool: `python scripts/replay_test.py <wav> --save-baseline` / `--check-baseline`
-  - Test data: `recordings/2026-04-04_09-37-38_itn101-class-with-professor-isaac-davis/audio_sys.flac` (60 min, 619 sys transcript events, 9,161 words ground truth)
-  - Current settings produce 608 VAD drains in 60 min (~1 every 6s) — may be too aggressive
-  - Sweep: silence threshold (0.003 → 0.005, 0.008, 0.01), min_buffer_seconds (5 → 8, 10), speech ratio (0.0 → 0.05, 0.10)
+- [x] Tune sys audio VAD thresholds with real meeting data
+  - Benchmarked via `replay_test.py --save-reference` / `--compare-reference` against ITN101 class (60 min sys audio)
+  - Swept silence threshold, min silence duration, and min buffer seconds
+  - Results: `benchmarks/vad_tuning_2026-04-05.md`
+  - Changes: threshold 0.003→0.001, silence 750→1500ms, buffer 5→8s (seq match 0.911→0.932, drains 608→287)
 - [x] Wire up `EchoFilter.record_mic()` / `is_sys_echo()` — bidirectional suppression wired in app.py (2026-04-02)
 
 ## Launch-time audio source flags

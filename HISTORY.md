@@ -2,6 +2,10 @@
 
 Bug entries are inline under their date heading. A squashed bug must reference a regression test.
 
+## 2026-04-05
+
+- **Sys audio VAD tuning via quantitative benchmark.** Added `--save-reference` and `--compare-reference` modes to `replay_test.py`. Reference transcripts are generated in fixed 2-min windows (no VAD) as ground truth, then VAD replay output is compared using `difflib.SequenceMatcher`. Swept three parameters across ITN101 class recording (60 min sys audio). Results in `benchmarks/vad_tuning_2026-04-05.md`. Config changes: threshold 0.003→0.001, min silence 750→1500ms, min buffer 5→8s. Seq match improved 0.911→0.932, drains cut from 608→287 per hour. Also added `--min-buffer` CLI flag and promoted `SYS_VAD_MIN_BUFFER_SECONDS` to config (was hardcoded).
+
 ## 2026-04-04
 
 - **Synthesized overall summary for multi-segment sessions.** Previously, `summary.md` for multi-segment sessions was a concatenation of per-segment summaries with `# Segment N` headers — redundant and hard to read. Now a synthesis LLM pass merges all segment summaries into one cohesive document organized by topic, not by segment. Per-segment files (`summary_seg1.md`, etc.) are still written for reference.
