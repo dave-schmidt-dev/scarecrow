@@ -183,6 +183,10 @@ def _make_sys_capture(
     # Manually set recording state (same bypass as mic recorder)
     capture._recording = True
     capture._paused = False
+    # Note: FLAC files contain post-gain audio (0.25x). During replay,
+    # the callback sees this as "raw" input, so RMS is ~4x lower than
+    # live. This affects absolute VAD behavior but relative comparisons
+    # between threshold settings remain valid for sweep tuning.
     return capture
 
 
@@ -413,6 +417,179 @@ def replay(
 
 
 # ---------------------------------------------------------------------------
+# Reference transcript generation / comparison
+# ---------------------------------------------------------------------------
+
+# 2-minute windows — safe under Parakeet's ~3.3 min pos_emb limit
+REFERENCE_WINDOW_SECONDS = 120
+
+
+def _reference_path(wav_path: Path) -> Path:
+    return wav_path.with_suffix(".reference")
+
+
+def generate_reference(wav_path: Path) -> None:
+    """Transcribe an audio file in fixed 2-minute windows (no VAD).
+
+    Produces a ground-truth transcript independent of VAD settings.
+    The result is saved as {wav_path}.reference for later comparison.
+    """
+    if not _transcriber_available:
+        sys.exit("Parakeet is required for --save-reference.")
+
+    cfg = Config()
+    # Load at 16kHz directly — Parakeet's native sample rate
+    samples, sr = load_wav(wav_path, target_rate=cfg.SAMPLE_RATE)
+    total_seconds = len(samples) / sr
+    window_samples = int(REFERENCE_WINDOW_SECONDS * sr)
+
+    print(f"Reference: {wav_path.name} ({format_duration(total_seconds)})")
+    print(f"Window: {REFERENCE_WINDOW_SECONDS}s fixed slices (no VAD)")
+
+    print("\nLoading Parakeet model...", end=" ", flush=True)
+    t0 = time.perf_counter()
+    transcriber = Transcriber(cfg=cfg)
+    transcriber.prepare()
+    transcriber.preload_batch_model()
+    print(f"ready ({time.perf_counter() - t0:.1f}s)\n")
+
+    segments: list[SegmentResult] = []
+    sample_pos = 0
+    wall_start = time.monotonic()
+
+    while sample_pos < len(samples):
+        chunk = samples[sample_pos : sample_pos + window_samples]
+        if len(chunk) == 0:
+            break
+
+        offset_s = sample_pos / sr
+        seg_duration_s = len(chunk) / sr
+
+        # int16 → float32 normalized (matching recorder output format)
+        audio_f32 = chunk.astype(np.float32) / 32768.0
+
+        text = (
+            transcriber.transcribe_batch(
+                audio_f32,
+                batch_elapsed=int(offset_s),
+                source="sys",
+                emit_callback=False,
+            )
+            or ""
+        )
+
+        word_count = len(text.split()) if text.strip() else 0
+        seg: SegmentResult = {
+            "offset_s": round(offset_s, 2),
+            "duration_s": round(seg_duration_s, 2),
+            "text": text,
+            "words": word_count,
+        }
+        segments.append(seg)
+
+        idx = len(segments)
+        preview = text[:70] + "..." if len(text) > 70 else text
+        print(
+            f"  Window {idx} @ {format_offset(offset_s)}"
+            f" ({seg_duration_s:.0f}s): {word_count}w"
+            f"  {preview!r}"
+        )
+
+        sample_pos += window_samples
+
+    wall_elapsed = time.monotonic() - wall_start
+    total_words = sum(s["words"] for s in segments)
+    full_text = " ".join(s["text"] for s in segments if s["text"])
+
+    print(f"\n  Windows:     {len(segments)}")
+    print(f"  Total words: {total_words}")
+    print(f"  Wall time:   {wall_elapsed:.1f}s")
+    if total_seconds > 0:
+        print(f"  RTF:         {wall_elapsed / total_seconds:.3f}x")
+
+    ref = {
+        "wav_file": wav_path.name,
+        "window_seconds": REFERENCE_WINDOW_SECONDS,
+        "total_words": total_words,
+        "full_text": full_text,
+        "segments": segments,
+    }
+    out = _reference_path(wav_path)
+    out.write_text(json.dumps(ref, indent=2))
+    print(f"\n  Saved: {out}")
+
+
+def compare_to_reference(
+    wav_path: Path,
+    segments: list[SegmentResult],
+) -> bool:
+    """Compare VAD replay output against a saved reference transcript.
+
+    Uses difflib.SequenceMatcher for sequence-aware comparison that
+    catches both dropped and duplicated content. Returns True if
+    the result is acceptable.
+    """
+    import difflib
+
+    ref_path = _reference_path(wav_path)
+    if not ref_path.exists():
+        print(
+            f"\nNo reference at {ref_path}. Run --save-reference first.",
+            file=sys.stderr,
+        )
+        return False
+
+    ref = json.loads(ref_path.read_text())
+    ref_text = ref["full_text"]
+    ref_words = ref["total_words"]
+
+    vad_text = " ".join(s["text"] for s in segments if s["text"])
+    vad_words = sum(s["words"] for s in segments)
+
+    # Sequence-aware similarity (primary metric)
+    # Operates on word lists for meaningful token-level comparison
+    ref_tokens = ref_text.lower().split()
+    vad_tokens = vad_text.lower().split()
+    matcher = difflib.SequenceMatcher(None, ref_tokens, vad_tokens)
+    similarity = matcher.ratio()
+
+    # Word count ratio (detects inflation from duplicates or deficit from drops)
+    word_ratio = vad_words / ref_words if ref_words > 0 else 0.0
+
+    # Vocabulary analysis
+    ref_vocab = set(ref_tokens)
+    vad_vocab = set(vad_tokens)
+    dropped = ref_vocab - vad_vocab
+    added = vad_vocab - ref_vocab
+
+    print(f"\n{'=' * 60}")
+    print("Reference comparison:")
+    print(f"  Reference:      {ref_words} words ({len(ref_vocab)} unique)")
+    print(f"  VAD output:     {vad_words} words ({len(vad_vocab)} unique)")
+    print(f"  Sequence match: {similarity:.3f}")
+    print(f"  Word ratio:     {word_ratio:.2f}x")
+    print(f"  Dropped vocab:  {len(dropped)} words")
+    print(f"  Novel vocab:    {len(added)} words")
+
+    if word_ratio > 1.15:
+        print(
+            f"  Warning:        word inflation ({word_ratio:.0%})"
+            " — possible echo duplicates"
+        )
+    elif word_ratio < 0.85:
+        print(f"  Warning:        word deficit ({word_ratio:.0%}) — possible drops")
+
+    if similarity >= 0.70:
+        print("  Verdict:        GOOD (>= 0.70)")
+    elif similarity >= 0.50:
+        print("  Verdict:        FAIR (0.50-0.70)")
+    else:
+        print("  Verdict:        POOR (< 0.50)")
+
+    return similarity >= 0.50
+
+
+# ---------------------------------------------------------------------------
 # Baseline save / compare
 # ---------------------------------------------------------------------------
 
@@ -567,6 +744,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Compare output against previously saved baseline",
     )
     p.add_argument(
+        "--save-reference",
+        action="store_true",
+        help="Transcribe full audio in fixed 2-min windows (no VAD) as ground truth",
+    )
+    p.add_argument(
+        "--compare-reference",
+        action="store_true",
+        help="Compare VAD replay output against saved reference transcript",
+    )
+    p.add_argument(
         "--silence-threshold",
         type=float,
         default=None,
@@ -605,10 +792,18 @@ def main() -> int:
         else:
             cfg.VAD_MIN_SILENCE_MS = args.min_silence_ms
 
+    # --save-reference is standalone — transcribe without VAD.
+    if args.save_reference:
+        generate_reference(wav_path)
+        return 0
+
     # --check-baseline implies we need transcription (to compare text)
     # unless user also passed --vad-only (VAD-only baseline comparison
     # ignores text similarity and only checks segment count).
     vad_only = args.vad_only
+    if args.compare_reference and vad_only:
+        print("Note: --compare-reference needs transcription, ignoring --vad-only.")
+        vad_only = False
 
     segments = replay(
         wav_path=wav_path,
@@ -616,6 +811,11 @@ def main() -> int:
         cfg=cfg,
         vad_only=vad_only,
     )
+
+    if args.compare_reference:
+        passed = compare_to_reference(wav_path, segments)
+        if not passed:
+            return 1
 
     if args.save_baseline:
         save_baseline(wav_path, args.source, cfg, segments)
