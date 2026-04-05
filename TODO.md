@@ -14,6 +14,11 @@
   - Swept silence threshold, min silence duration, and min buffer seconds
   - Results: `benchmarks/vad_tuning_2026-04-05.md`
   - Changes: threshold 0.003→0.001, silence 750→1500ms, buffer 5→8s (seq match 0.911→0.932, drains 608→287)
+- [ ] Fine-tune sys VAD with smaller intervals around current targets
+  - Threshold: sweep 0.0005–0.002 in 0.00025 steps (current: 0.001)
+  - Min silence: sweep 1250–1750ms in 125ms steps (current: 1500)
+  - Min buffer: sweep 6–10s in 1s steps (current: 8)
+  - Test against additional recordings for generalizability
 - [x] Wire up `EchoFilter.record_mic()` / `is_sys_echo()` — bidirectional suppression wired in app.py (2026-04-02)
 
 ## Launch-time audio source flags
