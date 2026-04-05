@@ -521,15 +521,57 @@ def generate_reference(wav_path: Path) -> None:
     print(f"\n  Saved: {out}")
 
 
+def _compute_wer(
+    ref_tokens: list[str], hyp_tokens: list[str]
+) -> tuple[float, int, int, int]:
+    """Compute Word Error Rate via minimum-edit-distance alignment.
+
+    Returns (wer, substitutions, deletions, insertions).
+    WER = (S + D + I) / len(ref_tokens).
+    """
+    n = len(ref_tokens)
+    m = len(hyp_tokens)
+    # dp[i][j] = (errors, subs, dels, ins) to align ref[:i] with hyp[:j]
+    dp = [[(0, 0, 0, 0)] * (m + 1) for _ in range(n + 1)]
+    for i in range(1, n + 1):
+        dp[i][0] = (i, 0, i, 0)  # delete all ref tokens
+    for j in range(1, m + 1):
+        dp[0][j] = (j, 0, 0, j)  # insert all hyp tokens
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            if ref_tokens[i - 1] == hyp_tokens[j - 1]:
+                dp[i][j] = dp[i - 1][j - 1]  # match
+            else:
+                sub = dp[i - 1][j - 1]
+                dele = dp[i - 1][j]
+                ins = dp[i][j - 1]
+                best = min(sub[0], dele[0], ins[0])
+                if sub[0] == best:
+                    e, s, d, ii = sub
+                    dp[i][j] = (e + 1, s + 1, d, ii)
+                elif dele[0] == best:
+                    e, s, d, ii = dele
+                    dp[i][j] = (e + 1, s, d + 1, ii)
+                else:
+                    e, s, d, ii = ins
+                    dp[i][j] = (e + 1, s, d, ii + 1)
+    total, subs, dels, ins = dp[n][m]
+    wer = total / n if n > 0 else 0.0
+    return wer, subs, dels, ins
+
+
 def compare_to_reference(
     wav_path: Path,
     segments: list[SegmentResult],
 ) -> bool:
     """Compare VAD replay output against a saved reference transcript.
 
-    Uses difflib.SequenceMatcher for sequence-aware comparison that
-    catches both dropped and duplicated content. Returns True if
-    the result is acceptable.
+    Primary metric: WER (word error rate) via minimum-edit-distance
+    alignment — captures insertions, deletions, and substitutions at
+    the token level. Secondary: vocab set diffs for spotting systematic
+    hallucination patterns.
+
+    Returns True if the result is acceptable.
     """
     import difflib
 
@@ -548,17 +590,20 @@ def compare_to_reference(
     vad_text = " ".join(s["text"] for s in segments if s["text"])
     vad_words = sum(s["words"] for s in segments)
 
-    # Sequence-aware similarity (primary metric)
-    # Operates on word lists for meaningful token-level comparison
     ref_tokens = ref_text.lower().split()
     vad_tokens = vad_text.lower().split()
+
+    # Primary metric: WER (token-level alignment)
+    wer, subs, dels, ins = _compute_wer(ref_tokens, vad_tokens)
+
+    # Legacy metric: SequenceMatcher ratio (kept for continuity)
     matcher = difflib.SequenceMatcher(None, ref_tokens, vad_tokens)
     similarity = matcher.ratio()
 
-    # Word count ratio (detects inflation from duplicates or deficit from drops)
+    # Word count ratio (detects inflation from duplicates or deficit)
     word_ratio = vad_words / ref_words if ref_words > 0 else 0.0
 
-    # Vocabulary analysis
+    # Vocabulary analysis (secondary diagnostic)
     ref_vocab = set(ref_tokens)
     vad_vocab = set(vad_tokens)
     dropped = ref_vocab - vad_vocab
@@ -568,6 +613,7 @@ def compare_to_reference(
     print("Reference comparison:")
     print(f"  Reference:      {ref_words} words ({len(ref_vocab)} unique)")
     print(f"  VAD output:     {vad_words} words ({len(vad_vocab)} unique)")
+    print(f"  WER:            {wer:.3f} ({subs}S + {dels}D + {ins}I)")
     print(f"  Sequence match: {similarity:.3f}")
     print(f"  Word ratio:     {word_ratio:.2f}x")
     print(f"  Dropped vocab:  {len(dropped)} words")
@@ -581,14 +627,14 @@ def compare_to_reference(
     elif word_ratio < 0.85:
         print(f"  Warning:        word deficit ({word_ratio:.0%}) — possible drops")
 
-    if similarity >= 0.70:
-        print("  Verdict:        GOOD (>= 0.70)")
-    elif similarity >= 0.50:
-        print("  Verdict:        FAIR (0.50-0.70)")
+    if wer <= 0.15:
+        print("  Verdict:        GOOD (WER <= 0.15)")
+    elif wer <= 0.30:
+        print("  Verdict:        FAIR (WER 0.15-0.30)")
     else:
-        print("  Verdict:        POOR (< 0.50)")
+        print("  Verdict:        POOR (WER > 0.30)")
 
-    return similarity >= 0.50
+    return wer <= 0.30
 
 
 # ---------------------------------------------------------------------------
