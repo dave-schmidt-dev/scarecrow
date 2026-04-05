@@ -478,7 +478,7 @@ def test_summarize_session_segments_single_delegates(tmp_path: Path) -> None:
 
 
 def test_summarize_session_segments_multi(tmp_path: Path) -> None:
-    """Multi-segment produces per-segment and combined summaries."""
+    """Multi-segment produces per-segment files and a synthesized overall summary."""
     events = [
         {"type": "transcript", "text": "Segment one content."},
         {"type": "segment_boundary", "segment": 1, "elapsed": 3600},
@@ -497,23 +497,29 @@ def test_summarize_session_segments_multi(tmp_path: Path) -> None:
     def mock_generate(gguf, sp, uc, ctx, *, llm=None):
         nonlocal call_count
         call_count += 1
-        return f"## Summary\nSegment {call_count} summary", 200
+        if call_count <= 2:
+            return f"## Summary\nSegment {call_count} summary", 200
+        # Synthesis pass
+        return "## Summary\nOverall synthesized summary", 200
 
     with (
         patch("scarecrow.summarizer._discover_gguf", return_value=fake_gguf),
         patch("scarecrow.summarizer._generate", side_effect=mock_generate),
         patch("scarecrow.summarizer._load_model", return_value=MagicMock()),
     ):
-        result = summarize_session_segments(tmp_path, 2)
+        result = summarize_session_segments(tmp_path, 2, backend="gguf")
 
     assert result is not None
     assert result.name == "summary.md"
     content = result.read_text(encoding="utf-8")
-    assert "Segment 1" in content
-    assert "Segment 2" in content
+    # Overall summary is synthesized, not concatenated segment headers
+    assert "Overall synthesized summary" in content
+    assert "segments synthesized" in content
     # Per-segment files should exist
     assert (tmp_path / "summary_seg1.md").exists()
     assert (tmp_path / "summary_seg2.md").exists()
+    # Synthesis required 3 generate calls (2 segments + 1 synthesis)
+    assert call_count == 3
 
 
 def test_segment_boundary_ignored_in_prompt() -> None:
@@ -844,7 +850,7 @@ def test_mlx_backend_footer_info_without_kv_bits() -> None:
 
 
 def test_summarize_session_segments_empty_segment_placeholder(tmp_path: Path) -> None:
-    """Empty segments get a placeholder summary and consistent numbering."""
+    """Empty segments get a placeholder file; synthesis uses non-empty segments only."""
     events = [
         {"type": "transcript", "text": "Segment one content."},
         {"type": "segment_boundary", "segment": 1, "elapsed": 3600},
@@ -865,29 +871,31 @@ def test_summarize_session_segments_empty_segment_placeholder(tmp_path: Path) ->
     def mock_generate(gguf, sp, uc, ctx, *, llm=None):
         nonlocal call_count
         call_count += 1
-        return f"## Summary\nSegment {call_count} summary", 200
+        if call_count <= 2:
+            return f"## Summary\nSegment {call_count} summary", 200
+        return "## Summary\nOverall synthesized summary", 200
 
     with (
         patch("scarecrow.summarizer._discover_gguf", return_value=fake_gguf),
         patch("scarecrow.summarizer._generate", side_effect=mock_generate),
         patch("scarecrow.summarizer._load_model", return_value=MagicMock()),
     ):
-        result = summarize_session_segments(tmp_path, 3)
+        result = summarize_session_segments(tmp_path, 3, backend="gguf")
 
     assert result is not None
     content = result.read_text(encoding="utf-8")
-    # All three segment headers must be present — no gaps
-    assert "# Segment 1" in content
-    assert "# Segment 2" in content
-    assert "# Segment 3" in content
-    # Segment 2 has a placeholder
-    assert "No speech detected" in content
+    # Overall summary is synthesized
+    assert "Overall synthesized summary" in content
+    assert "segments synthesized" in content
     # Per-segment files for all three
     assert (tmp_path / "summary_seg1.md").exists()
     assert (tmp_path / "summary_seg2.md").exists()
     assert (tmp_path / "summary_seg3.md").exists()
+    # Segment 2 placeholder file still written
     seg2_content = (tmp_path / "summary_seg2.md").read_text(encoding="utf-8")
     assert "No speech detected" in seg2_content
+    # 2 segment calls + 1 synthesis = 3 (empty segment skipped)
+    assert call_count == 3
 
 
 def test_summarize_session_segments_passes_backend(tmp_path: Path) -> None:
