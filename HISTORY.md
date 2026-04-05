@@ -5,6 +5,9 @@ Bug entries are inline under their date heading. A squashed bug must reference a
 ## 2026-04-04
 
 - **Synthesized overall summary for multi-segment sessions.** Previously, `summary.md` for multi-segment sessions was a concatenation of per-segment summaries with `# Segment N` headers — redundant and hard to read. Now a synthesis LLM pass merges all segment summaries into one cohesive document organized by topic, not by segment. Per-segment files (`summary_seg1.md`, etc.) are still written for reference.
+- **Redesigned weekly/daily report output.** Sessions classified as notable (>=200 words) or brief. Brief sessions collapsed into a single per-day line. Action items consolidated into one `## Action Items` section at the end grouped by source session. Notable sessions without a summary show a transcript preview. `extract_action_items()` now finds all `## Action Items` sections (fixes silent data loss from old concatenated multi-segment summaries).
+- **New `scripts/cleanup.py`** — bulk-discard brief sessions to `.discarded/`. Supports `--no-summary` to catch quick-quit sessions, `--threshold N` to adjust word cutoff, `--dry-run` for preview. Sessions with action items are auto-protected.
+- **Fixed: `/mn` command appended slug instead of replacing it.** Typing `/mn` twice produced a doubled directory name (e.g., `..._itn213-class_itn213-class-part-1`). Now always builds from the 19-character timestamp prefix, so repeated `/mn` replaces the slug. Regression test: `test_rename_twice_replaces_slug`.
 
 ## 2026-04-02
 

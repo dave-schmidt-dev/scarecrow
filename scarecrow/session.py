@@ -118,10 +118,15 @@ class Session:
             self._transcript_file.close()
             self._transcript_file = None
 
-        # Rename directory
-        timestamp_part = self._session_dir.name
-        new_name = f"{timestamp_part}_{slug}"
+        # Rename directory — always build from the timestamp prefix so
+        # repeated /mn commands replace the slug instead of appending.
+        dir_name = self._session_dir.name
+        # Timestamp prefix is always YYYY-MM-DD_HH-MM-SS (19 chars)
+        timestamp_prefix = dir_name[:19]
+        new_name = f"{timestamp_prefix}_{slug}"
         new_dir = self._session_dir.parent / new_name
+        if new_dir == self._session_dir:
+            return
         self._session_dir.rename(new_dir)
         self._session_dir = new_dir
 

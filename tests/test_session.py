@@ -319,6 +319,21 @@ def test_rename_empty_name_is_noop(tmp_path: Path) -> None:
     session.finalize()
 
 
+def test_rename_twice_replaces_slug(tmp_path: Path) -> None:
+    """Calling rename() twice must replace the slug, not append."""
+    session = Session(base_dir=tmp_path)
+    session.rename("First Name")
+    assert "first-name" in session.session_dir.name
+
+    session.rename("Second Name")
+    assert "second-name" in session.session_dir.name
+    # Must NOT contain the old slug
+    assert "first-name" not in session.session_dir.name
+    # Timestamp prefix still there
+    assert session.session_dir.name[:19].count("-") >= 4
+    session.finalize()
+
+
 # ---------------------------------------------------------------------------
 # Segment path helpers
 # ---------------------------------------------------------------------------

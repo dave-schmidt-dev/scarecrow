@@ -12,7 +12,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 from report import (  # noqa: E402
+    _action_item_label,
     _fmt_duration,
+    _is_notable,
     _week_label,
     _week_range,
     extract_action_items,
@@ -253,3 +255,185 @@ def test_format_report_totals_line(tmp_path: Path) -> None:
     assert "1 session" in content
     assert "42 min" in content
     assert "500" in content
+
+
+# ---------------------------------------------------------------------------
+# _is_notable
+# ---------------------------------------------------------------------------
+
+
+def test_notable_by_word_count() -> None:
+    meta = {"word_count": 200}
+    assert _is_notable(meta) is True
+
+
+def test_brief_by_word_count() -> None:
+    meta = {"word_count": 199}
+    assert _is_notable(meta) is False
+
+
+def test_brief_zero_words() -> None:
+    meta = {"word_count": 0}
+    assert _is_notable(meta) is False
+
+
+# ---------------------------------------------------------------------------
+# _action_item_label
+# ---------------------------------------------------------------------------
+
+
+def test_action_item_label_with_slug() -> None:
+    meta = {
+        "slug": "team-standup",
+        "start_dt": datetime(2026, 4, 1, 15, 30, 0),
+    }
+    label = _action_item_label(meta)
+    assert "team standup" in label
+    assert "Wed" in label
+    assert "15:30" in label
+
+
+def test_action_item_label_without_slug() -> None:
+    meta = {
+        "slug": "",
+        "start_dt": datetime(2026, 4, 1, 9, 5, 0),
+    }
+    label = _action_item_label(meta)
+    assert "09:05 recording" in label
+    assert "Wed" in label
+
+
+# ---------------------------------------------------------------------------
+# extract_action_items — multiple sections
+# ---------------------------------------------------------------------------
+
+
+def test_extract_action_items_multiple_sections(tmp_path: Path) -> None:
+    """Old concatenated multi-segment summaries have multiple Action Items sections."""
+    summary = tmp_path / "summary.md"
+    summary.write_text(
+        "# Segment 1\n\n## Summary\nFirst half.\n\n"
+        "## Action Items\n- [ ] Task from seg 1\n\n---\n\n"
+        "# Segment 2\n\n## Summary\nSecond half.\n\n"
+        "## Action Items\n- [ ] Task from seg 2\n",
+        encoding="utf-8",
+    )
+    items = extract_action_items(summary)
+    assert len(items) == 2
+    assert any("seg 1" in i for i in items)
+    assert any("seg 2" in i for i in items)
+
+
+# ---------------------------------------------------------------------------
+# format_report — notable vs brief
+# ---------------------------------------------------------------------------
+
+
+def test_brief_sessions_collapsed(tmp_path: Path) -> None:
+    """Sessions under the word threshold get collapsed into one line."""
+    brief_dir = tmp_path / "brief"
+    brief_dir.mkdir()
+    sessions = []
+    for i in range(5):
+        d = tmp_path / f"s{i}"
+        d.mkdir()
+        sessions.append(
+            {
+                "dir": d,
+                "start_dt": datetime(2026, 4, 3, 8, i, 0),
+                "elapsed_seconds": 30,
+                "word_count": 40,
+                "slug": "",
+            }
+        )
+
+    content = format_report({date(2026, 4, 3): sessions}, "test", is_daily=True)
+    # Should NOT have individual ### headings for brief sessions
+    assert "### [" not in content
+    # Should have a collapsed line
+    assert "5 brief recordings" in content
+
+
+def test_action_items_consolidated(tmp_path: Path) -> None:
+    """Action items appear in a consolidated section, not inline."""
+    session_dir = tmp_path / "2026-04-03_10-00-00_meeting"
+    session_dir.mkdir()
+    summary = session_dir / "summary.md"
+    summary.write_text(
+        "## Summary\nStuff happened.\n\n"
+        "## Action Items\n- [ ] Follow up on X\n- [ ] Review Y\n",
+        encoding="utf-8",
+    )
+    meta = {
+        "dir": session_dir,
+        "start_dt": datetime(2026, 4, 3, 10, 0, 0),
+        "elapsed_seconds": 1800,
+        "word_count": 3000,
+        "slug": "meeting",
+    }
+    content = format_report({date(2026, 4, 3): [meta]}, "test", is_daily=True)
+    # Action items under consolidated heading
+    assert "## Action Items" in content
+    assert "Follow up on X" in content
+    # No inline "**Action Items**" under the session heading
+    assert "**Action Items**" not in content
+
+
+def test_all_brief_day(tmp_path: Path) -> None:
+    """Day with only brief sessions renders just a collapsed line."""
+    d = tmp_path / "s"
+    d.mkdir()
+    meta = {
+        "dir": d,
+        "start_dt": datetime(2026, 4, 3, 8, 0, 0),
+        "elapsed_seconds": 15,
+        "word_count": 30,
+        "slug": "",
+    }
+    content = format_report({date(2026, 4, 3): [meta]}, "test", is_daily=True)
+    assert "### [" not in content
+    assert "1 brief recording" in content
+
+
+def test_footer_notable_brief_split(tmp_path: Path) -> None:
+    """Footer shows notable/brief counts when both exist."""
+    notable_dir = tmp_path / "notable"
+    notable_dir.mkdir()
+    brief_dir = tmp_path / "brief"
+    brief_dir.mkdir()
+    sessions = [
+        {
+            "dir": notable_dir,
+            "start_dt": datetime(2026, 4, 3, 10, 0, 0),
+            "elapsed_seconds": 1800,
+            "word_count": 5000,
+            "slug": "",
+        },
+        {
+            "dir": brief_dir,
+            "start_dt": datetime(2026, 4, 3, 8, 0, 0),
+            "elapsed_seconds": 20,
+            "word_count": 30,
+            "slug": "",
+        },
+    ]
+    content = format_report({date(2026, 4, 3): sessions}, "test", is_daily=True)
+    assert "1 notable" in content
+    assert "1 brief" in content
+
+
+def test_footer_no_split_when_all_notable(tmp_path: Path) -> None:
+    """Footer uses simple format when no brief sessions exist."""
+    d = tmp_path / "s"
+    d.mkdir()
+    meta = {
+        "dir": d,
+        "start_dt": datetime(2026, 4, 3, 10, 0, 0),
+        "elapsed_seconds": 1800,
+        "word_count": 5000,
+        "slug": "",
+    }
+    content = format_report({date(2026, 4, 3): [meta]}, "test", is_daily=True)
+    assert "notable" not in content
+    assert "brief" not in content
+    assert "1 session" in content

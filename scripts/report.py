@@ -159,8 +159,34 @@ _suppress = contextlib.suppress
 # ---------------------------------------------------------------------------
 
 
+def extract_transcript_preview(session_dir: Path, max_chars: int = 200) -> str:
+    """Return the first ~max_chars of transcribed speech for context."""
+    transcript = session_dir / "transcript.jsonl"
+    if not transcript.exists():
+        return ""
+    try:
+        with transcript.open(encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if ev.get("type") == "transcript":
+                    text = ev.get("text", "").strip()
+                    if text:
+                        if len(text) > max_chars:
+                            return text[:max_chars] + "\u2026"
+                        return text
+    except OSError:
+        pass
+    return ""
+
+
 def extract_action_items(summary_md: Path) -> list[str]:
-    """Return checkbox lines from the ## Action Items section."""
+    """Return checkbox lines from all ## Action Items sections."""
     if not summary_md.exists():
         return []
     try:
@@ -168,14 +194,14 @@ def extract_action_items(summary_md: Path) -> list[str]:
     except OSError:
         return []
 
-    m = re.search(r"^## Action Items\n(.*?)(?=^##|\Z)", text, re.M | re.DOTALL)
-    if not m:
-        return []
-    return [
-        line.strip()
-        for line in m.group(1).splitlines()
-        if line.strip().startswith("- [")
-    ]
+    items: list[str] = []
+    for m in re.finditer(r"^## Action Items\n(.*?)(?=^##|\Z)", text, re.M | re.DOTALL):
+        items.extend(
+            line.strip()
+            for line in m.group(1).splitlines()
+            if line.strip().startswith("- [")
+        )
+    return items
 
 
 def extract_first_summary_para(summary_md: Path) -> str:
@@ -211,6 +237,26 @@ def _fmt_duration(seconds: int) -> str:
     return f"{h}h {m}m" if h else f"{m} min"
 
 
+_NOTABLE_WORD_THRESHOLD = 200
+
+
+def _is_notable(meta: dict) -> bool:
+    """A session is notable if it captured enough speech to be meaningful."""
+    return meta["word_count"] >= _NOTABLE_WORD_THRESHOLD
+
+
+def _action_item_label(meta: dict) -> str:
+    """Return a bold label attributing action items to a session."""
+    slug: str = meta["slug"]
+    start_dt: datetime = meta["start_dt"]
+    day_abbrev = start_dt.strftime("%a")
+    time_str = start_dt.strftime("%H:%M")
+    if slug:
+        title = slug.replace("-", " ").replace("_", " ").strip()
+        return f"**{title}** ({day_abbrev} {time_str})"
+    return f"**{time_str} recording** ({day_abbrev})"
+
+
 def format_report(
     sessions_by_day: dict[date, list[dict]],
     period_label: str,
@@ -220,21 +266,52 @@ def format_report(
     lines = [f"# {heading}: {period_label}", ""]
 
     total_sessions = 0
+    total_notable = 0
+    total_brief = 0
     total_elapsed = 0
     total_words = 0
+
+    # Collect action items across all sessions for consolidated section
+    all_action_items: list[tuple[str, list[str]]] = []
 
     for day in sorted(sessions_by_day):
         day_sessions = sessions_by_day[day]
         if not day_sessions:
             continue
+
         lines.append(f"## {day.strftime('%A, %Y-%m-%d')}")
         lines.append("")
+
+        notable: list[dict] = []
+        brief_count = 0
+        brief_elapsed = 0
+        brief_words = 0
+
         for meta in day_sessions:
+            total_sessions += 1
+            total_elapsed += meta["elapsed_seconds"]
+            total_words += meta["word_count"]
+
+            # Collect action items from every session
+            items = extract_action_items(meta["dir"] / "summary.md")
+            if items:
+                all_action_items.append((_action_item_label(meta), items))
+
+            if _is_notable(meta):
+                notable.append(meta)
+                total_notable += 1
+            else:
+                brief_count += 1
+                brief_elapsed += meta["elapsed_seconds"]
+                brief_words += meta["word_count"]
+                total_brief += 1
+
+        # Render notable sessions
+        for meta in notable:
             start_dt: datetime = meta["start_dt"]
             elapsed: int = meta["elapsed_seconds"]
             words: int = meta["word_count"]
             slug: str = meta["slug"]
-            session_dir: Path = meta["dir"]
 
             title = slug.replace("-", " ").replace("_", " ").strip() if slug else ""
             dur_str = _fmt_duration(elapsed)
@@ -249,28 +326,51 @@ def format_report(
                 heading_line = f"### [{time_str}] {dur_str} - {words_str} words"
             lines.append(heading_line)
 
-            para = extract_first_summary_para(session_dir / "summary.md")
+            para = extract_first_summary_para(meta["dir"] / "summary.md")
+            if not para:
+                para = extract_transcript_preview(meta["dir"])
             if para:
                 lines.append(f"> {para}")
-                lines.append("")
+            lines.append("")
 
-            items = extract_action_items(session_dir / "summary.md")
-            if items:
-                lines.append("**Action Items**")
-                lines.extend(items)
-                lines.append("")
+        # Collapse brief sessions into one line
+        if brief_count > 0:
+            noun = "recording" if brief_count == 1 else "recordings"
+            brief_w = f"{brief_words:,}" if brief_words else "0"
+            lines.append(
+                f"*+ {brief_count} brief {noun}"
+                f" \u00b7 {_fmt_duration(brief_elapsed)}"
+                f" \u00b7 {brief_w} words*"
+            )
+            lines.append("")
 
-            total_sessions += 1
-            total_elapsed += elapsed
-            total_words += words
+    # Consolidated Action Items section
+    if all_action_items:
+        lines.append("## Action Items")
+        lines.append("")
+        for label, items in all_action_items:
+            lines.append(label)
+            lines.extend(items)
+            lines.append("")
 
+    # Footer
     lines.append("---")
     words_str = f"{total_words:,}" if total_words else "0"
-    lines.append(
-        f"*{total_sessions} session{'s' if total_sessions != 1 else ''}"
-        f" · {_fmt_duration(total_elapsed)}"
-        f" · {words_str} words*"
-    )
+    if total_brief > 0:
+        lines.append(
+            f"*{total_sessions}"
+            f" session{'s' if total_sessions != 1 else ''}"
+            f" ({total_notable} notable \u00b7 {total_brief} brief)"
+            f" \u00b7 {_fmt_duration(total_elapsed)}"
+            f" \u00b7 {words_str} words*"
+        )
+    else:
+        lines.append(
+            f"*{total_sessions}"
+            f" session{'s' if total_sessions != 1 else ''}"
+            f" \u00b7 {_fmt_duration(total_elapsed)}"
+            f" \u00b7 {words_str} words*"
+        )
     return "\n".join(lines) + "\n"
 
 

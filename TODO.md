@@ -11,7 +11,7 @@
 - [x] Per-source mute (Ctrl+M mic, Ctrl+Shift+S sys)
 - [ ] Tune sys audio VAD thresholds with real meeting data
   - Replay tool: `python scripts/replay_test.py <wav> --save-baseline` / `--check-baseline`
-- [ ] Wire up `EchoFilter.record_mic()` / `is_sys_echo()` — bidirectional suppression implemented but not called from app; evaluate whether sys-authoritative approach is sufficient first
+- [x] Wire up `EchoFilter.record_mic()` / `is_sys_echo()` — bidirectional suppression wired in app.py (2026-04-02)
 
 ## Launch-time audio source flags
 - [x] `--mic-only` / `--sys-only` CLI flags to start with one source muted
@@ -71,5 +71,5 @@
 
 ## Daily/weekly reporting
 - [x] `scripts/report.py` — CLI aggregates sessions, syncs to Obsidian; `--today`, `--day`, `--this-week`, `--week YYYY-WNN`
-- [ ] Modify weekly summary script (segment-aware aggregation, handle multi-segment sessions)
+- [x] Redesign report output: notable/brief classification (>=200 words), brief sessions collapsed, consolidated action items section, findall fix for multi-section action items
 
