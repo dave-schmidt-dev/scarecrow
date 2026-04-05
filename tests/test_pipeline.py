@@ -72,14 +72,14 @@ def test_mic_callback_to_drain_produces_audio(tmp_path: Path) -> None:
     mock_sf, _ = _make_mock_sf()
 
     with patch.dict("sys.modules", {"sounddevice": mock_sd, "soundfile": mock_sf}):
-        cfg = Config()
+        cfg = Config(VAD_MIN_SILENCE_MS=750)
         recorder = AudioRecorder(output_path=tmp_path / "mic.wav", cfg=cfg)
         recorder.start()
 
         try:
             for _ in range(10):
                 recorder._callback(_speech_chunk(), CHUNK_SAMPLES, None, None)
-            # 8 x 100ms = 800ms ≥ VAD_MIN_SILENCE_MS (750ms) → triggers drain
+            # 8 x 100ms = 800ms ≥ 750ms → triggers drain
             for _ in range(8):
                 recorder._callback(_silence_chunk(), CHUNK_SAMPLES, None, None)
 

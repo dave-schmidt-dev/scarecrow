@@ -215,7 +215,11 @@ def test_drain_to_silence_drains_at_silence_boundary(
     """drain_to_silence must return audio up to the silence boundary."""
     from scarecrow.config import Config
 
-    cfg = Config(SAMPLE_RATE=16000, RECORDING_SAMPLE_RATE=16000)
+    cfg = Config(
+        SAMPLE_RATE=16000,
+        RECORDING_SAMPLE_RATE=16000,
+        VAD_MIN_SILENCE_MS=750,
+    )
     recorder = AudioRecorder(output_path, sample_rate=16000, cfg=cfg)
     recorder.start()
 
@@ -687,7 +691,8 @@ def test_callback_disk_pregain_buffer_postgain(tmp_path: Path) -> None:
             sample_rate=16000,
             cfg=cfg,
         )
-        recorder.start()
+        # Bypass start() to avoid writer thread consuming queue items.
+        recorder._recording = True
 
         indata = np.full((1024, 1), 1000, dtype=np.int16)
         recorder._callback(indata, 1024, None, None)
@@ -713,5 +718,3 @@ def test_callback_disk_pregain_buffer_postgain(tmp_path: Path) -> None:
             expected_rms,
             rel=1e-5,
         )
-
-        recorder.stop()

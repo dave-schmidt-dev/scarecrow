@@ -1,17 +1,26 @@
 #!/usr/bin/env bash
-# Full VAD tuning sweep — generates references and runs all sweeps.
-# Results appended to benchmarks/vad_tuning_2026-04-05.md
+# Multi-session VAD tuning sweep with WER as primary metric.
+#
+# Runs parameter sweeps across diverse recordings to avoid overfitting
+# to one speaker/room. Old FLACs contain post-gain sys audio (0.25x),
+# so silence_threshold values here are 4x lower than live equivalents.
+# Multiply final threshold by 4 for production config.
 #
 # Usage: bash scripts/vad_sweep.sh
-# Expected runtime: ~30-40 minutes
+# Expected runtime: ~90-120 minutes
 
 set -euo pipefail
 
-SESSION="/Users/dave/recordings/2026-04-04_09-37-38_itn101-class-with-professor-isaac-davis"
-SYS_AUDIO="$SESSION/audio_sys.flac"
-MIC_AUDIO="$SESSION/audio.flac"
-RESULTS="benchmarks/vad_tuning_2026-04-05.md"
 REPLAY="scripts/replay_test.py"
+RESULTS="benchmarks/vad_sweep_$(date +%Y-%m-%d).md"
+
+# Diverse session set: lecture, multi-person call, phone call
+SESSIONS=(
+    "/Users/dave/recordings/2026-04-04_09-37-38_itn101-class-with-professor-isaac-davis"
+    "/Users/dave/recordings/2026-04-03_16-14-24_signal-call-wmike-and-justin"
+    "/Users/dave/recordings/2026-04-03_08-11-36_optumrx-pharmacy-prior-authorization-call"
+)
+LABELS=("ITN101 lecture" "Signal group call" "OptumRX phone call")
 
 run_compare() {
     local label="$1"; shift
@@ -32,97 +41,135 @@ echo "=== VAD Sweep started at $(date) ==="
 echo ""
 
 # -----------------------------------------------------------------------
-# Step 1: Generate mic reference (if not already present)
+# Step 1: Generate references (if not already present)
 # -----------------------------------------------------------------------
-if [ ! -f "$MIC_AUDIO.reference" ]; then
-    echo ">>> Generating mic reference..."
-    uv run python "$REPLAY" "$MIC_AUDIO" --save-reference 2>&1
+for i in "${!SESSIONS[@]}"; do
+    SYS="${SESSIONS[$i]}/audio_sys.flac"
+    MIC="${SESSIONS[$i]}/audio.flac"
+    echo ">>> Session: ${LABELS[$i]}"
+    if [ -f "$SYS" ] && [ ! -f "${SYS}.reference" ]; then
+        echo "    Generating sys reference..."
+        uv run python "$REPLAY" "$SYS" --save-reference 2>&1 | tail -3
+    fi
+    if [ -f "$MIC" ] && [ ! -f "${MIC}.reference" ]; then
+        echo "    Generating mic reference..."
+        uv run python "$REPLAY" "$MIC" --save-reference 2>&1 | tail -3
+    fi
     echo ""
-else
-    echo ">>> Mic reference already exists, skipping."
-fi
+done
 
-# -----------------------------------------------------------------------
-# Step 2: Sys fine-grained sweeps
-# -----------------------------------------------------------------------
 {
-echo ""
-echo "## Fine-grained sweep: sys silence_threshold (silence=1500ms, buffer=8s)"
-echo ""
-echo "| Threshold | Drains | Avg Seg | WER | Seq Match | Word Ratio | Dropped | Novel |"
-echo "|-----------|--------|---------|-----|-----------|------------|---------|-------|"
 
-for t in 0.0005 0.00075 0.001 0.00125 0.0015 0.00175 0.002; do
-    run_compare "$t" "$SYS_AUDIO" --source sys --silence-threshold "$t" --min-silence-ms 1500 --min-buffer 8 --compare-reference
-done
-
+# -----------------------------------------------------------------------
+# Step 2: Sys silence_threshold sweep
+# -----------------------------------------------------------------------
+# Old FLACs are 0.25x, so these map to live values 4x higher:
+#   0.0005 → 0.002, 0.001 → 0.004, 0.002 → 0.008, 0.003 → 0.012, 0.004 → 0.016
+echo "## Sys sweep: silence_threshold (silence=750ms, buffer=5s)"
 echo ""
-echo "## Fine-grained sweep: sys min_silence_ms (threshold=0.001, buffer=8s)"
+echo "All sessions use conservative defaults for non-swept params."
+echo "Threshold values are FLAC-scale (multiply by 4 for live config)."
 echo ""
-echo "| min_silence_ms | Drains | Avg Seg | WER | Seq Match | Word Ratio | Dropped | Novel |"
-echo "|----------------|--------|---------|-----|-----------|------------|---------|-------|"
 
-for ms in 1250 1375 1500 1625 1750; do
-    run_compare "$ms" "$SYS_AUDIO" --source sys --silence-threshold 0.001 --min-silence-ms "$ms" --min-buffer 8 --compare-reference
-done
-
-echo ""
-echo "## Fine-grained sweep: sys min_buffer_seconds (threshold=0.001, silence=1500ms)"
-echo ""
-echo "| min_buffer | Drains | Avg Seg | WER | Seq Match | Word Ratio | Dropped | Novel |"
-echo "|------------|--------|---------|-----|-----------|------------|---------|-------|"
-
-for buf in 6 7 8 9 10; do
-    run_compare "${buf}s" "$SYS_AUDIO" --source sys --silence-threshold 0.001 --min-silence-ms 1500 --min-buffer "$buf" --compare-reference
+for i in "${!SESSIONS[@]}"; do
+    SYS="${SESSIONS[$i]}/audio_sys.flac"
+    [ ! -f "$SYS" ] && continue
+    echo ""
+    echo "### ${LABELS[$i]}"
+    echo ""
+    echo "| Threshold (FLAC) | Drains | Avg Seg | WER | Seq Match | Word Ratio | Dropped | Novel |"
+    echo "|------------------|--------|---------|-----|-----------|------------|---------|-------|"
+    for t in 0.0005 0.00075 0.001 0.0015 0.002 0.0025 0.003 0.004; do
+        run_compare "$t" "$SYS" --source sys --silence-threshold "$t" --min-silence-ms 750 --min-buffer 5 --compare-reference
+    done
 done
 
 # -----------------------------------------------------------------------
-# Step 3: Mic baseline + cross-test with sys-optimized values
+# Step 3: Sys min_silence_ms sweep (using threshold=0.00075, the live 0.003)
 # -----------------------------------------------------------------------
 echo ""
-echo "## Mic: baseline (current config) vs sys-optimized values"
+echo "## Sys sweep: min_silence_ms (threshold=0.00075, buffer=5s)"
 echo ""
-echo "| Config | Drains | Avg Seg | WER | Seq Match | Word Ratio | Dropped | Novel |"
-echo "|--------|--------|---------|-----|-----------|------------|---------|-------|"
+echo "Threshold fixed at 0.00075 FLAC-scale (= 0.003 live)."
+echo ""
 
-run_compare "current (0.01/750/0.5)" "$MIC_AUDIO" --source mic --compare-reference
-run_compare "sys-opt (0.001/1500/8)" "$MIC_AUDIO" --source mic --silence-threshold 0.001 --min-silence-ms 1500 --min-buffer 8 --compare-reference
+for i in "${!SESSIONS[@]}"; do
+    SYS="${SESSIONS[$i]}/audio_sys.flac"
+    [ ! -f "$SYS" ] && continue
+    echo ""
+    echo "### ${LABELS[$i]}"
+    echo ""
+    echo "| min_silence_ms | Drains | Avg Seg | WER | Seq Match | Word Ratio | Dropped | Novel |"
+    echo "|----------------|--------|---------|-----|-----------|------------|---------|-------|"
+    for ms in 500 750 1000 1250 1500 1750 2000; do
+        run_compare "$ms" "$SYS" --source sys --silence-threshold 0.00075 --min-silence-ms "$ms" --min-buffer 5 --compare-reference
+    done
+done
 
 # -----------------------------------------------------------------------
-# Step 4: Mic sweeps — threshold
+# Step 4: Sys min_buffer_seconds sweep
+# -----------------------------------------------------------------------
+echo ""
+echo "## Sys sweep: min_buffer_seconds (threshold=0.00075, silence=750ms)"
+echo ""
+
+for i in "${!SESSIONS[@]}"; do
+    SYS="${SESSIONS[$i]}/audio_sys.flac"
+    [ ! -f "$SYS" ] && continue
+    echo ""
+    echo "### ${LABELS[$i]}"
+    echo ""
+    echo "| min_buffer | Drains | Avg Seg | WER | Seq Match | Word Ratio | Dropped | Novel |"
+    echo "|------------|--------|---------|-----|-----------|------------|---------|-------|"
+    for buf in 3 5 7 9 11; do
+        run_compare "${buf}s" "$SYS" --source sys --silence-threshold 0.00075 --min-silence-ms 750 --min-buffer "$buf" --compare-reference
+    done
+done
+
+# -----------------------------------------------------------------------
+# Step 5: Mic silence_threshold sweep (no gain issue)
 # -----------------------------------------------------------------------
 echo ""
 echo "## Mic sweep: silence_threshold (silence=750ms, buffer=0.5s)"
 echo ""
-echo "| Threshold | Drains | Avg Seg | WER | Seq Match | Word Ratio | Dropped | Novel |"
-echo "|-----------|--------|---------|-----|-----------|------------|---------|-------|"
+echo "Mic FLAC gain=1.0, no scaling needed. Values map directly to live config."
+echo ""
 
-for t in 0.001 0.003 0.005 0.007 0.009 0.011 0.013; do
-    run_compare "$t" "$MIC_AUDIO" --source mic --silence-threshold "$t" --compare-reference
+for i in "${!SESSIONS[@]}"; do
+    MIC="${SESSIONS[$i]}/audio.flac"
+    [ ! -f "$MIC" ] && continue
+    echo ""
+    echo "### ${LABELS[$i]}"
+    echo ""
+    echo "| Threshold | Drains | Avg Seg | WER | Seq Match | Word Ratio | Dropped | Novel |"
+    echo "|-----------|--------|---------|-----|-----------|------------|---------|-------|"
+    for t in 0.001 0.003 0.005 0.007 0.01 0.013 0.015; do
+        run_compare "$t" "$MIC" --source mic --silence-threshold "$t" --compare-reference
+    done
 done
 
+# -----------------------------------------------------------------------
+# Step 6: Mic min_silence_ms sweep
+# -----------------------------------------------------------------------
 echo ""
-echo "## Mic sweep: min_silence_ms (threshold=0.001, buffer=0.5s)"
+echo "## Mic sweep: min_silence_ms (threshold=0.01, buffer=0.5s)"
 echo ""
-echo "| min_silence_ms | Drains | Avg Seg | WER | Seq Match | Word Ratio | Dropped | Novel |"
-echo "|----------------|--------|---------|-----|-----------|------------|---------|-------|"
 
-for ms in 500 750 1000 1250 1500 1750 2000; do
-    run_compare "$ms" "$MIC_AUDIO" --source mic --silence-threshold 0.001 --min-silence-ms "$ms" --compare-reference
-done
-
-echo ""
-echo "## Mic sweep: min_buffer_seconds (threshold=0.001, silence=1500ms)"
-echo ""
-echo "| min_buffer | Drains | Avg Seg | WER | Seq Match | Word Ratio | Dropped | Novel |"
-echo "|------------|--------|---------|-----|-----------|------------|---------|-------|"
-
-for buf in 1 3 5 7 9 11; do
-    run_compare "${buf}s" "$MIC_AUDIO" --source mic --silence-threshold 0.001 --min-silence-ms 1500 --min-buffer "$buf" --compare-reference
+for i in "${!SESSIONS[@]}"; do
+    MIC="${SESSIONS[$i]}/audio.flac"
+    [ ! -f "$MIC" ] && continue
+    echo ""
+    echo "### ${LABELS[$i]}"
+    echo ""
+    echo "| min_silence_ms | Drains | Avg Seg | WER | Seq Match | Word Ratio | Dropped | Novel |"
+    echo "|----------------|--------|---------|-----|-----------|------------|---------|-------|"
+    for ms in 500 750 1000 1250 1500 1750 2000; do
+        run_compare "$ms" "$MIC" --source mic --silence-threshold 0.01 --min-silence-ms "$ms" --compare-reference
+    done
 done
 
 } | tee -a "$RESULTS"
 
 echo ""
 echo "=== VAD Sweep complete at $(date) ==="
-echo "Results appended to $RESULTS"
+echo "Results: $RESULTS"

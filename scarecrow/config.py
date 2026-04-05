@@ -28,27 +28,21 @@ class Config:
     # Seeds UI countdown display only; VAD controls actual drain timing
     BATCH_INTERVAL: int = 5
 
-    # VAD-based chunking — tuned via LibriSpeech WER sweep (bench_librispeech.py):
-    #   750ms silence: optimal for both 0.6B and 1.1B models (plateau at 750ms,
-    #     no improvement beyond). Reduces mid-sentence splits vs 600ms.
-    #   30s max buffer: hard drain rarely triggers with 750ms silence; provides
-    #     headroom for sustained speech without pauses.
+    # Mic VAD — tuned via multi-session WER sweep (2026-04-05)
+    # See benchmarks/vad_sweep_2026-04-05.md for full results
     MIC_GAIN: float = 1.0  # input gain multiplier (1.0 = no change)
-    VAD_SILENCE_THRESHOLD: float = 0.01  # RMS below this counts as silence
-    VAD_MIN_SILENCE_MS: int = 750  # consecutive silence before triggering drain
+    VAD_SILENCE_THRESHOLD: float = 0.003  # RMS below this counts as silence
+    VAD_MIN_SILENCE_MS: int = 1250  # consecutive silence before triggering drain
     VAD_MAX_BUFFER_SECONDS: int = 30  # hard drain if no silence found by this point
     VAD_POLL_INTERVAL_MS: int = 150  # how often to check for silence
-    # Minimum fraction of chunks with speech before sending to Parakeet.
-    # TODO: benchmark via bench_librispeech.py
     VAD_MIN_SPEECH_RATIO: float = 0.15
 
-    # System audio VAD — conservative defaults pending proper benchmark
-    # (Prior sweep invalidated: FLAC stored post-gain audio,
-    #  primary metric lacked resolution)
+    # System audio VAD — tuned via multi-session WER sweep (2026-04-05)
+    # See benchmarks/vad_sweep_2026-04-05.md for full results
     SYS_GAIN: float = 0.25  # system audio gain — BlackHole is near full-scale
-    SYS_VAD_SILENCE_THRESHOLD: float = 0.003  # lower than mic (no noise floor)
-    SYS_VAD_MIN_SILENCE_MS: int = 750
-    SYS_VAD_MIN_BUFFER_SECONDS: float = 5.0  # promoted from hardcoded value in app.py
+    SYS_VAD_SILENCE_THRESHOLD: float = 0.004  # tuned for pre-gain signal levels
+    SYS_VAD_MIN_SILENCE_MS: int = 1500
+    SYS_VAD_MIN_BUFFER_SECONDS: float = 7.0
     SYS_VAD_MIN_SPEECH_RATIO: float = 0.0  # disabled — no ambient noise to filter
 
     # System audio capture device

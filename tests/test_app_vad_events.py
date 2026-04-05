@@ -218,10 +218,10 @@ async def test_vad_skips_near_silent_mic_audio(
     passed the gate, causing Parakeet to hallucinate on silence.
     """
     mock_recorder = _mock_recorder()
-    # All chunk energies well below the low floor (0.15 * 0.01 = 0.0015)
+    # All chunk energies well below the low floor (0.15 * 0.003 = 0.00045)
     mock_recorder.drain_to_silence.return_value = (
         np.zeros(16000, dtype=np.float32),
-        [0.0005] * 10,  # noise — below low_floor
+        [0.0001] * 10,  # noise — below low_floor
     )
     mock_recorder_cls.return_value = mock_recorder
     mock_session_cls.return_value = MagicMock()
@@ -265,14 +265,16 @@ async def test_vad_low_floor_requires_higher_speech_ratio(
 ) -> None:
     """Low-floor path requires 2x the normal speech ratio (30% not 15%).
 
-    Simulates a phone call: most chunks are below the primary floor (0.005)
-    but above the low floor (0.0015). With only 20% of chunks having speech
+    Simulates a phone call: most chunks are below the primary floor
+    but above the low floor. With only 20% of chunks having speech
     at the low-floor level, the buffer must be skipped.
     """
     mock_recorder = _mock_recorder()
-    # 2 out of 10 chunks above low_floor (20%), 8 below
-    # 20% is above the normal ratio (15%) but below the 2x ratio (30%)
-    energies = [0.002] * 2 + [0.0005] * 8
+    # energy_floor = 0.003 * 0.5 = 0.0015
+    # low_floor = 0.003 * 0.15 = 0.00045
+    # 0 of 10 above energy_floor → falls through to low-floor path
+    # 2 of 10 above low_floor (20%) → below 2x ratio (30%) → skip
+    energies = [0.001] * 2 + [0.0001] * 8
     mock_recorder.drain_to_silence.return_value = (
         np.zeros(16000, dtype=np.float32),
         energies,
@@ -381,7 +383,11 @@ def test_all_silent_buffer_does_not_accumulate(tmp_path: Path) -> None:
     from scarecrow.config import Config
     from scarecrow.recorder import AudioRecorder
 
-    cfg = Config(SAMPLE_RATE=16000, RECORDING_SAMPLE_RATE=16000)
+    cfg = Config(
+        SAMPLE_RATE=16000,
+        RECORDING_SAMPLE_RATE=16000,
+        VAD_MIN_SILENCE_MS=750,
+    )
     with patch.dict(
         "sys.modules", {"sounddevice": MagicMock(), "soundfile": MagicMock()}
     ):

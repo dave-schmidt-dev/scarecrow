@@ -4,7 +4,7 @@ Bug entries are inline under their date heading. A squashed bug must reference a
 
 ## 2026-04-05
 
-- **Reverted sys VAD tuning — benchmark invalidated.** The April 5 sweep stored post-gain audio to FLAC (SYS_GAIN=0.25x) but the live VAD uses pre-gain RMS, creating a 4x signal mismatch. The primary metric (SequenceMatcher ratio) also lacked resolution (0.03 range across 20x threshold sweep). Config reverted to conservative defaults (0.003/750/5.0) pending proper benchmark with pre-gain FLACs and WER-style metrics.
+- **VAD tuning via multi-session WER benchmark.** Fixed pre-gain FLAC bug (sys audio was writing post-gain to disk, creating 4x signal mismatch during replay). Replaced SequenceMatcher with token-level WER as primary metric. Swept across 3 diverse recordings (ITN101 lecture, Signal group call, OptumRX phone call). Sys: threshold 0.003→0.004, silence 750→1500ms, buffer 5→7s. Mic: threshold 0.01→0.003, silence 750→1250ms. Combined WER improvement 18–24% on lecture/call sessions. Also removed sys holdoff that discarded first batch result (echo filter handles duplicates).
 
 - **Sys audio VAD tuning via quantitative benchmark.** Added `--save-reference` and `--compare-reference` modes to `replay_test.py`. Reference transcripts are generated in fixed 2-min windows (no VAD) as ground truth, then VAD replay output is compared using `difflib.SequenceMatcher`. Swept three parameters across ITN101 class recording (60 min sys audio). Results in `benchmarks/vad_tuning_2026-04-05.md`. Config changes: threshold 0.003→0.001, min silence 750→1500ms, min buffer 5→8s. Seq match improved 0.911→0.932, drains cut from 608→287 per hour. Also added `--min-buffer` CLI flag and promoted `SYS_VAD_MIN_BUFFER_SECONDS` to config (was hardcoded).
 
