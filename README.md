@@ -85,6 +85,7 @@ sc --no-sys-audio    # launch without system audio capture
 - `/task` or `/t` — submit note tagged `[TASK]`
 - `/flush` or `/f` — force-flush the audio buffer (transcribe immediately)
 - `/context` or `/c` — add background context (spelling, names — improves summary accuracy, not surfaced directly)
+- `/speakers` or `/sp` — set speaker names for post-session diarization (e.g. `/sp mic:Dave sys:Mike,Justin`)
 - no prefix — submit note tagged `[NOTE]` (default)
 
 **Help:**
@@ -120,7 +121,7 @@ On quit, Scarecrow prints session metrics (duration, word count, file sizes) to 
 
 Shutdown runs in two phases for a responsive TUI:
 - **Phase 1** (in-TUI, fast): stop microphone, flush final audio batch, close session files
-- **Phase 2** (post-TUI, terminal output): compress WAV→FLAC, generate summary
+- **Phase 2** (post-TUI, terminal output): compress WAV→FLAC, speaker diarization (if `/speakers` was used), generate summary
 
 Ctrl+C uses the same cleanup path as Ctrl+Q.
 
@@ -176,6 +177,7 @@ recordings/
     audio.flac           # mic recording, lossless FLAC (compressed from WAV on shutdown)
     audio_sys.flac       # system audio (BlackHole)
     transcript.jsonl     # JSON Lines transcript — one event per line
+    diarization_sys.json # speaker diarization sidecar (if /speakers was used)
     summary.md           # LLM-generated session summary (auto-created on shutdown)
 ```
 
@@ -295,6 +297,7 @@ scarecrow/
   __main__.py        # entry point, model preloading, startup output
   app.py             # Textual TUI, batch transcription scheduling, notes pane
   config.py          # audio settings, parakeet model config, defaults
+  diarizer.py        # post-session speaker diarization via pyannote-audio
   recorder.py        # sounddevice audio capture + WAV writing
   runtime.py         # HF offline bootstrap, parakeet model manager
   session.py         # timestamped session dirs + transcript files
@@ -321,6 +324,7 @@ tests/
   test_app_sys_vad.py    # system audio VAD and auto-segmentation
   test_app_context_menu.py   # context menu, click-to-mute, mute transcript events
   test_audio_routing.py  # audio output device routing
+  test_diarizer.py       # speaker diarization parser, labeling, JSON schema
   test_echo_filter.py    # echo filter unit tests
   test_integration.py    # real-model pipeline tests (opt-in, @pytest.mark.integration)
   test_jsonl_schema.py   # JSONL event schema validation

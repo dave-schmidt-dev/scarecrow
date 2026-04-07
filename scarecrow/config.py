@@ -83,6 +83,10 @@ class Config:
     SUMMARIZER_MLX_MODEL_ID: str = "mlx-community/gemma-4-26b-a4b-it-4bit"
     SUMMARIZER_MLX_KV_BITS: float | None = None  # TurboQuant KV cache quantization bits
 
+    # Diarization (pyannote-audio, optional)
+    DIARIZATION_MODEL: str = "pyannote/speaker-diarization-3.1"
+    DIARIZATION_DEVICE: str = "mps"  # MPS default; CPU fallback on failure
+
 
 # Module-level instance — all existing ``config.FOO`` references resolve here.
 config = Config()
@@ -120,3 +124,5 @@ SUMMARIZER_MLX_MODEL_ID = config.SUMMARIZER_MLX_MODEL_ID
 SUMMARIZER_MLX_KV_BITS = config.SUMMARIZER_MLX_KV_BITS
 SEGMENT_DURATION_SECONDS = config.SEGMENT_DURATION_SECONDS
 OBSIDIAN_VAULT_DIR = config.OBSIDIAN_VAULT_DIR
+DIARIZATION_MODEL = config.DIARIZATION_MODEL
+DIARIZATION_DEVICE = config.DIARIZATION_DEVICE

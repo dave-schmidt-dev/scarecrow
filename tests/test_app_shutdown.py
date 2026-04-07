@@ -657,3 +657,63 @@ async def test_shutdown_summary_saved_on_quit() -> None:
         assert hasattr(app, "_shutdown_summary")
         assert "Duration" in app._shutdown_summary
         assert "Words" in app._shutdown_summary
+
+
+# ---------------------------------------------------------------------------
+# Diarization phase in post_exit_cleanup
+# ---------------------------------------------------------------------------
+
+
+def test_post_exit_cleanup_calls_diarize_session(tmp_path: Path) -> None:
+    """post_exit_cleanup must call diarize_session before summarization."""
+    from scarecrow.config import Config
+    from scarecrow.session import Session
+
+    real_session = Session(base_dir=tmp_path)
+    # Write a minimal transcript with a SPEAKERS note
+    real_session.append_event(
+        {"type": "note", "tag": "SPEAKERS", "elapsed": 0, "text": "mic:Dave sys:Mike"}
+    )
+    real_session.append_event(
+        {"type": "transcript", "elapsed": 5, "text": "Hello", "source": "sys"}
+    )
+
+    cfg = Config(DEFAULT_RECORDINGS_DIR=tmp_path, OBSIDIAN_VAULT_DIR=None)
+    app = ScarecrowApp(cfg=cfg)
+    app._completed_session = real_session
+    app._current_segment = 1
+    app._skip_summary = False
+    app._sys_audio_enabled = True
+
+    diarize_calls = []
+
+    with (
+        patch(
+            "scarecrow.diarizer.diarize_session",
+            side_effect=lambda *a, **kw: diarize_calls.append(True) or False,
+        ),
+        patch("scarecrow.summarizer.summarize_session_segments", return_value=None),
+    ):
+        app.post_exit_cleanup()
+
+    assert len(diarize_calls) == 1
+
+
+def test_post_exit_cleanup_skips_diarize_on_quick_quit(tmp_path: Path) -> None:
+    """post_exit_cleanup must skip diarization when _skip_summary is True."""
+    from scarecrow.config import Config
+    from scarecrow.session import Session
+
+    real_session = Session(base_dir=tmp_path)
+
+    cfg = Config(DEFAULT_RECORDINGS_DIR=tmp_path, OBSIDIAN_VAULT_DIR=None)
+    app = ScarecrowApp(cfg=cfg)
+    app._completed_session = real_session
+    app._current_segment = 1
+    app._skip_summary = True
+    app._sys_audio_enabled = True
+
+    with patch("scarecrow.diarizer.diarize_session") as mock_diar:
+        app.post_exit_cleanup()
+
+    mock_diar.assert_not_called()

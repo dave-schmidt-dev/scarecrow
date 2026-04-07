@@ -517,7 +517,7 @@ class ScarecrowApp(App[None]):
             label = self.query_one("#notes-label", Static)
             label.update(
                 "Notes  [dim]"
-                "(/t task  /c context  /mn name  /f flush  /help · Enter)"
+                "(/t task  /c context  /sp speakers  /mn name  /f flush  /help · Enter)"
                 "[/dim]"
             )
 
@@ -914,6 +914,8 @@ class ScarecrowApp(App[None]):
             "Add a task note\n"
             "  /context, /c [dim]<text>[/dim]  "
             "Add background context (spelling, names — aids summary, not displayed)\n"
+            "  /speakers, /sp [dim]mic:X sys:Y,Z[/dim]  "
+            "Set speaker names for diarization\n"
             "  /mn [dim]<name>[/dim]         "
             "Name this session\n"
             "  /flush, /f          "
@@ -2030,6 +2032,29 @@ class ScarecrowApp(App[None]):
                     log.exception("Failed to compress sys audio segment %d", seg)
 
         if not self._skip_summary:
+            # Phase 2: Speaker diarization (optional, non-fatal)
+            try:
+                from scarecrow.diarizer import (
+                    _read_events as _diar_read_events,
+                )
+                from scarecrow.diarizer import (
+                    diarize_session,
+                )
+
+                transcript_path = session_dir / "transcript.jsonl"
+                if transcript_path.exists():
+                    events = _diar_read_events(transcript_path)
+                    diarize_session(
+                        session_dir,
+                        n_segments,
+                        events,
+                        sys_audio_enabled=self._sys_audio_enabled,
+                        progress_callback=lambda msg: print(f"  {msg}", flush=True),
+                    )
+            except Exception:
+                log.exception("Diarization failed; summarizing without speaker labels")
+
+            # Phase 3: Summarization
             print("  Generating summary…", flush=True)
             try:
                 from scarecrow.summarizer import summarize_session_segments
@@ -2167,6 +2192,8 @@ class ScarecrowApp(App[None]):
         "/t": "TASK",
         "/context": "CONTEXT",
         "/c": "CONTEXT",
+        "/speakers": "SPEAKERS",
+        "/sp": "SPEAKERS",
     }
 
     def _submit_note(self) -> None:
@@ -2207,7 +2234,18 @@ class ScarecrowApp(App[None]):
         )
 
         try:
-            self.query_one("#captions", RichLog).write(styled_line)
+            captions = self.query_one("#captions", RichLog)
+            captions.write(styled_line)
+            # Show parsed confirmation for /speakers command
+            if tag == "SPEAKERS":
+                from scarecrow.diarizer import (
+                    format_speakers_confirmation,
+                    parse_speakers_note,
+                )
+
+                info = parse_speakers_note(raw)
+                confirm = format_speakers_confirmation(info)
+                captions.write(f"  [dim italic]{confirm}[/dim italic]")
         except NoMatches:
             log.error("Note pane unavailable: %s", file_line)
 
@@ -2239,6 +2277,7 @@ class ScarecrowApp(App[None]):
             ("Tasks", "TASK"),
             ("Notes", "NOTE"),
             ("Context", "CONTEXT"),
+            ("Speakers", "SPEAKERS"),
         ]:
             count = self._note_counts.get(key, 0)
             if count > 0:

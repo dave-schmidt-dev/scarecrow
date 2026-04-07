@@ -169,6 +169,9 @@ _SYNTHESIS_PROMPT = (
     "Include all action items from every segment. Deduplicate exact matches "
     "but keep distinct items even if similar.\n"
     "Omit this section if there are none.\n\n"
+    "Preserve speaker attribution from per-segment summaries. If the same "
+    "person appears with different labels across segments, unify them where "
+    "possible.\n\n"
     "Output ONLY the three sections above. Do not add any other sections."
 )
 
@@ -219,6 +222,7 @@ def _build_prompt(events: list[dict]) -> tuple[str, str, int]:
     context_items: list[str] = []
     content_parts: list[str] = []
     elapsed_seconds = 0
+    has_speaker_labels = False
 
     for event in events:
         event_type = event.get("type", "")
@@ -238,11 +242,19 @@ def _build_prompt(events: list[dict]) -> tuple[str, str, int]:
 
         if event_type == "transcript":
             text = event.get("text", "").strip()
-            if text:
+            if not text:
+                continue
+            speaker = event.get("speaker")
+            if speaker:
+                content_parts.append(f"[{speaker}]: {text}")
+                has_speaker_labels = True
+            else:
                 content_parts.append(text)
 
         elif event_type == "note":
             tag = event.get("tag", "NOTE").upper()
+            if tag == "SPEAKERS":
+                continue  # consumed by diarization pipeline
             text = event.get("text", "").strip()
             if not text:
                 continue
@@ -270,9 +282,19 @@ def _build_prompt(events: list[dict]) -> tuple[str, str, int]:
             content_parts.append(f"[{label} {action}]")
 
     user_content = "\n".join(content_parts)
-    transcript_words = len(user_content.split())
+    # Exclude [Speaker]: prefixes from word count for scaling
+    transcript_words = len(_strip_speaker_prefixes(user_content).split())
 
     system_prompt = _scale_prompt(transcript_words)
+
+    if has_speaker_labels:
+        system_prompt += (
+            "\n\nSpeaker attribution: The transcript uses speaker labels from "
+            "automatic diarization. Attribute statements and commitments to "
+            'specific speakers. Write naturally: "Mike proposed X" not '
+            '"[Speaker A] proposed X".'
+        )
+
     if context_items:
         context_block = "\n\nBackground context provided by the user:\n" + "\n".join(
             f"- {item}" for item in context_items
@@ -280,6 +302,26 @@ def _build_prompt(events: list[dict]) -> tuple[str, str, int]:
         system_prompt += context_block
 
     return system_prompt, user_content, elapsed_seconds
+
+
+def _strip_speaker_prefixes(text: str) -> str:
+    """Remove [Speaker]: prefixes from text for word counting."""
+    import re
+
+    return re.sub(r"\[[^\]]+\]: ", "", text)
+
+
+def _apply_speaker_labels(
+    events: list[dict], session_dir: Path, segment: int, segment_elapsed_offset: int = 0
+) -> list[dict]:
+    """Apply speaker labels from diarization sidecars if available."""
+    try:
+        from scarecrow.diarizer import label_events
+
+        return label_events(events, session_dir, segment, segment_elapsed_offset)
+    except Exception:
+        log.debug("No diarization labels applied", exc_info=True)
+        return events
 
 
 # ---------------------------------------------------------------------------
@@ -687,6 +729,9 @@ def summarize_session(
         if not events:
             return _write_error_summary(session_dir, "Transcript is empty")
 
+        # Apply speaker labels from diarization (if available)
+        events = _apply_speaker_labels(events, session_dir, segment=1)
+
         system_prompt, user_content, elapsed_seconds = _build_prompt(events)
         if not user_content.strip():
             return _write_error_summary(session_dir, "No transcribed speech found")
@@ -825,8 +870,26 @@ def summarize_session_segments(
         if not events:
             return _write_error_summary(session_dir, "Transcript is empty")
 
+        # Compute segment elapsed offsets for diarization alignment
+        seg_offsets = [0]
+        for ev in events:
+            if ev.get("type") == "segment_boundary":
+                seg_offsets.append(int(ev.get("elapsed", 0)))
+        while len(seg_offsets) < n_segments:
+            seg_offsets.append(seg_offsets[-1] if seg_offsets else 0)
+
         # Estimate ctx from the largest segment (GGUF needs this at load time)
         segment_events = _extract_segment_events(events, n_segments)
+
+        # Apply speaker labels per segment
+        for i, seg_evs in enumerate(segment_events):
+            segment_events[i] = _apply_speaker_labels(
+                seg_evs,
+                session_dir,
+                segment=i + 1,
+                segment_elapsed_offset=seg_offsets[i],
+            )
+
         max_tokens = 0
         for seg_evs in segment_events:
             sp, uc, _ = _build_prompt(seg_evs)

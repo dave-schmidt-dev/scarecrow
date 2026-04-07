@@ -49,10 +49,15 @@
 - [x] Replace Gemma 3 27B (GGUF) with Gemma 4 26B MoE (MLX) — 8x faster, 2.4x less RAM, comparable quality
 - [x] Remove SUMMARIZER_MIN_CTX (128K floor) — dynamic sizing handles this correctly
 
-## Diarization
-- Speaker identification/labeling in transcripts ("Speaker A", "Speaker B")
-- Explore pyannote-audio or NeMo diarization models as a post-processing layer
-- Would pair well with system audio for meeting transcription
+## Diarization (evaluated — integration planned)
+- [x] Benchmark pyannote-audio 4.0 with speaker-diarization-3.1 model
+  - 95.2% accuracy on compressed mono Signal call audio (2 speakers, human-annotated ground truth)
+  - MPS acceleration: 0.04x RTF (38-min file in 91s), identical accuracy to CPU
+  - community-1 model tested: no improvement over 3.1
+  - Results: `benchmarks/diarization_eval/`
+- [x] Integration: `/speakers mic:Dave sys:Mike,Justin` command, post-session diarization, speaker-attributed summaries
+  - Plan: `~/.claude/plans/majestic-noodling-toast.md` (reviewed by contrarian x2 + Codex)
+  - New `scarecrow/diarizer.py` module, summarizer prompt changes, MPS default with CPU fallback
 
 ## Auto-summarization (done)
 - Local LLM summarization on shutdown via Gemma 4 26B MoE (MLX default, GGUF fallback)

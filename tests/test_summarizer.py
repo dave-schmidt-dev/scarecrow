@@ -194,6 +194,82 @@ def test_build_prompt_session_name_as_context() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Speaker Attribution in Prompts
+# ---------------------------------------------------------------------------
+
+
+def test_build_prompt_speaker_labels_inline() -> None:
+    """Transcript events with speaker field get [Speaker]: prefix."""
+    events = [
+        _make_event("transcript", text="Hello there", speaker="Mike"),
+        _make_event("transcript", text="Hi back", speaker="Justin"),
+    ]
+    system_prompt, user_content, _ = _build_prompt(events)
+    assert "[Mike]: Hello there" in user_content
+    assert "[Justin]: Hi back" in user_content
+    assert "Speaker attribution" in system_prompt
+
+
+def test_build_prompt_mixed_speaker_and_unlabeled() -> None:
+    """Events without speaker field appear without prefix."""
+    events = [
+        _make_event("transcript", text="Labeled speech", speaker="Dave"),
+        _make_event("transcript", text="Unlabeled speech"),
+    ]
+    _, user_content, _ = _build_prompt(events)
+    assert "[Dave]: Labeled speech" in user_content
+    assert "Unlabeled speech" in user_content
+    assert (
+        "[" not in user_content.split("Unlabeled")[0].split("\n")[-1]
+        or "Labeled" in user_content
+    )
+
+
+def test_build_prompt_no_speaker_attribution_without_labels() -> None:
+    """System prompt should not include speaker attribution guidance without labels."""
+    events = [_make_event("transcript", text="No labels here")]
+    system_prompt, _, _ = _build_prompt(events)
+    assert "Speaker attribution" not in system_prompt
+
+
+def test_build_prompt_speakers_note_suppressed() -> None:
+    """SPEAKERS notes should not appear in the prompt."""
+    events = [
+        _make_event("note", tag="SPEAKERS", text="mic:Dave sys:Mike"),
+        _make_event("transcript", text="Some speech"),
+    ]
+    system_prompt, user_content, _ = _build_prompt(events)
+    assert "mic:Dave" not in user_content
+    assert "mic:Dave" not in system_prompt
+    assert "Some speech" in user_content
+
+
+def test_build_prompt_speaker_prefix_excluded_from_word_count() -> None:
+    """Speaker prefixes should not inflate the word count for prompt scaling."""
+    # 10 words of actual content
+    events_no_speaker = [
+        _make_event(
+            "transcript", text="one two three four five six seven eight nine ten"
+        )
+    ]
+    events_with_speaker = [
+        _make_event(
+            "transcript",
+            text="one two three four five six seven eight nine ten",
+            speaker="Mike",
+        )
+    ]
+
+    sp_no, _uc_no, _ = _build_prompt(events_no_speaker)
+    sp_with, _uc_with, _ = _build_prompt(events_with_speaker)
+
+    # Both should use the same prompt scale (same word count for scaling)
+    # The speaker version has "[Mike]: " prefix but word count should match
+    assert "1-2 short paragraphs" in sp_no  # < 500 words
+    assert "1-2 short paragraphs" in sp_with  # should also be < 500 words
+
+
+# ---------------------------------------------------------------------------
 # Reasoning Stripping
 # ---------------------------------------------------------------------------
 

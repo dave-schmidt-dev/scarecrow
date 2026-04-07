@@ -2,6 +2,10 @@
 
 Bug entries are inline under their date heading. A squashed bug must reference a regression test.
 
+## 2026-04-06
+
+- **Speaker diarization integration.** Added `scarecrow/diarizer.py` — post-session speaker diarization using pyannote-audio 4.0 (`speaker-diarization-3.1` model). New `/speakers` command (`/sp` shorthand) accepts structured syntax (`/sp mic:Dave sys:Mike,Justin`) to name speakers per channel. Diarization runs automatically in the post-exit pipeline between FLAC compression and summarization; MPS acceleration by default with CPU fallback. Writes `.diarization.json` sidecar files per segment. Summarizer reads speaker labels via `label_events()` and produces speaker-attributed text (`[Mike]: Hello` → "Mike said hello"). SPEAKERS notes suppressed from summarizer prompt; word count excludes speaker prefixes for prompt scaling. Synthesis prompt updated to preserve speaker attribution across segments. Partial failure cleanup: if diarization crashes mid-session, all sidecar files are deleted so the summarizer sees complete diarization or none. Sessions without `/speakers` behave identically to before. `resummarize.py` picks up diarization labels automatically from disk.
+
 ## 2026-04-05
 
 - **Added project CLAUDE.md, AGENTS.md, and path-scoped Python rules.** Created `CLAUDE.md` (Claude Code behavioral rules), `AGENTS.md` (Codex/multi-agent conventions), and `.claude/rules/python-conventions.md` (path-scoped to `**/*.py` — covers test runner, uv sync, non-editable install model, ruff config). Cleaned up `.claude/settings.local.json` to remove broad `uv run:*` wildcard (which auto-approved `uv run pytest`, contradicting the test runner rule) and one-off junk permissions.

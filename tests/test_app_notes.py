@@ -276,6 +276,50 @@ async def test_note_event_has_timestamp_and_elapsed(tmp_path: Path) -> None:
     )
 
 
+async def test_speakers_command_writes_speakers_note(tmp_path: Path) -> None:
+    """The /speakers command must write a SPEAKERS-tagged note to the session."""
+    from scarecrow.session import Session
+
+    real_session = Session(base_dir=tmp_path)
+
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        app._session = real_session
+        input_widget = app.query_one("#note-input", Input)
+        input_widget.value = "/sp mic:Dave sys:Mike,Justin"
+
+        app._submit_note()
+        await pilot.pause()
+
+    events = _read_jsonl(real_session.transcript_path)
+    speaker_events = [e for e in events if e.get("tag") == "SPEAKERS"]
+    assert len(speaker_events) == 1
+    assert "mic:Dave" in speaker_events[0]["text"]
+    assert "sys:Mike,Justin" in speaker_events[0]["text"]
+
+
+async def test_speakers_command_shows_confirmation() -> None:
+    """The /speakers command must show a parsed confirmation in the transcript pane."""
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        input_widget = app.query_one("#note-input", Input)
+        input_widget.value = "/speakers mic:Dave sys:Mike"
+
+        captions = app.query_one("#captions", RichLog)
+        initial_lines = len(captions.lines)
+
+        app._submit_note()
+        await pilot.pause()
+
+        all_text = " ".join(str(line) for line in captions.lines[initial_lines:])
+        assert "Speakers set" in all_text
+        assert "Dave" in all_text
+
+
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_mn_command_renames_session(mock_session_cls, mock_recorder_cls) -> None:
