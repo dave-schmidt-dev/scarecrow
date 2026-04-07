@@ -1,4 +1,4 @@
-"""Unit tests for SystemAudioCapture and find_blackhole_device."""
+"""Unit tests for SystemAudioCapture and find_system_audio_device."""
 
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 # ---------------------------------------------------------------------------
-# find_blackhole_device
+# find_system_audio_device
 # ---------------------------------------------------------------------------
 
 
@@ -15,8 +15,8 @@ def _make_device(name: str, max_input_channels: int) -> dict:
     return {"name": name, "max_input_channels": max_input_channels}
 
 
-def test_find_blackhole_not_found() -> None:
-    """find_blackhole_device returns None when no BlackHole device exists."""
+def test_find_system_audio_device_not_found() -> None:
+    """find_system_audio_device returns None when no matching device exists."""
     devices = [
         _make_device("Built-in Microphone", 1),
         _make_device("USB Audio", 2),
@@ -24,40 +24,40 @@ def test_find_blackhole_not_found() -> None:
     mock_sd = MagicMock()
     mock_sd.query_devices.return_value = devices
     with patch.dict("sys.modules", {"sounddevice": mock_sd}):
-        from scarecrow.sys_audio import find_blackhole_device
+        from scarecrow.sys_audio import find_system_audio_device
 
-        result = find_blackhole_device()
+        result = find_system_audio_device("Scarecrow Tap")
     assert result is None
 
 
-def test_find_blackhole_found() -> None:
-    """find_blackhole_device returns the correct index for 'BlackHole 2ch'."""
+def test_find_system_audio_device_found() -> None:
+    """find_system_audio_device returns the correct index."""
     devices = [
         _make_device("Built-in Microphone", 1),
-        _make_device("BlackHole 2ch", 2),
+        _make_device("Scarecrow Tap", 2),
         _make_device("USB Audio", 2),
     ]
     mock_sd = MagicMock()
     mock_sd.query_devices.return_value = devices
     with patch.dict("sys.modules", {"sounddevice": mock_sd}):
-        from scarecrow.sys_audio import find_blackhole_device
+        from scarecrow.sys_audio import find_system_audio_device
 
-        result = find_blackhole_device()
+        result = find_system_audio_device("Scarecrow Tap")
     assert result == 1
 
 
-def test_find_blackhole_case_insensitive() -> None:
-    """find_blackhole_device matches 'blackhole' (lowercase) against 'BlackHole 2ch'."""
+def test_find_system_audio_device_case_insensitive() -> None:
+    """find_system_audio_device matches case-insensitively."""
     devices = [
         _make_device("Built-in Microphone", 1),
-        _make_device("BlackHole 2ch", 2),
+        _make_device("Scarecrow Tap", 2),
     ]
     mock_sd = MagicMock()
     mock_sd.query_devices.return_value = devices
     with patch.dict("sys.modules", {"sounddevice": mock_sd}):
-        from scarecrow.sys_audio import find_blackhole_device
+        from scarecrow.sys_audio import find_system_audio_device
 
-        result = find_blackhole_device(name="blackhole")
+        result = find_system_audio_device(name="scarecrow tap")
     assert result == 1
 
 

@@ -12,11 +12,10 @@ from tests.helpers import _mock_recorder, _mock_sys_capture, _mock_transcriber, 
 # ---------------------------------------------------------------------------
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
-async def test_mute_sys_toggles_flag(mock_session, mock_rec, mock_sac, mock_bh) -> None:
+async def test_mute_sys_toggles_flag(mock_session, mock_rec, mock_sac) -> None:
     """action_mute_sys() sets _sys_muted to True on first call."""
     mock_sys = _mock_sys_capture()
     mock_sac.return_value = mock_sys
@@ -32,13 +31,10 @@ async def test_mute_sys_toggles_flag(mock_session, mock_rec, mock_sac, mock_bh) 
         assert app._sys_muted is True
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
-async def test_mute_sys_pauses_capture(
-    mock_session, mock_rec, mock_sac, mock_bh
-) -> None:
+async def test_mute_sys_pauses_capture(mock_session, mock_rec, mock_sac) -> None:
     """action_mute_sys() calls pause() on the sys capture."""
     mock_sys = _mock_sys_capture()
     mock_sac.return_value = mock_sys
@@ -54,13 +50,10 @@ async def test_mute_sys_pauses_capture(
         mock_sys.pause.assert_called_once()
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
-async def test_unmute_sys_resumes_capture(
-    mock_session, mock_rec, mock_sac, mock_bh
-) -> None:
+async def test_unmute_sys_resumes_capture(mock_session, mock_rec, mock_sac) -> None:
     """action_mute_sys() twice: second call resumes the capture."""
     mock_sys = _mock_sys_capture()
     mock_sac.return_value = mock_sys
@@ -78,12 +71,11 @@ async def test_unmute_sys_resumes_capture(
         assert app._sys_muted is False
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_mute_sys_noop_when_not_recording(
-    mock_session, mock_rec, mock_sac, mock_bh
+    mock_session, mock_rec, mock_sac
 ) -> None:
     """action_mute_sys() does nothing when state is not RECORDING."""
     mock_sys = _mock_sys_capture()
@@ -121,13 +113,10 @@ async def test_mute_sys_noop_when_no_capture(mock_session, mock_rec) -> None:
         assert app._sys_muted is False
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
-async def test_info_bar_reflects_sys_muted(
-    mock_session, mock_rec, mock_sac, mock_bh
-) -> None:
+async def test_info_bar_reflects_sys_muted(mock_session, mock_rec, mock_sac) -> None:
     """After action_mute_sys(), InfoBar.sys_muted is True."""
     mock_sys = _mock_sys_capture()
     mock_sac.return_value = mock_sys

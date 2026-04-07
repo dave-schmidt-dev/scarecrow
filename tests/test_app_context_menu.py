@@ -14,12 +14,11 @@ from tests.helpers import _mock_recorder, _mock_sys_capture, _sys_app
 # ---------------------------------------------------------------------------
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_infobar_click_mic_region_toggles_mute(
-    mock_session, mock_rec, mock_sac, mock_bh
+    mock_session, mock_rec, mock_sac
 ) -> None:
     """Clicking the mic region of the InfoBar toggles mic mute."""
     mock_sys = _mock_sys_capture()
@@ -41,12 +40,11 @@ async def test_infobar_click_mic_region_toggles_mute(
         assert app._mic_muted is True
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_infobar_click_sys_region_toggles_mute(
-    mock_session, mock_rec, mock_sac, mock_bh
+    mock_session, mock_rec, mock_sac
 ) -> None:
     """Clicking the sys region of the InfoBar toggles sys mute."""
     mock_sys = _mock_sys_capture()
@@ -71,12 +69,11 @@ async def test_infobar_click_sys_region_toggles_mute(
 # ---------------------------------------------------------------------------
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_mute_mic_writes_transcript_event(
-    mock_session, mock_rec, mock_sac, mock_bh
+    mock_session, mock_rec, mock_sac
 ) -> None:
     """action_mute_mic() writes a mute event to the session transcript."""
     mock_sys = _mock_sys_capture()
@@ -100,12 +97,11 @@ async def test_mute_mic_writes_transcript_event(
         assert len(mute_calls) == 1
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_unmute_sys_writes_transcript_event(
-    mock_session, mock_rec, mock_sac, mock_bh
+    mock_session, mock_rec, mock_sac
 ) -> None:
     """Unmuting sys writes an unmute event to the session transcript."""
     mock_sys = _mock_sys_capture()
@@ -129,12 +125,11 @@ async def test_unmute_sys_writes_transcript_event(
         assert len(unmute_calls) == 1
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_launch_flag_mute_writes_transcript_event(
-    mock_session, mock_rec, mock_sac, mock_bh
+    mock_session, mock_rec, mock_sac
 ) -> None:
     """--sys-only flag writes initial mute event for mic at recording start."""
     mock_sys = _mock_sys_capture()
@@ -159,13 +154,10 @@ async def test_launch_flag_mute_writes_transcript_event(
 # ---------------------------------------------------------------------------
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
-async def test_context_menu_toggle_mute_mic(
-    mock_session, mock_rec, mock_sac, mock_bh
-) -> None:
+async def test_context_menu_toggle_mute_mic(mock_session, mock_rec, mock_sac) -> None:
     """Context menu 'toggle_mute' for mic calls action_mute_mic."""
     mock_sac.return_value = _mock_sys_capture()
     mock_rec.return_value = _mock_recorder()
@@ -180,13 +172,10 @@ async def test_context_menu_toggle_mute_mic(
         assert app._mic_muted is True
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
-async def test_context_menu_toggle_mute_sys(
-    mock_session, mock_rec, mock_sac, mock_bh
-) -> None:
+async def test_context_menu_toggle_mute_sys(mock_session, mock_rec, mock_sac) -> None:
     """Context menu 'toggle_mute' for sys calls action_mute_sys."""
     mock_sac.return_value = _mock_sys_capture()
     mock_rec.return_value = _mock_recorder()
@@ -201,13 +190,10 @@ async def test_context_menu_toggle_mute_sys(
         assert app._sys_muted is True
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
-async def test_context_menu_vad_presets_mic(
-    mock_session, mock_rec, mock_sac, mock_bh
-) -> None:
+async def test_context_menu_vad_presets_mic(mock_session, mock_rec, mock_sac) -> None:
     """Each VAD preset mutates the correct mic config fields."""
     mock_sac.return_value = _mock_sys_capture()
     mock_rec.return_value = _mock_recorder()
@@ -224,13 +210,10 @@ async def test_context_menu_vad_presets_mic(
             assert gain == app._cfg.MIC_GAIN
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
-async def test_context_menu_vad_presets_sys(
-    mock_session, mock_rec, mock_sac, mock_bh
-) -> None:
+async def test_context_menu_vad_presets_sys(mock_session, mock_rec, mock_sac) -> None:
     """Each VAD preset mutates the correct sys config fields."""
     mock_sac.return_value = _mock_sys_capture()
     mock_rec.return_value = _mock_recorder()
@@ -247,13 +230,10 @@ async def test_context_menu_vad_presets_sys(
             assert gain == app._cfg.SYS_GAIN
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
-async def test_context_menu_dismiss_no_action(
-    mock_session, mock_rec, mock_sac, mock_bh
-) -> None:
+async def test_context_menu_dismiss_no_action(mock_session, mock_rec, mock_sac) -> None:
     """Dismissing the context menu (None result) does nothing."""
     mock_sac.return_value = _mock_sys_capture()
     mock_rec.return_value = _mock_recorder()
@@ -269,12 +249,11 @@ async def test_context_menu_dismiss_no_action(
         assert app._mic_muted is False
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_context_menu_push_select_dismiss(
-    mock_session, mock_rec, mock_sac, mock_bh
+    mock_session, mock_rec, mock_sac
 ) -> None:
     """Pushing the context menu, selecting an option, and dismissing does not crash."""
     mock_sac.return_value = _mock_sys_capture()
@@ -306,13 +285,10 @@ async def test_context_menu_push_select_dismiss(
         )
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
-async def test_context_menu_escape_dismiss(
-    mock_session, mock_rec, mock_sac, mock_bh
-) -> None:
+async def test_context_menu_escape_dismiss(mock_session, mock_rec, mock_sac) -> None:
     """Pressing Escape dismisses the context menu without action."""
     mock_sac.return_value = _mock_sys_capture()
     mock_rec.return_value = _mock_recorder()
@@ -335,13 +311,10 @@ async def test_context_menu_escape_dismiss(
         assert app._mic_muted is False  # no action taken
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
-async def test_non_left_click_ignored(
-    mock_session, mock_rec, mock_sac, mock_bh
-) -> None:
+async def test_non_left_click_ignored(mock_session, mock_rec, mock_sac) -> None:
     """Non-left-click on the mic region is ignored (no mute toggle)."""
     mock_sac.return_value = _mock_sys_capture()
     mock_rec.return_value = _mock_recorder()

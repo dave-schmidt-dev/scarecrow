@@ -308,7 +308,7 @@ class ContextMenuScreen(ModalScreen[str | None]):
         if isinstance(all_devices, dict):
             all_devices = [all_devices]
 
-        sys_dev_id = app._sys_device_id  # BlackHole device — exclude
+        sys_dev_id = app._sys_device_id  # Tap aggregate device — exclude
         input_devices: list[tuple[int, str]] = []
         for i, dev in enumerate(all_devices):
             if not isinstance(dev, dict):
@@ -318,7 +318,7 @@ class ContextMenuScreen(ModalScreen[str | None]):
             if i == sys_dev_id:
                 continue
             name: str = dev.get("name", f"Device {i}")
-            if "blackhole" in name.lower():
+            if "scarecrow tap" in name.lower():
                 continue
             input_devices.append((i, name))
             if len(input_devices) >= 8:
@@ -396,11 +396,11 @@ class ScarecrowApp(App[None]):
         "normal": 1.0,
         "high": 2.0,
     }
-    # Sys presets are lower — BlackHole digital loopback is near full-scale
+    # Sys presets — Process Tap at system mix level, no attenuation needed
     _SYS_PRESETS: ClassVar[dict[str, float]] = {
-        "low": 0.125,
-        "normal": 0.25,
-        "high": 0.5,
+        "low": 0.5,
+        "normal": 1.0,
+        "high": 2.0,
     }
 
     state: reactive[AppState] = reactive(AppState.IDLE)
@@ -416,6 +416,7 @@ class ScarecrowApp(App[None]):
         sys_audio: bool = True,
         mic_muted: bool = False,
         sys_muted: bool = False,
+        tap_handle: object | None = None,
     ) -> None:
         super().__init__()
         self._cfg = cfg or config.config
@@ -463,6 +464,7 @@ class ScarecrowApp(App[None]):
         self._rotation_pending: bool = False
         self._rotation_poll_count: int = 0
         self._sys_device_id: int | None = None
+        self._tap_handle = tap_handle  # TapHandle from audio_tap.py (pre-created)
         self._mic_device_id: int | None = None  # tracks active mic device for menu
         # Quit-flow state
         self._skip_summary: bool = False
@@ -681,7 +683,7 @@ class ScarecrowApp(App[None]):
             log.exception("Failed to start new mic recorder after rotation")
             self._audio_recorder = None
 
-        if self._sys_audio_enabled and self._sys_device_id is not None:
+        if self._sys_audio_enabled and self._tap_handle is not None:
             from scarecrow.sys_audio import SystemAudioCapture
 
             new_sys_path = self._session.audio_sys_path_for_segment(
@@ -690,7 +692,7 @@ class ScarecrowApp(App[None]):
             try:
                 self._sys_capture = SystemAudioCapture(
                     output_path=new_sys_path,
-                    device=self._sys_device_id,
+                    device=self._tap_handle.device_index,
                 )
                 self._sys_capture._gain = self._cfg.SYS_GAIN
                 self._sys_capture.start()
@@ -987,9 +989,11 @@ class ScarecrowApp(App[None]):
     def _on_sys_batch_result(self, text: str, batch_elapsed: int) -> None:
         if self._ignore_batch_results:
             return
+        # Record sys text so the mic echo filter can suppress mic bleed.
+        # Never suppress sys — it's the authoritative source for system audio.
+        # Mic picks up speaker bleed and transcribes faster (lower VAD threshold),
+        # which would cause the echo filter to wrongly suppress the real source.
         self._echo_filter.record_sys(text)
-        if self._echo_filter.is_sys_echo(text):
-            return
         self._post_to_ui(
             functools.partial(self._record_transcript, source="sys"),
             text,
@@ -1338,7 +1342,7 @@ class ScarecrowApp(App[None]):
         result = self._sys_capture.drain_to_silence(
             silence_threshold=self._cfg.SYS_VAD_SILENCE_THRESHOLD,
             min_silence_ms=self._cfg.SYS_VAD_MIN_SILENCE_MS,
-            max_buffer_seconds=self._cfg.VAD_MAX_BUFFER_SECONDS,
+            max_buffer_seconds=self._cfg.SYS_VAD_MAX_BUFFER_SECONDS,
             min_buffer_seconds=self._cfg.SYS_VAD_MIN_BUFFER_SECONDS,
         )
         if result is None:
@@ -1405,6 +1409,14 @@ class ScarecrowApp(App[None]):
 
         self._bind_callbacks()
         self._ignore_batch_results = False
+
+        # The tap handle is pre-created in __main__ (before PortAudio init).
+        if self._sys_audio_enabled and self._tap_handle is not None:
+            self._sys_device_id = self._tap_handle.device_index
+        elif self._sys_audio_enabled:
+            self._sys_audio_enabled = False
+            log.warning("No tap handle — system audio disabled")
+
         try:
             self._session = Session(base_dir=self._cfg.DEFAULT_RECORDINGS_DIR)
         except Exception as exc:
@@ -1435,27 +1447,19 @@ class ScarecrowApp(App[None]):
             self._session = None
             return
 
-        if self._sys_audio_enabled:
-            from scarecrow.sys_audio import SystemAudioCapture, find_blackhole_device
+        if self._sys_audio_enabled and self._tap_handle is not None:
+            from scarecrow.sys_audio import SystemAudioCapture
 
-            dev = find_blackhole_device(self._cfg.SYSTEM_AUDIO_DEVICE)
-            self._sys_device_id = dev
-            if dev is not None:
-                try:
-                    self._sys_capture = SystemAudioCapture(
-                        output_path=self._session.audio_sys_path,
-                        device=dev,
-                    )
-                    self._sys_capture._gain = self._cfg.SYS_GAIN
-                    self._sys_capture.start()
-                except Exception:
-                    log.warning("Failed to start system audio capture", exc_info=True)
-                    self._sys_capture = None
-            else:
-                log.info(
-                    "System audio device '%s' not found — mic only",
-                    self._cfg.SYSTEM_AUDIO_DEVICE,
+            try:
+                self._sys_capture = SystemAudioCapture(
+                    output_path=self._session.audio_sys_path,
+                    device=self._tap_handle.device_index,
                 )
+                self._sys_capture._gain = self._cfg.SYS_GAIN
+                self._sys_capture.start()
+            except Exception:
+                log.warning("Failed to start system audio capture", exc_info=True)
+                self._sys_capture = None
 
         self._batch_timer = self.set_interval(
             self._cfg.VAD_POLL_INTERVAL_MS / 1000,
@@ -2092,6 +2096,14 @@ class ScarecrowApp(App[None]):
                 self._sys_capture.stop()
             except Exception:
                 log.exception("Failed to stop system audio capture")
+        if self._tap_handle is not None:
+            try:
+                from scarecrow.audio_tap import destroy_system_tap
+
+                destroy_system_tap(self._tap_handle)
+            except Exception:
+                log.exception("Failed to destroy system audio tap")
+            self._tap_handle = None
 
     def _cleanup_flush_audio(self, include_ui: bool) -> None:
         """Wait for in-flight batch workers and flush the final audio buffer.

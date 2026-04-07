@@ -59,7 +59,7 @@ class Session:
 
     @property
     def audio_sys_path(self) -> Path:
-        """Returns path to system audio WAV (BlackHole) in session dir."""
+        """Returns path to system audio WAV in session dir."""
         return self._session_dir / "audio_sys.wav"
 
     def audio_path_for_segment(self, n: int) -> Path:

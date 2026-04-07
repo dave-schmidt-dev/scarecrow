@@ -165,7 +165,7 @@ Inline notes are typed in the notes pane and submitted with Enter. The tag is de
 
 Transcript dividers show the start time of each audio batch window (not the time the model finishes processing). Dividers appear at most every 60 seconds. Consecutive batch results are joined into flowing paragraphs between dividers.
 
-**System audio capture (on by default):** Scarecrow captures system audio via BlackHole and transcribes both channels through Parakeet. On startup, the default output switches to "Scarecrow Output" (a Multi-Output Device routing audio to speakers + BlackHole); on exit, the original output is restored. Mic transcripts display normally; sys transcripts show with a dim `◁` prefix. An echo filter suppresses mic duplicates when not using headphones. Per-source mute via `Ctrl+V` menu. Requires one-time setup of "Scarecrow Output" in Audio MIDI Setup. Use `--no-sys-audio` to disable.
+**System audio capture (on by default):** Scarecrow captures system audio via the macOS Process Tap API (macOS 14.2+) and transcribes both channels through Parakeet. No third-party software or Audio MIDI Setup needed. First launch prompts for System Audio Recording permission via your terminal. Mic transcripts display normally; sys transcripts show with a dim `◁` prefix. An echo filter suppresses mic duplicates when not using headphones. Per-source mute via `Ctrl+V` menu. Use `--no-sys-audio` to disable.
 
 ## Session files
 
@@ -175,7 +175,7 @@ Each recording session creates a timestamped directory:
 recordings/
   2026-03-24_07-48-36/
     audio.flac           # mic recording, lossless FLAC (compressed from WAV on shutdown)
-    audio_sys.flac       # system audio (BlackHole)
+    audio_sys.flac       # system audio (Process Tap)
     transcript.jsonl     # JSON Lines transcript — one event per line
     diarization_sys.json # speaker diarization sidecar (if /speakers was used)
     summary.md           # LLM-generated session summary (auto-created on shutdown)
@@ -323,7 +323,7 @@ tests/
   test_app_mute_controls.py  # mic and sys mute/unmute controls
   test_app_sys_vad.py    # system audio VAD and auto-segmentation
   test_app_context_menu.py   # context menu, click-to-mute, mute transcript events
-  test_audio_routing.py  # audio output device routing
+  test_audio_tap.py     # Process Tap lifecycle, version gate, cleanup
   test_diarizer.py       # speaker diarization parser, labeling, JSON schema
   test_echo_filter.py    # echo filter unit tests
   test_integration.py    # real-model pipeline tests (opt-in, @pytest.mark.integration)

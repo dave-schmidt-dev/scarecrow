@@ -14,13 +14,10 @@ from tests.helpers import _mock_recorder, _mock_sys_capture, _mock_transcriber, 
 # ---------------------------------------------------------------------------
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
-async def test_sys_vad_calls_drain_to_silence(
-    mock_session, mock_rec, mock_sac, mock_bh
-) -> None:
+async def test_sys_vad_calls_drain_to_silence(mock_session, mock_rec, mock_sac) -> None:
     """_sys_vad_transcribe() calls drain_to_silence on the sys capture."""
     mock_sys = _mock_sys_capture()
     mock_sys.drain_to_silence.return_value = None
@@ -54,12 +51,11 @@ async def test_sys_vad_skips_when_no_sys_capture(mock_session, mock_rec) -> None
         app._sys_vad_transcribe()
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_sys_vad_submits_batch_when_audio_ready(
-    mock_session, mock_rec, mock_sac, mock_bh
+    mock_session, mock_rec, mock_sac
 ) -> None:
     """_sys_vad_transcribe() submits a batch future when drain returns audio."""
     mock_sys = _mock_sys_capture()
@@ -82,12 +78,11 @@ async def test_sys_vad_submits_batch_when_audio_ready(
         assert len(app._batch_futures) > 0
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_on_vad_poll_runs_sys_vad_when_not_muted(
-    mock_session, mock_rec, mock_sac, mock_bh
+    mock_session, mock_rec, mock_sac
 ) -> None:
     """_on_vad_poll() calls drain_to_silence when sys capture present and unmuted."""
     mock_sys = _mock_sys_capture()
@@ -106,12 +101,11 @@ async def test_on_vad_poll_runs_sys_vad_when_not_muted(
         mock_sys.drain_to_silence.assert_called()
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_on_vad_poll_skips_sys_vad_when_muted(
-    mock_session, mock_rec, mock_sac, mock_bh
+    mock_session, mock_rec, mock_sac
 ) -> None:
     """_on_vad_poll() does not call drain_to_silence when sys is muted."""
     mock_sys = _mock_sys_capture()
@@ -135,12 +129,11 @@ async def test_on_vad_poll_skips_sys_vad_when_muted(
 # ---------------------------------------------------------------------------
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_check_segment_boundary_triggers_at_threshold(
-    mock_session, mock_rec, mock_sac, mock_bh
+    mock_session, mock_rec, mock_sac
 ) -> None:
     """_check_segment_boundary increments _current_segment at the boundary."""
     mock_sac.return_value = _mock_sys_capture()
@@ -162,12 +155,11 @@ async def test_check_segment_boundary_triggers_at_threshold(
         assert app._rotation_pending is False
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_check_segment_boundary_skips_when_paused(
-    mock_session, mock_rec, mock_sac, mock_bh
+    mock_session, mock_rec, mock_sac
 ) -> None:
     """_check_segment_boundary does nothing when state is PAUSED."""
     mock_sac.return_value = _mock_sys_capture()
@@ -184,12 +176,11 @@ async def test_check_segment_boundary_skips_when_paused(
         assert app._current_segment == 1  # No rotation while paused
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_check_segment_boundary_no_trigger_before_threshold(
-    mock_session, mock_rec, mock_sac, mock_bh
+    mock_session, mock_rec, mock_sac
 ) -> None:
     """_check_segment_boundary does nothing before the duration is reached."""
     mock_sac.return_value = _mock_sys_capture()

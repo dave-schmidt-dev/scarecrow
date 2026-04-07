@@ -15,12 +15,11 @@ from tests.helpers import _mock_recorder, _mock_sys_capture, _mock_transcriber, 
 # ---------------------------------------------------------------------------
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_start_recording_with_blackhole_starts_sys_capture(
-    mock_session, mock_rec, mock_sac, mock_bh
+    mock_session, mock_rec, mock_sac
 ) -> None:
     """When BlackHole is found, SystemAudioCapture.start() is called."""
     mock_sys = _mock_sys_capture()
@@ -37,18 +36,17 @@ async def test_start_recording_with_blackhole_starts_sys_capture(
         assert app._sys_capture is mock_sys
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=None)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
-async def test_start_recording_without_blackhole_no_sys_capture(
-    mock_session, mock_rec, mock_sac, mock_bh
+async def test_start_recording_without_tap_no_sys_capture(
+    mock_session, mock_rec, mock_sac
 ) -> None:
-    """When no BlackHole device is found, _sys_capture stays None."""
+    """When no tap handle is provided, _sys_capture stays None."""
     mock_rec.return_value = _mock_recorder()
     mock_session.return_value = MagicMock()
 
-    async with _sys_app().run_test() as pilot:
+    async with _sys_app(tap_handle=None).run_test() as pilot:
         await pilot.press("enter")
         await pilot.pause(delay=0.3)
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
@@ -57,12 +55,11 @@ async def test_start_recording_without_blackhole_no_sys_capture(
         mock_sac.assert_not_called()
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_start_recording_sys_capture_exception_mic_continues(
-    mock_session, mock_rec, mock_sac, mock_bh
+    mock_session, mock_rec, mock_sac
 ) -> None:
     """If sys capture .start() raises, app stays RECORDING with _sys_capture=None."""
     mock_sys = _mock_sys_capture()
@@ -79,12 +76,11 @@ async def test_start_recording_sys_capture_exception_mic_continues(
         assert app._sys_capture is None
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_info_bar_has_sys_audio_when_capture_present(
-    mock_session, mock_rec, mock_sac, mock_bh
+    mock_session, mock_rec, mock_sac
 ) -> None:
     """InfoBar.has_sys_audio is True when sys capture is active."""
     mock_sys = _mock_sys_capture()
@@ -121,12 +117,11 @@ async def test_info_bar_no_sys_audio_without_capture(mock_session, mock_rec) -> 
 # ---------------------------------------------------------------------------
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_sys_batch_result_records_to_echo_filter(
-    mock_session, mock_rec, mock_sac, mock_bh
+    mock_session, mock_rec, mock_sac
 ) -> None:
     """_on_sys_batch_result() registers the text in the echo filter."""
     mock_sys = _mock_sys_capture()
@@ -151,12 +146,11 @@ async def test_sys_batch_result_records_to_echo_filter(
         assert app._echo_filter.is_echo("hello world test") is True
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_sys_batch_result_writes_to_richlog(
-    mock_session, mock_rec, mock_sac, mock_bh
+    mock_session, mock_rec, mock_sac
 ) -> None:
     """_on_sys_batch_result() writes content to the RichLog captions widget."""
     mock_sys = _mock_sys_capture()
@@ -184,12 +178,11 @@ async def test_sys_batch_result_writes_to_richlog(
         assert "system audio transcript content" in caption_text
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_echo_filter_suppresses_duplicate(
-    mock_session, mock_rec, mock_sac, mock_bh
+    mock_session, mock_rec, mock_sac
 ) -> None:
     """Mic result is suppressed by echo filter when sys already recorded same text."""
     mock_sys = _mock_sys_capture()
@@ -234,13 +227,10 @@ async def test_echo_filter_suppresses_duplicate(
 # ---------------------------------------------------------------------------
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
-async def test_cleanup_stops_sys_capture(
-    mock_session, mock_rec, mock_sac, mock_bh
-) -> None:
+async def test_cleanup_stops_sys_capture(mock_session, mock_rec, mock_sac) -> None:
     """cleanup_after_exit() calls stop() on the sys capture."""
     mock_sys = _mock_sys_capture()
     mock_sac.return_value = mock_sys
@@ -258,13 +248,10 @@ async def test_cleanup_stops_sys_capture(
         mock_sys.stop.assert_called()
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
-async def test_cleanup_clears_sys_capture_ref(
-    mock_session, mock_rec, mock_sac, mock_bh
-) -> None:
+async def test_cleanup_clears_sys_capture_ref(mock_session, mock_rec, mock_sac) -> None:
     """After cleanup_after_exit(), app._sys_capture is None."""
     mock_sys = _mock_sys_capture()
     mock_sac.return_value = mock_sys
@@ -280,12 +267,11 @@ async def test_cleanup_clears_sys_capture_ref(
         assert app._sys_capture is None
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
 async def test_post_exit_cleanup_compresses_sys_audio(
-    mock_session, mock_rec, mock_sac, mock_bh
+    mock_session, mock_rec, mock_sac
 ) -> None:
     """post_exit_cleanup() calls compress_sys_audio when sys_audio is enabled."""
     mock_sys = _mock_sys_capture()
@@ -425,13 +411,10 @@ async def test_check_device_loss_restarts_when_mic_not_muted(
 # ---------------------------------------------------------------------------
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
-async def test_mic_only_flag_starts_sys_muted(
-    mock_session, mock_rec, mock_sac, mock_bh
-) -> None:
+async def test_mic_only_flag_starts_sys_muted(mock_session, mock_rec, mock_sac) -> None:
     """--mic-only flag starts with sys audio muted and paused."""
     mock_sys = _mock_sys_capture()
     mock_sac.return_value = mock_sys
@@ -448,13 +431,10 @@ async def test_mic_only_flag_starts_sys_muted(
         mock_sys.pause.assert_called_once()
 
 
-@patch("scarecrow.sys_audio.find_blackhole_device", return_value=3)
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
-async def test_sys_only_flag_starts_mic_muted(
-    mock_session, mock_rec, mock_sac, mock_bh
-) -> None:
+async def test_sys_only_flag_starts_mic_muted(mock_session, mock_rec, mock_sac) -> None:
     """--sys-only flag starts with mic muted and paused."""
     mock_sys = _mock_sys_capture()
     mock_sac.return_value = mock_sys

@@ -37,16 +37,18 @@ class Config:
     VAD_POLL_INTERVAL_MS: int = 150  # how often to check for silence
     VAD_MIN_SPEECH_RATIO: float = 0.15
 
-    # System audio VAD — tuned via multi-session WER sweep (2026-04-05)
-    # See benchmarks/vad_sweep_2026-04-05.md for full results
-    SYS_GAIN: float = 0.25  # system audio gain — BlackHole is near full-scale
-    SYS_VAD_SILENCE_THRESHOLD: float = 0.004  # tuned for pre-gain signal levels
-    SYS_VAD_MIN_SILENCE_MS: int = 1500
-    SYS_VAD_MIN_BUFFER_SECONDS: float = 7.0
-    SYS_VAD_MIN_SPEECH_RATIO: float = 0.0  # disabled — no ambient noise to filter
-
-    # System audio capture device
-    SYSTEM_AUDIO_DEVICE: str = "BlackHole"  # substring match, case-insensitive
+    # System audio VAD — Process Tap values (2026-04-07).
+    # Process Tap level varies with system volume slider, so absolute RMS
+    # thresholds are inherently fragile. These are set high enough to work
+    # at normal listening volumes (~50-75%). TODO: relative energy VAD.
+    SYS_GAIN: float = 1.0  # Process Tap signal is well-scaled; no attenuation needed
+    SYS_VAD_SILENCE_THRESHOLD: float = 0.04  # catch pauses at normal system volumes
+    SYS_VAD_MIN_SILENCE_MS: int = 300  # catch brief inter-speaker gaps (~14 chunks)
+    SYS_VAD_MIN_BUFFER_SECONDS: float = 2.0
+    SYS_VAD_MAX_BUFFER_SECONDS: int = 10  # hard drain — must beat mic to echo filter
+    SYS_VAD_MIN_SPEECH_RATIO: float = (
+        0.05  # reject silence-only buffers (e.g. paused audio)
+    )
 
     # Writer thread queue size (bounded to prevent unbounded memory growth)
     # ~12.5 seconds of audio at 48kHz with 1024-sample blocks
@@ -112,7 +114,6 @@ SYS_GAIN = config.SYS_GAIN
 SYS_VAD_SILENCE_THRESHOLD = config.SYS_VAD_SILENCE_THRESHOLD
 SYS_VAD_MIN_SILENCE_MS = config.SYS_VAD_MIN_SILENCE_MS
 SYS_VAD_MIN_SPEECH_RATIO = config.SYS_VAD_MIN_SPEECH_RATIO
-SYSTEM_AUDIO_DEVICE = config.SYSTEM_AUDIO_DEVICE
 WRITER_QUEUE_SIZE = config.WRITER_QUEUE_SIZE
 DIVIDER_INTERVAL = config.DIVIDER_INTERVAL
 DEFAULT_RECORDINGS_DIR = config.DEFAULT_RECORDINGS_DIR

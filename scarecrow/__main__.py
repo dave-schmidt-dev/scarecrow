@@ -65,6 +65,17 @@ def main() -> None:
         sys.argv.remove("--sys-only")
         mic_muted = True
 
+    # Create the system audio tap BEFORE importing anything that touches
+    # sounddevice.  PortAudio snapshots the device list at first init and
+    # never rescans, so the tap aggregate must exist before that happens.
+    tap_handle = None
+    if sys_audio:
+        from scarecrow.audio_tap import create_system_tap
+
+        tap_handle = create_system_tap()
+        if tap_handle is None:
+            sys_audio = False  # degrade to mic-only
+
     from scarecrow import config
     from scarecrow.app import ScarecrowApp
     from scarecrow.transcriber import Transcriber
@@ -100,16 +111,8 @@ def main() -> None:
         print(f"  Failed to load Parakeet model: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    # Switch output to Scarecrow Multi-Output Device for sys audio capture
-    audio_switch = None
     if sys_audio:
-        from scarecrow.audio_routing import activate_scarecrow_output
-
-        audio_switch = activate_scarecrow_output()
-        if audio_switch:
-            print("  System audio: routing via Scarecrow Output", flush=True)
-        else:
-            print("  System audio: Scarecrow Output not found — mic only", flush=True)
+        print("  System audio: Process Tap (macOS 14.2+)", flush=True)
 
     t1 = time.monotonic()
     print(f"  Ready ({t1 - t0:.1f}s)", flush=True)
@@ -121,6 +124,7 @@ def main() -> None:
         sys_audio=sys_audio,
         mic_muted=mic_muted,
         sys_muted=sys_muted,
+        tap_handle=tap_handle,
     )
     try:
         app.run()
@@ -140,19 +144,6 @@ def main() -> None:
                 app.cleanup_after_exit()  # Phase 1 safety net (no-op if already ran)
             except Exception:
                 logging.getLogger(__name__).exception("Phase 1 cleanup failed")
-            # Restore audio output immediately after stopping recording,
-            # before slow Phase 2 work (compression + summarization).
-            if audio_switch is not None:
-                from scarecrow.audio_routing import restore_output
-
-                print("  Restoring audio output…", flush=True)
-                try:
-                    restore_output(audio_switch)
-                    audio_switch = None  # prevent double-restore
-                except Exception:
-                    logging.getLogger(__name__).exception(
-                        "Failed to restore audio output"
-                    )
             try:
                 app.post_exit_cleanup()  # Phase 2: compress + maybe summarize
             except Exception:
@@ -164,15 +155,6 @@ def main() -> None:
             if getattr(app, "_summary_path", None):
                 print(f"  Summary: {app._summary_path}", flush=True)
             print("  Done.", flush=True)
-        # Restore audio output (discard path, or Phase 1 restore skipped)
-        if audio_switch is not None:
-            from scarecrow.audio_routing import restore_output
-
-            print("  Restoring audio output…", flush=True)
-            try:
-                restore_output(audio_switch)
-            except Exception:
-                logging.getLogger(__name__).exception("Failed to restore audio output")
         print(flush=True)
         print("  Press Enter to close (auto-close in 30s)…", flush=True)
         _wait_for_enter_or_timeout(30)

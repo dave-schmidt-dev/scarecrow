@@ -67,8 +67,12 @@ def _app(with_transcriber: bool = False):
 
 def _sys_app(**kwargs):
     """Return a ScarecrowApp with sys_audio=True and a ready transcriber."""
+    from unittest.mock import MagicMock
+
     from scarecrow.app import ScarecrowApp
 
+    # Provide a mock tap_handle so sys audio is enabled in tests
+    kwargs.setdefault("tap_handle", MagicMock(device_index=3, tap_id=1, aggregate_id=2))
     app = ScarecrowApp(transcriber=_mock_transcriber(), sys_audio=True, **kwargs)
     app._preflight_check = lambda: True  # type: ignore[method-assign]
     return app

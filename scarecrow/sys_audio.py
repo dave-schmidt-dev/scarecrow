@@ -1,4 +1,4 @@
-"""System audio capture via BlackHole — WAV recording + transcription buffer.
+"""System audio capture — WAV recording + transcription buffer.
 
 Captures system audio for archival (WAV) and exposes drain methods for
 VAD-driven transcription, mirroring AudioRecorder's buffer interface.
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-def find_blackhole_device(name: str = "BlackHole") -> int | None:
+def find_system_audio_device(name: str = "BlackHole") -> int | None:
     """Find an input device by name substring (case-insensitive).
 
     Returns the sounddevice device index, or None if no match found.
@@ -57,6 +57,12 @@ class SystemAudioCapture:
         dev_info = sd.query_devices(device)
         self._sample_rate = int(dev_info["default_samplerate"])
         self._channels: int = dev_info["max_input_channels"]
+        if self._channels > 2:
+            log.warning(
+                "System audio device has %d channels (expected 1-2); "
+                "downmix to mono may be lossy",
+                self._channels,
+            )
 
         self._stream: sd.InputStream | None = None
         self._sound_file: sf.SoundFile | None = None

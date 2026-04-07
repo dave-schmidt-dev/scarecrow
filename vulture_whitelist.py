@@ -1,6 +1,7 @@
 """Whitelist dynamic entry points and test-only compatibility shims for vulture."""
 
 from scarecrow.app import InfoBar, ScarecrowApp
+from scarecrow.audio_tap import TapHandle, create_system_tap, destroy_system_tap
 from scarecrow.diarizer import (
     SpeakersInfo,
     diarize_session,
@@ -9,7 +10,7 @@ from scarecrow.diarizer import (
     parse_speakers_note,
 )
 from scarecrow.recorder import AudioRecorder
-from scarecrow.sys_audio import SystemAudioCapture, find_blackhole_device
+from scarecrow.sys_audio import SystemAudioCapture, find_system_audio_device
 
 _ = (
     InfoBar.render,
@@ -29,7 +30,10 @@ _ = (
     AudioRecorder.is_paused,
     AudioRecorder.peak_level,
     SystemAudioCapture,
-    find_blackhole_device,
+    find_system_audio_device,
+    TapHandle,
+    create_system_tap,
+    destroy_system_tap,
     SpeakersInfo,
     diarize_session,
     format_speakers_confirmation,
