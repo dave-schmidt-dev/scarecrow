@@ -10,11 +10,9 @@ dependencies = [
     "soundfile",
     "numpy",
     "llama-cpp-python>=0.3",
+    "mlx-vlm>=0.4",
+    "pyannote-audio>=4.0,<5.0",
 ]
-
-[project.optional-dependencies]
-mlx-summarizer = ["mlx-vlm>=0.4"]
-diarization = ["pyannote-audio>=4.0,<5.0"]
 
 [project.scripts]
 scarecrow = "scarecrow.__main__:main"

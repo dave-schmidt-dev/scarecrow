@@ -915,7 +915,7 @@ class ScarecrowApp(App[None]):
             "  /context, /c [dim]<text>[/dim]  "
             "Add background context (spelling, names — aids summary, not displayed)\n"
             "  /speakers, /sp [dim]mic:X sys:Y,Z[/dim]  "
-            "Set speaker names for diarization\n"
+            "Set speaker names for diarization (combine both in one command)\n"
             "  /mn [dim]<name>[/dim]         "
             "Name this session\n"
             "  /flush, /f          "

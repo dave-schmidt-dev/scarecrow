@@ -1,10 +1,8 @@
 """Speaker diarization — post-session pipeline for speaker-attributed transcripts.
 
-Uses pyannote-audio (optional dependency) to assign speaker labels to transcript
-events.  All diarization logic lives here: execution, JSON I/O, and consumption
-by the summarizer via ``label_events()``.
-
-Install: ``uv sync --extra diarization``
+Uses pyannote-audio to assign speaker labels to transcript events.  All
+diarization logic lives here: execution, JSON I/O, and consumption by the
+summarizer via ``label_events()``.
 """
 
 from __future__ import annotations
@@ -59,6 +57,9 @@ def parse_speakers_note(text: str) -> SpeakersInfo:
         else:
             # Bare names — treat as mic speakers (in-person fallback)
             bare_names.extend(n.strip() for n in token.split(",") if n.strip())
+
+    # Strip conjunctions that aren't real speaker names
+    bare_names = [n for n in bare_names if n.lower() not in ("and", "&")]
 
     if bare_names and not info.mic_speakers:
         info.mic_speakers = bare_names
@@ -272,13 +273,19 @@ def diarize_session(
     On failure, cleans up partial output so the summarizer sees either
     complete diarization or none.
     """
+
+    def _progress(msg: str) -> None:
+        log.info(msg)
+        if progress_callback:
+            progress_callback(msg)
+
     speakers = find_speakers_note(events)
     if speakers is None:
-        log.info("No /speakers note found; skipping diarization")
+        _progress("Diarization skipped (no /speakers set).")
         return False
 
     if not speakers.mic_speakers and not speakers.sys_speakers:
-        log.info("Empty /speakers note; skipping diarization")
+        _progress("Diarization skipped (empty /speakers note).")
         return False
 
     # Determine what to diarize
@@ -294,17 +301,12 @@ def diarize_session(
         diarize_channel = "mic"
         num_speakers = len(speakers.mic_speakers)
     else:
-        log.info("No matching audio channel for speakers; skipping diarization")
+        _progress("Diarization skipped (no matching audio channel).")
         return False
 
     offsets = _extract_segment_offsets(events, n_segments)
     model_id = config.DIARIZATION_MODEL
     device = config.DIARIZATION_DEVICE
-
-    def _progress(msg: str) -> None:
-        log.info(msg)
-        if progress_callback:
-            progress_callback(msg)
 
     _progress(f"Loading diarization model ({model_id})…")
 
@@ -312,7 +314,10 @@ def diarize_session(
         pipeline, device_used = _load_pipeline(model_id, device)
     except Exception:
         log.exception("Failed to load diarization pipeline")
+        _progress("Diarization failed (model load error).")
         return False
+
+    all_detected_speakers: set[str] = set()
 
     try:
         with tempfile.TemporaryDirectory(prefix="scarecrow_diar_") as tmp_dir:
@@ -332,6 +337,10 @@ def diarize_session(
                 t0 = time.monotonic()
                 segments = _run_diarization(pipeline, mono_audio, num_speakers)
                 wall_time = time.monotonic() - t0
+
+                all_detected_speakers.update(
+                    s["speaker"] for s in segments if s.get("speaker")
+                )
 
                 # Write sidecar JSON
                 sidecar = {
@@ -362,6 +371,7 @@ def diarize_session(
 
     except Exception:
         log.exception("Diarization failed; cleaning up partial output")
+        _progress("Diarization failed (see log for details).")
         _cleanup_diarization_files(session_dir)
         return False
     finally:
@@ -375,7 +385,9 @@ def diarize_session(
         except Exception:
             pass
 
-    _progress("Diarization complete.")
+    n_detected = len(all_detected_speakers)
+    plural = "s" if n_detected != 1 else ""
+    _progress(f"Diarization complete — {n_detected} speaker{plural} detected.")
     return True
 
 
@@ -489,8 +501,10 @@ def label_events(
                 event["speaker"] = _map_speaker_label(
                     raw_label, speaker_names, all_labels
                 )
-        elif mic_speaker and source == "mic":
-            # Mic source with known mic speaker name
+        elif mic_speaker and source == "mic" and diar_channel == "mic":
+            # Mic source with known mic speaker — only label when mic was
+            # the diarized channel (in-person meeting).  When sys was diarized
+            # mic events are likely speaker bleed, not the mic user talking.
             event["speaker"] = mic_speaker
 
         labeled.append(event)

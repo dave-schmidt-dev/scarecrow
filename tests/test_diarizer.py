@@ -73,6 +73,14 @@ class TestParseSpeakersNote:
         info = parse_speakers_note("sys:Mike,Justin,")
         assert info.sys_speakers == ["Mike", "Justin"]
 
+    def test_bare_names_strips_and_conjunction(self) -> None:
+        info = parse_speakers_note("Jordan and Dan")
+        assert info.mic_speakers == ["Jordan", "Dan"]
+
+    def test_bare_names_strips_ampersand(self) -> None:
+        info = parse_speakers_note("Jordan & Dan")
+        assert info.mic_speakers == ["Jordan", "Dan"]
+
 
 # ---------------------------------------------------------------------------
 # find_speakers_note
@@ -302,7 +310,36 @@ class TestLabelEvents:
 
         assert labeled[0]["speaker"] == "Mike"
         assert labeled[1]["speaker"] == "Justin"
-        assert labeled[2]["speaker"] == "Dave"  # mic speaker
+        # When sys is the diarized channel, mic events should NOT be labeled
+        # — they're likely speaker bleed, not the mic user talking.
+        assert "speaker" not in labeled[2]
+
+    def test_mic_labeled_when_mic_is_diarized_channel(self, tmp_path: Path) -> None:
+        """In-person meeting: mic is diarized, so mic events get speaker labels."""
+        self._write_diarization(
+            tmp_path,
+            "mic",
+            1,
+            {
+                "version": 1,
+                "channel": "mic",
+                "segment": 1,
+                "model": "pyannote/speaker-diarization-3.1",
+                "speaker_names": ["Dave", "Sarah"],
+                "mic_speaker": "Dave",
+                "segment_elapsed_offset": 0,
+                "segments": [
+                    {"start": 0.0, "end": 10.0, "speaker": "SPEAKER_00"},
+                    {"start": 10.5, "end": 20.0, "speaker": "SPEAKER_01"},
+                ],
+            },
+        )
+
+        events = [
+            {"type": "transcript", "elapsed": 5, "text": "Hello", "source": "mic"},
+        ]
+        labeled = label_events(events, tmp_path, segment=1, segment_elapsed_offset=0)
+        assert labeled[0]["speaker"] == "Dave"
 
     def test_no_diarization_file_returns_unchanged(self, tmp_path: Path) -> None:
         """Without diarization files, events pass through unchanged."""

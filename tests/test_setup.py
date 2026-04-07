@@ -2,7 +2,38 @@
 
 from __future__ import annotations
 
+import importlib
+
 from scripts import setup as setup_script
+
+# ---------------------------------------------------------------------------
+# Core dependency smoke tests — these catch deps that accidentally become
+# optional or get dropped from pyproject.toml.
+# ---------------------------------------------------------------------------
+
+CORE_MODULES = [
+    "textual",
+    "parakeet_mlx",
+    "sounddevice",
+    "soundfile",
+    "numpy",
+    "llama_cpp",
+    "mlx_vlm",
+    "pyannote.audio",
+]
+
+
+class TestCoreDependenciesImportable:
+    """Every core dependency must be importable in the test environment."""
+
+    def test_core_modules_importable(self) -> None:
+        missing = []
+        for mod in CORE_MODULES:
+            try:
+                importlib.import_module(mod)
+            except ImportError:
+                missing.append(mod)
+        assert not missing, f"Core deps not importable: {missing}"
 
 
 def test_setup_alias_prints_project_dir(capsys) -> None:

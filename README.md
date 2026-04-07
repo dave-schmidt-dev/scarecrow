@@ -135,7 +135,7 @@ When a session ends, Scarecrow generates `summary.md` in the session directory u
 `/context` entries provide background information (names, spelling, domain terms) that improves summary quality without appearing in the output.
 
 Two summarizer backends are available:
-- **MLX** (default): mlx-vlm with Gemma 4 26B MoE (4-bit). Apple Silicon native inference. Install with `uv sync --extra mlx-summarizer`.
+- **MLX** (default): mlx-vlm with Gemma 4 26B MoE (4-bit). Apple Silicon native inference.
 - **GGUF**: llama-cpp-python fallback. Requires a GGUF model in the HuggingFace cache. Set `SUMMARIZER_BACKEND = "gguf"` in config.
 
 Both backends load the model in-process — no server needed.

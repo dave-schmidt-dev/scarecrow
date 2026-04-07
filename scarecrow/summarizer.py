@@ -3,7 +3,7 @@
 Supports two backends:
 - **gguf** (default): llama-cpp-python with GGUF model files.
 - **mlx**: mlx-vlm for Apple Silicon native inference with optional TurboQuant
-  KV-cache compression.  Requires ``uv sync --extra mlx-summarizer``.
+  KV-cache compression.
 """
 
 from __future__ import annotations
@@ -514,7 +514,7 @@ class _MlxBackend:
         except ImportError as e:
             raise ImportError(
                 "mlx-vlm is required for the MLX summarizer backend. "
-                "Install with: uv sync --extra mlx-summarizer"
+                "Install with: uv sync"
             ) from e
 
         # Temporarily allow HF Hub network access — runtime.py sets
@@ -539,7 +539,7 @@ class _MlxBackend:
         except ImportError as e:
             raise ImportError(
                 "mlx-vlm is required for the MLX summarizer backend. "
-                "Install with: uv sync --extra mlx-summarizer"
+                "Install with: uv sync"
             ) from e
 
         messages = [

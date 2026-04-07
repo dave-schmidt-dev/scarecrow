@@ -1,6 +1,6 @@
 # Roadmap
 
-## System audio (Phase 1 + 2 done)
+## System audio (Phase 1 + 2 done, Phase 3: migrate to Process Tap)
 - [x] Capture system audio via BlackHole to separate WAV (on by default, `--no-sys-audio` to disable)
 - [x] Dual InfoBar level meters (mic + sys)
 - [x] Streaming FLAC compression on shutdown
@@ -16,6 +16,17 @@
   - Mic: threshold 0.01→0.003, silence 750→1250ms (WER -8–24%)
   - Results: `benchmarks/vad_sweep_2026-04-05.md`
 - [x] Wire up `EchoFilter.record_mic()` / `is_sys_echo()` — bidirectional suppression wired in app.py (2026-04-02)
+- [ ] **Phase 3: Replace BlackHole with CoreAudio Process Tap API (macOS 14.2+)**
+  - Motivation: apps like Slack Huddle lock onto specific output devices, bypassing BlackHole entirely
+  - Plan: `~/.claude/plans/swift-doodling-aurora.md` (reviewed: contrarian + Codex GPT-5.4)
+  - New `audio_tap.py` (PyObjC for CATapDescription, ctypes for CoreAudio C APIs)
+  - Private aggregate device — no stale device after crash, tap auto-start
+  - App owns tap lifecycle (moved from __main__ to app.py)
+  - Extract shared CoreAudio helpers → `_coreaudio.py`
+  - Delete `audio_routing.py` and BlackHole dependency
+  - Full sys VAD re-sweep required (signal levels differ from BlackHole)
+  - Add `pyobjc-framework-CoreAudio` dependency
+  - Eliminates: BlackHole install, Audio MIDI Setup, device routing complexity
 
 ## Launch-time audio source flags
 - [x] `--mic-only` / `--sys-only` CLI flags to start with one source muted
