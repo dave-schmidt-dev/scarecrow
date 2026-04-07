@@ -51,20 +51,41 @@ TEST_FILES=(
   tests/test_report.py
 )
 
+PER_TEST_TIMEOUT=120  # seconds per test file
+MAX_PARALLEL=${SCARECROW_TEST_JOBS:-8}  # cap concurrent test processes
+
 PASSED=0
 FAIL_FILES=()
-PIDS=()
-for f in "${TEST_FILES[@]}"; do
-  logfile="$TMPDIR_LOGS/$(basename "$f" .py).log"
-  run_pytest "$@" "$f" > "$logfile" 2>&1 &
-  PIDS+=($!)
-done
 
-for i in "${!PIDS[@]}"; do
-  pid="${PIDS[$i]}"
-  f="${TEST_FILES[$i]}"
-  logfile="$TMPDIR_LOGS/$(basename "$f" .py).log"
-  if ! wait "$pid"; then
+# Arrays to track the current batch of running jobs
+BATCH_PIDS=()
+BATCH_FILES=()
+BATCH_LOGS=()
+
+collect_job() {
+  # Collect result for a single job by index into BATCH_* arrays
+  local idx="$1"
+  local pid="${BATCH_PIDS[$idx]}"
+  local f="${BATCH_FILES[$idx]}"
+  local logfile="${BATCH_LOGS[$idx]}"
+
+  local elapsed=0 rc=""
+  while [ $elapsed -lt $PER_TEST_TIMEOUT ]; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      wait "$pid" 2>/dev/null && rc=0 || rc=$?
+      break
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+
+  if [ -z "$rc" ]; then
+    kill "$pid" 2>/dev/null
+    wait "$pid" 2>/dev/null || true
+    echo "TIMEOUT: $f (>${PER_TEST_TIMEOUT}s)"
+    FAIL_FILES+=("$f")
+    FAILED=1
+  elif [ "$rc" -ne 0 ]; then
     echo "FAIL: $f"
     cat "$logfile"
     FAIL_FILES+=("$f")
@@ -72,6 +93,30 @@ for i in "${!PIDS[@]}"; do
   else
     PASSED=$((PASSED + 1))
   fi
+}
+
+# Launch test files in batches of MAX_PARALLEL
+for f in "${TEST_FILES[@]}"; do
+  logfile="$TMPDIR_LOGS/$(basename "$f" .py).log"
+  run_pytest "$@" "$f" > "$logfile" 2>&1 &
+  BATCH_PIDS+=($!)
+  BATCH_FILES+=("$f")
+  BATCH_LOGS+=("$logfile")
+
+  # When we hit the cap, wait for all current jobs before launching more
+  if [ "${#BATCH_PIDS[@]}" -ge "$MAX_PARALLEL" ]; then
+    for i in "${!BATCH_PIDS[@]}"; do
+      collect_job "$i"
+    done
+    BATCH_PIDS=()
+    BATCH_FILES=()
+    BATCH_LOGS=()
+  fi
+done
+
+# Collect any remaining jobs from the final batch
+for i in "${!BATCH_PIDS[@]}"; do
+  collect_job "$i"
 done
 
 rm -rf "$TMPDIR_LOGS"
