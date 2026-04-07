@@ -227,10 +227,13 @@ async def test_echo_filter_suppresses_duplicate(
 # ---------------------------------------------------------------------------
 
 
+@patch("scarecrow.audio_tap.destroy_system_tap")
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
-async def test_cleanup_stops_sys_capture(mock_session, mock_rec, mock_sac) -> None:
+async def test_cleanup_stops_sys_capture(
+    mock_session, mock_rec, mock_sac, mock_destroy_tap
+) -> None:
     """cleanup_after_exit() calls stop() on the sys capture."""
     mock_sys = _mock_sys_capture()
     mock_sac.return_value = mock_sys
@@ -248,10 +251,13 @@ async def test_cleanup_stops_sys_capture(mock_session, mock_rec, mock_sac) -> No
         mock_sys.stop.assert_called()
 
 
+@patch("scarecrow.audio_tap.destroy_system_tap")
 @patch("scarecrow.sys_audio.SystemAudioCapture")
 @patch("scarecrow.app.AudioRecorder")
 @patch("scarecrow.app.Session")
-async def test_cleanup_clears_sys_capture_ref(mock_session, mock_rec, mock_sac) -> None:
+async def test_cleanup_clears_sys_capture_ref(
+    mock_session, mock_rec, mock_sac, mock_destroy_tap
+) -> None:
     """After cleanup_after_exit(), app._sys_capture is None."""
     mock_sys = _mock_sys_capture()
     mock_sac.return_value = mock_sys

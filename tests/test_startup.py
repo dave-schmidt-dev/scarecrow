@@ -88,6 +88,7 @@ def test_main_finally_uses_app_cleanup_hook() -> None:
     fake_app._shutdown_summary = ""
 
     with (
+        patch("scarecrow.audio_tap.create_system_tap", return_value=None),
         patch("scarecrow.transcriber.Transcriber", return_value=fake_transcriber),
         patch("scarecrow.app.ScarecrowApp", return_value=fake_app),
         patch("scarecrow.__main__._wait_for_enter_or_timeout"),
@@ -110,6 +111,7 @@ def test_main_calls_preload_batch_model() -> None:
     fake_app._shutdown_summary = ""
 
     with (
+        patch("scarecrow.audio_tap.create_system_tap", return_value=None),
         patch("scarecrow.transcriber.Transcriber", return_value=fake_transcriber),
         patch("scarecrow.app.ScarecrowApp", return_value=fake_app),
         patch("scarecrow.__main__._wait_for_enter_or_timeout"),
@@ -193,6 +195,7 @@ def test_main_handles_preload_batch_model_failure() -> None:
     fake_transcriber.preload_batch_model.side_effect = RuntimeError("MLX OOM")
 
     with (
+        patch("scarecrow.audio_tap.create_system_tap", return_value=None),
         patch("scarecrow.transcriber.Transcriber", return_value=fake_transcriber),
         patch("scarecrow.__main__._wait_for_enter_or_timeout"),
         pytest.raises(SystemExit) as exc_info,
