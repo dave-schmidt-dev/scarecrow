@@ -501,10 +501,10 @@ def label_events(
                 event["speaker"] = _map_speaker_label(
                     raw_label, speaker_names, all_labels
                 )
-        elif mic_speaker and source == "mic" and diar_channel == "mic":
-            # Mic source with known mic speaker — only label when mic was
-            # the diarized channel (in-person meeting).  When sys was diarized
-            # mic events are likely speaker bleed, not the mic user talking.
+        elif mic_speaker and source == "mic":
+            # Mic source with known mic speaker — label regardless of which
+            # channel was diarized.  The user explicitly named the mic speaker,
+            # so their mic events should carry that name.
             event["speaker"] = mic_speaker
 
         labeled.append(event)

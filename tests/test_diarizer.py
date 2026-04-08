@@ -310,9 +310,9 @@ class TestLabelEvents:
 
         assert labeled[0]["speaker"] == "Mike"
         assert labeled[1]["speaker"] == "Justin"
-        # When sys is the diarized channel, mic events should NOT be labeled
-        # — they're likely speaker bleed, not the mic user talking.
-        assert "speaker" not in labeled[2]
+        # When sys is diarized and mic_speaker is set, mic events get
+        # labeled with the mic speaker's name.
+        assert labeled[2]["speaker"] == "Dave"
 
     def test_mic_labeled_when_mic_is_diarized_channel(self, tmp_path: Path) -> None:
         """In-person meeting: mic is diarized, so mic events get speaker labels."""

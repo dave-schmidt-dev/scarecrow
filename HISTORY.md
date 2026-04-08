@@ -2,6 +2,10 @@
 
 Bug entries are inline under their date heading. A squashed bug must reference a regression test.
 
+## 2026-04-08
+
+- **Fixed mic speaker label dropped during sys-diarized sessions.** When entering `mic:Dave sys:OtherPerson`, mic events were not labeled because `label_events()` only assigned the mic speaker name when the mic channel was diarized (`diar_channel == "mic"`). With sys diarized, mic events reached the LLM unlabeled, causing it to hallucinate names like "patient" or "partner" from context. Fix: removed the `diar_channel == "mic"` guard — mic events now carry the explicit mic speaker name regardless of which channel was diarized. This partially reverts the 2026-04-07 speaker bleed fix, which was too aggressive; the user's explicit `/sp mic:Dave` should always label their mic events. Regression test updated in `test_diarizer.py::TestLabelEvents::test_labels_sys_transcript_events`.
+
 ## 2026-04-07
 
 - **Fixed Process Tap 3x sample rate mismatch.** Aggregate device with sub-device list (system output for clocking) caused CoreAudio to deliver audio at 1/3 the declared rate — 48kHz FLAC contained ~16kHz content, producing 3x sped-up unintelligible audio. Root cause identified by measuring actual sample delivery rate (15,066 Hz vs 48,000 Hz expected) and confirmed by FLAC duration ratios (mic 600s vs sys 200s = exactly 3.0x across all sessions). Fix: switched to tap-only aggregate configuration (no sub-devices, no master, no stacked, no tapautostart) matching Chromium and Sunshine implementations. Added explicit `set_device_sample_rate()` and `set_device_buffer_size()` calls after aggregate creation. New `_coreaudio.py` helpers: `set_device_sample_rate()`, `set_device_buffer_size()`, `get_tap_format()`. Verified: actual delivery rate now 47,707 Hz (0.994x), 1024-frame callbacks. Also fixed silence hallucination: enabled `SYS_VAD_MIN_SPEECH_RATIO` (0.05) to reject all-silence buffers that caused Parakeet to emit "no" repeatedly when system audio was paused.
