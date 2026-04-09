@@ -11,6 +11,7 @@ def _mock_sys_capture() -> MagicMock:
     mock.is_recording = True
     mock.is_paused = False
     mock.peak_level = 0.0
+    mock.rms_level = 0.0
     mock.buffer_seconds = 0.0
     mock.start.return_value = None
     mock.stop.return_value = None

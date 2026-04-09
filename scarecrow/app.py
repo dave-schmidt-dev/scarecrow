@@ -143,7 +143,9 @@ class InfoBar(Static):
         self._mic_region: tuple[int, int] = (0, 0)
         self._sys_region: tuple[int, int] = (0, 0)
 
-    def _render_meter(self, raw: float) -> tuple[str, str, str, str]:
+    def _render_meter(
+        self, raw: float, *, sys: bool = False
+    ) -> tuple[str, str, str, str]:
         """Return (bar_char, color, meter_label, label_style) for a peak level."""
         import math
 
@@ -152,8 +154,10 @@ class InfoBar(Static):
             scaled = 0.0
         else:
             db = 20 * math.log10(max(raw, 1e-6))
-            # -46dB (silence) to -10dB (loud speech) → 0.0 to 1.0
-            scaled = max(0.0, min(1.0, (db + 46) / 36))
+            # Mic: -46dB to -10dB (peak-based, loud speech)
+            # Sys: -46dB to -6dB (RMS-based, normal speech ≈ 0.05-0.15 RMS)
+            db_ceiling = -6 if sys else -10
+            scaled = max(0.0, min(1.0, (db + 46) / (46 + db_ceiling)))
         idx = int(scaled * (len(bars) - 1))
         if scaled < 0.4:
             color = "green"
@@ -198,7 +202,7 @@ class InfoBar(Static):
                     text.append("MUTED", style="dim")
                 else:
                     sys_bar, sys_color, sys_meter_label, sys_label_style = (
-                        self._render_meter(self.sys_peak_level)
+                        self._render_meter(self.sys_peak_level, sys=True)
                     )
                     text.append(sys_bar, style=sys_color)
                     text.append(f" {sys_meter_label}", style=sys_label_style)
@@ -738,7 +742,7 @@ class ScarecrowApp(App[None]):
         bar.peak_level = (
             self._audio_recorder.peak_level if self._audio_recorder else 0.0
         )
-        bar.sys_peak_level = self._sys_capture.peak_level if self._sys_capture else 0.0
+        bar.sys_peak_level = self._sys_capture.rms_level if self._sys_capture else 0.0
         has_sys = self._sys_capture is not None
         bar.has_sys_audio = has_sys
         bar.mic_muted = self._mic_muted
@@ -1854,7 +1858,7 @@ class ScarecrowApp(App[None]):
         if not self._awaiting_discard_confirm:
             self._awaiting_discard_confirm = True
             self._set_status(
-                "Discard session? Press Ctrl+Shift+D again (3s)…",
+                "Discard? Ctrl+Shift+D again to confirm",
                 error=True,
             )
             self._discard_confirm_timer = self.set_timer(

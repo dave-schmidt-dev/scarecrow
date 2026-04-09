@@ -42,8 +42,8 @@ class Config:
     # thresholds are inherently fragile. These are set high enough to work
     # at normal listening volumes (~50-75%). TODO: relative energy VAD.
     SYS_GAIN: float = 1.0  # Process Tap signal is well-scaled; no attenuation needed
-    SYS_VAD_SILENCE_THRESHOLD: float = 0.04  # catch pauses at normal system volumes
-    SYS_VAD_MIN_SILENCE_MS: int = 300  # catch brief inter-speaker gaps (~14 chunks)
+    SYS_VAD_SILENCE_THRESHOLD: float = 0.01  # tuned via sweep (2026-04-09)
+    SYS_VAD_MIN_SILENCE_MS: int = 1250  # tuned via sweep (2026-04-09)
     SYS_VAD_MIN_BUFFER_SECONDS: float = 2.0
     SYS_VAD_MAX_BUFFER_SECONDS: int = 10  # hard drain — must beat mic to echo filter
     SYS_VAD_MIN_SPEECH_RATIO: float = (

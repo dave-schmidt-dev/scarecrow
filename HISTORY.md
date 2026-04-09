@@ -2,6 +2,18 @@
 
 Bug entries are inline under their date heading. A squashed bug must reference a regression test.
 
+## 2026-04-09
+
+- **Sys VAD parameter re-sweep for Process Tap:** Tuned sys VAD thresholds against a 2-hour lecture (single-speaker) and 40-min huddle (multi-speaker), both recorded via Process Tap.
+  - `SYS_VAD_SILENCE_THRESHOLD`: 0.04 → 0.01 (5x more sensitive)
+  - `SYS_VAD_MIN_SILENCE_MS`: 300 → 1250ms (longer pause detection)
+  - Lecture WER: 0.075 → 0.036 (52% reduction), segments from 2.1s → 8.2s
+  - Huddle WER: 0.174 → 0.104 (40% reduction), segments from 2.1s → 5.6s
+  - Fixed bug in `scripts/replay_test.py`: sys source was using `VAD_MAX_BUFFER_SECONDS` (30s mic) instead of `SYS_VAD_MAX_BUFFER_SECONDS` (10s sys), causing all prior sweep data to use incorrect hard-drain ceiling
+  - Sweep results: `benchmarks/vad_validation_2026-04-09.md`
+- **Fixed sys audio meter pegged at HIGH.** Meter used peak level with mic-calibrated dB range for both sources. Process Tap peak levels are near 0dB even for normal speech. Sys meter now uses RMS level (perceived loudness) with a -46 to -6dB range — normal speech shows "norm", only genuinely loud audio shows "HIGH". Added `rms_level` property to `SystemAudioCapture`.
+- **Shortened discard confirmation message** to fit status bar: "Discard? Ctrl+Shift+D again to confirm".
+
 ## 2026-04-08
 
 - **Fixed mic speaker label dropped during sys-diarized sessions.** When entering `mic:Dave sys:OtherPerson`, mic events were not labeled because `label_events()` only assigned the mic speaker name when the mic channel was diarized (`diar_channel == "mic"`). With sys diarized, mic events reached the LLM unlabeled, causing it to hallucinate names like "patient" or "partner" from context. Fix: removed the `diar_channel == "mic"` guard — mic events now carry the explicit mic speaker name regardless of which channel was diarized. This partially reverts the 2026-04-07 speaker bleed fix, which was too aggressive; the user's explicit `/sp mic:Dave` should always label their mic events. Regression test updated in `test_diarizer.py::TestLabelEvents::test_labels_sys_transcript_events`.

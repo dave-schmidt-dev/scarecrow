@@ -75,6 +75,8 @@ class SystemAudioCapture:
         self._paused = False
         self._held_peak: float = 0.0
         self._peak_decay: float = 0.15
+        self._held_rms: float = 0.0
+        self._rms_decay: float = 0.05
         self._gain: float = 1.0
         self._start_monotonic: float = 0.0
 
@@ -177,6 +179,14 @@ class SystemAudioCapture:
         with self._lock:
             level = self._held_peak
             self._held_peak = max(0.0, self._held_peak - self._peak_decay)
+            return level
+
+    @property
+    def rms_level(self) -> float:
+        """Held RMS audio level, 0.0 to 1.0. Decays on each read."""
+        with self._lock:
+            level = self._held_rms
+            self._held_rms = max(0.0, self._held_rms - self._rms_decay)
             return level
 
     @property
@@ -324,12 +334,16 @@ class SystemAudioCapture:
         else:
             data_copy = raw
 
-        # Peak level across all channels (post-gain so meter
+        # Peak and RMS level across all channels (post-gain so meter
         # reflects what Parakeet hears and responds to gain changes)
-        peak = float(np.abs(data_copy.astype(np.int32)).max()) / 32768.0
+        samples_i32 = data_copy.astype(np.int32)
+        peak = float(np.abs(samples_i32).max()) / 32768.0
+        rms = float(np.sqrt(np.mean(samples_i32.astype(np.float64) ** 2))) / 32768.0
         with self._lock:
             if peak > self._held_peak:
                 self._held_peak = peak
+            if rms > self._held_rms:
+                self._held_rms = rms
 
         # Downmix to mono for transcription buffer (post-gain)
         if self._channels > 1:

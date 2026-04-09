@@ -27,7 +27,11 @@
   - Eliminates: BlackHole install, Audio MIDI Setup, device routing complexity
   - [x] Fixed 3x sample rate mismatch: tap-only aggregate (no sub-devices), explicit rate/buffer config
   - [x] Fixed silence hallucination: enabled SYS_VAD_MIN_SPEECH_RATIO (0.05)
-  - [ ] Full sys VAD re-sweep required — current thresholds are untuned guesses
+  - [x] Full sys VAD re-sweep (2026-04-09): threshold 0.04→0.01, silence 300→1250ms
+    - Swept across 2-hour lecture + 40-min multi-speaker huddle (both Process Tap)
+    - Fixed replay_test.py bug: was using 30s mic max_buffer instead of 10s sys max_buffer
+    - Lecture WER: 0.075→0.036 (52% reduction), Huddle WER: 0.174→0.104 (40% reduction)
+    - Results: `benchmarks/vad_validation_2026-04-09.md`
 
 ## Launch-time audio source flags
 - [x] `--mic-only` / `--sys-only` CLI flags to start with one source muted
@@ -77,6 +81,12 @@
 - Handles [NOTE], [TASK], [CONTEXT] tags
 - Auto-syncs summaries to Obsidian vault
 - Manual re-run via scripts/resummarize.py
+
+## TUI transcript batching lag
+- [x] UI appeared to dump 10-15 individual transcript lines at once after 20-30s delay
+  - Root cause: VAD fragmentation (300ms silence / 2.0s buffer) produced ~2s segments with 2-5 words each — many tiny lines scrolling fast gave the appearance of batching
+  - Transcript JSONL analysis confirmed median latency was only 3.0s (P95: 6.0s) — no actual UI batching
+  - Fixed by VAD re-sweep: 1250ms silence produces 5-8s segments with complete thoughts
 
 ## Live captions (speculative)
 - Short-buffer preview via Parakeet, replaced by VAD-final text

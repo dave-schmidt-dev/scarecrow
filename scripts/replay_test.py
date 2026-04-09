@@ -242,7 +242,7 @@ def replay(
         drain_kwargs = dict(
             silence_threshold=silence_threshold,
             min_silence_ms=min_silence_ms,
-            max_buffer_seconds=float(cfg.VAD_MAX_BUFFER_SECONDS),
+            max_buffer_seconds=float(cfg.SYS_VAD_MAX_BUFFER_SECONDS),
             min_buffer_seconds=min_buffer_seconds,
         )
     else:
