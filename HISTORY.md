@@ -4,6 +4,7 @@ Bug entries are inline under their date heading. A squashed bug must reference a
 
 ## 2026-04-09
 
+- **README accuracy pass:** Fixed VAD drain timing (750ms → 1250ms to match tuned config), added undocumented CLI flags (`--mic-only`, `--sys-only`), added missing keybindings (`Ctrl+M`, `Ctrl+Shift+S`, click-to-mute), added `test_report.py` to architecture section, clarified config file location for `SUMMARIZER_BACKEND`.
 - **Sys VAD parameter re-sweep for Process Tap:** Tuned sys VAD thresholds against a 2-hour lecture (single-speaker) and 40-min huddle (multi-speaker), both recorded via Process Tap.
   - `SYS_VAD_SILENCE_THRESHOLD`: 0.04 → 0.01 (5x more sensitive)
   - `SYS_VAD_MIN_SILENCE_MS`: 300 → 1250ms (longer pause detection)

@@ -8,7 +8,7 @@ Always-recording TUI for transcription and inline notes.
 
 Scarecrow uses parakeet-mlx for accurate batch transcription. You can attach timestamped notes inline by typing prefix commands (`/task`) or plain text. Audio and transcripts are saved per-session.
 
-**Backend:** parakeet-mlx (Parakeet TDT 1.1B) on Apple Silicon GPU — VAD-based chunking (drains at 750ms speech pauses), ~0.010x RTF
+**Backend:** parakeet-mlx (Parakeet TDT 1.1B) on Apple Silicon GPU — VAD-based chunking (drains at 1250ms speech pauses), ~0.010x RTF
 
 ## Bug Tracking
 
@@ -71,11 +71,15 @@ alias sc="/path/to/scarecrow/.venv/bin/scarecrow"
 ```bash
 sc                   # launch Scarecrow (auto-starts recording + sys audio)
 sc --no-sys-audio    # launch without system audio capture
+sc --mic-only        # mic only (no system audio)
+sc --sys-only        # system audio only (no mic)
 ```
 
 **Keybindings** inside the TUI:
 - `Ctrl+P` — pause / resume (releases microphone while paused)
 - `Ctrl+V` — VAD / mute menu (adjust mic/sys sensitivity, mute toggles)
+- `Ctrl+M` or click mic label — mute / unmute mic
+- `Ctrl+Shift+S` or click sys label — mute / unmute system audio
 - `Ctrl+Shift+Q` — quick quit (skip summary, still saves transcript + audio)
 - `Ctrl+Q` — quit (full cleanup + summary)
 - `Ctrl+Shift+D` — discard session & quit (moves session to `.discarded/`)
@@ -136,7 +140,7 @@ When a session ends, Scarecrow generates `summary.md` in the session directory u
 
 Two summarizer backends are available:
 - **MLX** (default): mlx-vlm with Gemma 4 26B MoE (4-bit). Apple Silicon native inference.
-- **GGUF**: llama-cpp-python fallback. Requires a GGUF model in the HuggingFace cache. Set `SUMMARIZER_BACKEND = "gguf"` in config.
+- **GGUF**: llama-cpp-python fallback. Requires a GGUF model in the HuggingFace cache. Set `SUMMARIZER_BACKEND = "gguf"` in `scarecrow/config.py`.
 
 Both backends load the model in-process — no server needed.
 
@@ -157,7 +161,7 @@ The parakeet model is preloaded during the prepare phase before the TUI launches
 
 ### Architecture
 
-Scarecrow uses parakeet-mlx as its sole transcription engine. A 16kHz audio stream is buffered and fed to the model using VAD-based chunking — audio drains at natural speech pauses (750ms+ silence) with a 30-second hard max for continuous speech, polled every 150ms. Audio capture, transcription, and the TUI all run in a single process.
+Scarecrow uses parakeet-mlx as its sole transcription engine. A 16kHz audio stream is buffered and fed to the model using VAD-based chunking — audio drains at natural speech pauses (1250ms+ silence) with a 30-second hard max for continuous speech, polled every 150ms. Audio capture, transcription, and the TUI all run in a single process.
 
 **Hallucination prevention:** Before sending audio to Parakeet, the VAD checks the speech-frame ratio of drained audio — if fewer than 15% of chunks contain speech energy (`VAD_MIN_SPEECH_RATIO`), the buffer is silently dropped. After transcription, a post-inference filter catches repeated-word hallucinations (e.g., "the the the the").
 
@@ -331,6 +335,7 @@ tests/
   test_pipeline.py       # transcription pipeline tests
   test_recorder.py       # audio recorder unit tests
   test_repo_policy.py    # repo policy enforcement tests
+  test_report.py         # report generation tests
   test_session.py        # session/file management tests
   test_setup.py          # setup script tests
   test_startup.py        # startup smoke tests (imports, HF offline, model load)
