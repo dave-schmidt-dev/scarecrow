@@ -2,6 +2,10 @@
 
 Bug entries are inline under their date heading. A squashed bug must reference a regression test.
 
+## 2026-04-11
+
+- **Fixed missing "Recording resumed" marker in transcript.** When unpausing, only the session JSONL event was written — the visible `── HH:MM:SS · Recording resumed ──` line never appeared in the transcript display. Root cause: `_write_pause_marker()` wrote both the visual marker and the session event, but the resume path in `action_pause()` only wrote the session event inline. Fix: extracted `_write_resume_marker()` mirroring `_write_pause_marker()`, called from the resume branch. Regression test: `test_app_vad_events.py::test_resume_marker_written_to_captions`.
+
 ## 2026-04-09
 
 - **README accuracy pass:** Fixed VAD drain timing (750ms → 1250ms to match tuned config), added undocumented CLI flags (`--mic-only`, `--sys-only`), added missing keybindings (`Ctrl+M`, `Ctrl+Shift+S`, click-to-mute), added `test_report.py` to architecture section, clarified config file location for `SUMMARIZER_BACKEND`.

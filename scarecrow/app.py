@@ -1404,6 +1404,26 @@ class ScarecrowApp(App[None]):
                 }
             )
 
+    def _write_resume_marker(self) -> None:
+        h = self._elapsed // 3600
+        m = (self._elapsed % 3600) // 60
+        s = self._elapsed % 60
+        ts = f"{h:02d}:{m:02d}:{s:02d}"
+        marker = f"── {ts} · Recording resumed ──"
+        try:
+            captions = self.query_one("#captions", RichLog)
+            captions.write(f"[dim]{marker}[/dim]")
+        except NoMatches:
+            pass
+        if self._session is not None:
+            self._session.append_event(
+                {
+                    "type": "resume",
+                    "elapsed": self._elapsed,
+                    "timestamp": datetime.now().isoformat(timespec="seconds"),
+                }
+            )
+
     def _start_recording(self) -> None:
         if self.state is not AppState.IDLE:
             return
@@ -1581,15 +1601,7 @@ class ScarecrowApp(App[None]):
                         self._sys_capture.resume()
                     except Exception:
                         log.warning("Failed to resume system audio", exc_info=True)
-            # Write resume event to transcript
-            if self._session is not None:
-                self._session.append_event(
-                    {
-                        "type": "resume",
-                        "elapsed": self._elapsed,
-                        "timestamp": datetime.now().isoformat(timespec="seconds"),
-                    }
-                )
+            self._write_resume_marker()
             self._batch_countdown = BATCH_INTERVAL_SECONDS
             self._last_divider_elapsed = -self._cfg.DIVIDER_INTERVAL
             self._set_status("")

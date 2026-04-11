@@ -589,3 +589,33 @@ async def test_resume_event_written_on_unpause(tmp_path: Path) -> None:
     assert re.match(pattern, ev["timestamp"]), (
         f"resume timestamp {ev['timestamp']!r} does not match ISO 8601"
     )
+
+
+async def test_resume_marker_written_to_captions(tmp_path: Path) -> None:
+    """Unpausing must write a visible 'Recording resumed' marker to #captions.
+
+    Regression test: before the fix, the resume path only wrote the session
+    event but never appended the visual marker to the transcript display.
+    """
+    from scarecrow.session import Session
+
+    real_session = Session(base_dir=tmp_path)
+
+    async with _app().run_test() as pilot:
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        await pilot.pause()
+
+        captions = app.query_one("#captions", RichLog)
+        lines_before = len(captions.lines)
+
+        app._session = real_session
+        app._elapsed = 90
+        app.state = AppState.PAUSED
+        app._write_resume_marker()
+        await pilot.pause()
+
+    new_lines = [str(ln) for ln in captions.lines[lines_before:]]
+    assert any("Recording resumed" in ln for ln in new_lines), (
+        "Expected a 'Recording resumed' marker in #captions after"
+        " _write_resume_marker()"
+    )
