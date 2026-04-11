@@ -632,23 +632,27 @@ class ScarecrowApp(App[None]):
 
     def _poll_rotation_flush(self) -> None:
         """Check if segment rotation flush transcriptions are complete."""
-        self._rotation_poll_count += 1
-        mic_done = self._mic_future is None or self._mic_future.done()
-        sys_done = self._sys_future is None or self._sys_future.done()
-        if not (mic_done and sys_done):
-            if self._rotation_poll_count < self._ROTATION_POLL_LIMIT:
-                self.set_timer(0.1, self._poll_rotation_flush)
-                return
-            log.warning(
-                "Rotation flush timed out after %ds",
-                self._rotation_poll_count // 10,
-            )
-        # Reap the completed futures
-        self._reap_batch_futures()
-        # Schedule finalization after a short delay so that queued
-        # call_from_thread callbacks (_record_transcript) are processed
-        # by the event loop before we write the boundary event.
-        self.set_timer(0.05, self._finalize_rotation)
+        try:
+            self._rotation_poll_count += 1
+            mic_done = self._mic_future is None or self._mic_future.done()
+            sys_done = self._sys_future is None or self._sys_future.done()
+            if not (mic_done and sys_done):
+                if self._rotation_poll_count < self._ROTATION_POLL_LIMIT:
+                    self.set_timer(0.1, self._poll_rotation_flush)
+                    return
+                log.warning(
+                    "Rotation flush timed out after %ds",
+                    self._rotation_poll_count // 10,
+                )
+            # Reap the completed futures
+            self._reap_batch_futures()
+            # Schedule finalization after a short delay so that queued
+            # call_from_thread callbacks (_record_transcript) are processed
+            # by the event loop before we write the boundary event.
+            self.set_timer(0.05, self._finalize_rotation)
+        except Exception:
+            log.exception("Rotation flush poll failed; aborting rotation")
+            self._rotation_pending = False
 
     def _finalize_rotation(self) -> None:
         """Complete segment rotation: write boundary, swap recorders."""
@@ -656,75 +660,82 @@ class ScarecrowApp(App[None]):
             self._rotation_pending = False
             return
 
-        # 1. Stop recorders
-        if self._audio_recorder:
-            try:
-                self._audio_recorder.stop()
-            except Exception:
-                log.exception("Failed to stop mic recorder during rotation")
-        if self._sys_capture:
-            try:
-                self._sys_capture.stop()
-            except Exception:
-                log.exception("Failed to stop sys capture during rotation")
-
-        # 2. Write boundary event (transcript flush has already landed)
-        self._session.write_segment_boundary(self._current_segment, self._elapsed)
-
-        # 3. Increment segment
-        self._current_segment += 1
-
-        # 4. Create and start new recorders
-        new_mic_path = self._session.audio_path_for_segment(self._current_segment)
-        self._audio_recorder = AudioRecorder(
-            output_path=new_mic_path,
-            sample_rate=self._cfg.RECORDING_SAMPLE_RATE,
-            cfg=self._cfg,
-        )
         try:
-            self._audio_recorder.start()
-        except Exception:
-            log.exception("Failed to start new mic recorder after rotation")
-            self._audio_recorder = None
+            # 1. Stop recorders
+            if self._audio_recorder:
+                try:
+                    self._audio_recorder.stop()
+                except Exception:
+                    log.exception("Failed to stop mic recorder during rotation")
+            if self._sys_capture:
+                try:
+                    self._sys_capture.stop()
+                except Exception:
+                    log.exception("Failed to stop sys capture during rotation")
 
-        if self._sys_audio_enabled and self._tap_handle is not None:
-            from scarecrow.sys_audio import SystemAudioCapture
+            # 2. Write boundary event (transcript flush has already landed)
+            self._session.write_segment_boundary(self._current_segment, self._elapsed)
 
-            new_sys_path = self._session.audio_sys_path_for_segment(
-                self._current_segment
+            # 3. Increment segment
+            self._current_segment += 1
+
+            # 4. Create and start new recorders
+            new_mic_path = self._session.audio_path_for_segment(self._current_segment)
+            self._audio_recorder = AudioRecorder(
+                output_path=new_mic_path,
+                sample_rate=self._cfg.RECORDING_SAMPLE_RATE,
+                cfg=self._cfg,
             )
             try:
-                self._sys_capture = SystemAudioCapture(
-                    output_path=new_sys_path,
-                    device=self._tap_handle.device_index,
-                )
-                self._sys_capture._gain = self._cfg.SYS_GAIN
-                self._sys_capture.start()
+                self._audio_recorder.start()
             except Exception:
-                log.exception("Failed to start new sys capture after rotation")
-                self._sys_capture = None
+                log.exception("Failed to start new mic recorder after rotation")
+                self._audio_recorder = None
 
-        # 5. Re-apply mute state to new recorders
-        if self._mic_muted and self._audio_recorder:
-            self._audio_recorder.pause()
-        if self._sys_muted and self._sys_capture:
-            self._sys_capture.pause()
+            if self._sys_audio_enabled and self._tap_handle is not None:
+                from scarecrow.sys_audio import SystemAudioCapture
 
-        # 6. Reset batch window starts, divider timer, and sys holdoff
-        self._batch_window_start = self._elapsed
-        self._sys_batch_window_start = self._elapsed
-        self._last_divider_elapsed = self._elapsed - self._cfg.DIVIDER_INTERVAL
+                new_sys_path = self._session.audio_sys_path_for_segment(
+                    self._current_segment
+                )
+                try:
+                    self._sys_capture = SystemAudioCapture(
+                        output_path=new_sys_path,
+                        device=self._tap_handle.device_index,
+                    )
+                    self._sys_capture._gain = self._cfg.SYS_GAIN
+                    self._sys_capture.start()
+                except Exception:
+                    log.exception("Failed to start new sys capture after rotation")
+                    self._sys_capture = None
 
-        # 7. Write segment marker to UI
-        with contextlib.suppress(NoMatches):
-            rl = self.query_one("#captions", RichLog)
-            rl.write(
-                f"\n[bold]── segment {self._current_segment} "
-                f"({self._elapsed // 60}m) ──[/bold]\n"
+            # 5. Re-apply mute state to new recorders
+            if self._mic_muted and self._audio_recorder:
+                self._audio_recorder.pause()
+            if self._sys_muted and self._sys_capture:
+                self._sys_capture.pause()
+
+            # 6. Reset batch window starts, divider timer, and sys holdoff
+            self._batch_window_start = self._elapsed
+            self._sys_batch_window_start = self._elapsed
+            self._last_divider_elapsed = self._elapsed - self._cfg.DIVIDER_INTERVAL
+
+            # 7. Write segment marker to UI
+            with contextlib.suppress(NoMatches):
+                rl = self.query_one("#captions", RichLog)
+                rl.write(
+                    f"\n[bold]── segment {self._current_segment} "
+                    f"({self._elapsed // 60}m) ──[/bold]\n"
+                )
+
+            log.info(
+                "Segment rotation complete → segment %d",
+                self._current_segment,
             )
-
-        self._rotation_pending = False
-        log.info("Segment rotation complete → segment %d", self._current_segment)
+        except Exception:
+            log.exception("Segment rotation failed")
+        finally:
+            self._rotation_pending = False
 
     def _sync_info_bar(self) -> None:
         if not self.is_mounted:

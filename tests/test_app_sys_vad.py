@@ -194,3 +194,64 @@ async def test_check_segment_boundary_no_trigger_before_threshold(
         app._elapsed = app._cfg.SEGMENT_DURATION_SECONDS - 1
         app._check_segment_boundary()
         assert app._current_segment == 1
+
+
+# ---------------------------------------------------------------------------
+# Regression: rotation_pending reset on failure (BUG-20260411-rotation-pending)
+# ---------------------------------------------------------------------------
+
+
+@patch("scarecrow.sys_audio.SystemAudioCapture")
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_finalize_rotation_resets_pending_on_exception(
+    mock_session, mock_rec, mock_sac
+) -> None:
+    """_rotation_pending must be False even if _finalize_rotation raises."""
+    mock_sac.return_value = _mock_sys_capture()
+    mock_rec.return_value = _mock_recorder()
+    mock_sess = MagicMock()
+    # Force write_segment_boundary to raise, simulating a disk/IO error
+    mock_sess.write_segment_boundary.side_effect = OSError("disk full")
+    mock_session.return_value = mock_sess
+
+    async with _sys_app().run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        app._elapsed = app._cfg.SEGMENT_DURATION_SECONDS + 1
+        app._check_segment_boundary()
+        assert app._rotation_pending is True
+        # Wait for poll + finalize timers to fire
+        await pilot.pause(delay=2.0)
+        # Must be reset even though write_segment_boundary raised
+        assert app._rotation_pending is False
+
+
+@patch("scarecrow.sys_audio.SystemAudioCapture")
+@patch("scarecrow.app.AudioRecorder")
+@patch("scarecrow.app.Session")
+async def test_poll_rotation_flush_resets_pending_on_exception(
+    mock_session, mock_rec, mock_sac
+) -> None:
+    """_rotation_pending must be False if _poll_rotation_flush raises."""
+    mock_sac.return_value = _mock_sys_capture()
+    mock_rec.return_value = _mock_recorder()
+    mock_session.return_value = MagicMock()
+
+    async with _sys_app().run_test() as pilot:
+        await pilot.press("enter")
+        await pilot.pause(delay=0.3)
+        app: ScarecrowApp = pilot.app  # type: ignore[assignment]
+        # Set up a corrupt future that raises on .done()
+        app._rotation_pending = True
+        app._rotation_poll_count = 0
+        bad_future = MagicMock()
+        bad_future.done.side_effect = RuntimeError("corrupt future")
+        app._mic_future = bad_future
+        # Manually trigger the poll
+        app._poll_rotation_flush()
+        # Clear the bad mock before event loop ticks again
+        app._mic_future = None
+        await pilot.pause(delay=0.3)
+        assert app._rotation_pending is False

@@ -4,6 +4,13 @@ Bug entries are inline under their date heading. A squashed bug must reference a
 
 ## 2026-04-11
 
+### [BUG-20260411-rotation-pending-stuck]
+
+- Symptom: App appeared frozen after 6 hours — no new transcription, TUI responsive but transcript pane stopped updating. Debug log showed "Rotating segment 6 → 7" with no completion or timeout message.
+- Root cause: `_finalize_rotation()` set `_rotation_pending = False` only at the last line, with no `try/finally`. Any uncaught exception (e.g., `write_segment_boundary` IOError, `AudioRecorder()` constructor failure) left `_rotation_pending = True` permanently. Since `_on_vad_poll()` gates on `not self._rotation_pending`, all transcription stopped. Similarly, `_poll_rotation_flush()` had no exception handling — if the timer callback raised, the poll chain broke silently.
+- Fix: Wrapped `_finalize_rotation()` body in `try/finally` that unconditionally resets `_rotation_pending`. Wrapped `_poll_rotation_flush()` in `try/except` that resets `_rotation_pending` on failure.
+- Regression test: `tests/test_app_sys_vad.py::test_finalize_rotation_resets_pending_on_exception`, `tests/test_app_sys_vad.py::test_poll_rotation_flush_resets_pending_on_exception`
+
 - **Fixed missing "Recording resumed" marker in transcript.** When unpausing, only the session JSONL event was written — the visible `── HH:MM:SS · Recording resumed ──` line never appeared in the transcript display. Root cause: `_write_pause_marker()` wrote both the visual marker and the session event, but the resume path in `action_pause()` only wrote the session event inline. Fix: extracted `_write_resume_marker()` mirroring `_write_pause_marker()`, called from the resume branch. Regression test: `test_app_vad_events.py::test_resume_marker_written_to_captions`.
 
 ## 2026-04-09
