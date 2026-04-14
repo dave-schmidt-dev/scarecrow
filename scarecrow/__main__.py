@@ -210,7 +210,38 @@ def _wait_for_enter_or_timeout(timeout: int = 30) -> None:
                 termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
+_HELP = """\
+usage: scarecrow [subcommand] [options]
+
+Live captions TUI — launch with no arguments to start recording.
+
+subcommands:
+  reprocess <dir> | --latest   Re-run diarization and/or summarization
+
+recording options:
+  --no-sys-audio               Disable system audio capture
+  --mic-only                   Start with system audio muted
+  --sys-only                   Start with microphone muted
+
+reprocess options:
+  --latest                     Use most recent session in ~/recordings
+  --no-diarize                 Skip diarization, summarize only
+  --model <name>               Summarizer model (e.g. gemma4)
+  --backend <gguf|mlx>         Summarizer backend
+
+examples:
+  scarecrow                    Launch TUI with mic + system audio
+  scarecrow reprocess --latest Re-diarize + re-summarize latest session
+  scarecrow --help             Show this help
+"""
+
+
 def main() -> None:
+    # Help flag
+    if len(sys.argv) > 1 and sys.argv[1] in ("--help", "-h"):
+        print(_HELP)
+        return
+
     # Dispatch subcommands before any TUI/model setup
     if len(sys.argv) > 1 and sys.argv[1] in _SUBCOMMANDS:
         _SUBCOMMANDS[sys.argv[1]](sys.argv[2:])
