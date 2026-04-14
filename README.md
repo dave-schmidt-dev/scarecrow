@@ -150,8 +150,9 @@ If `OBSIDIAN_VAULT_DIR` is set in `scarecrow/config.py` (defaults to `~/Library/
 
 If the model produces only reasoning with no structured output, the summarizer automatically retries with a forced prefix. If both attempts fail, `summary.md` contains error details and a retry command:
 ```bash
-python3 scripts/resummarize.py ~/recordings/<session-dir>
-python3 scripts/resummarize.py ~/recordings/<session-dir> --diarize  # also re-run diarization
+scarecrow reprocess --latest              # re-diarize + re-summarize most recent session
+scarecrow reprocess ~/recordings/<dir>    # explicit session directory
+scarecrow reprocess --latest --no-diarize # re-summarize only (skip diarization)
 ```
 
 ### Startup output

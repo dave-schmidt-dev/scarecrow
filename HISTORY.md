@@ -6,6 +6,7 @@ Bug entries are inline under their date heading. A squashed bug must reference a
 
 - **Added progress reporting to post-exit summarization pipeline.** Previously, summarization had no user-facing progress — only internal `log.info()` calls. Now emits step-by-step progress (model loading, per-segment summarization, synthesis, completion with timing) via the same `progress_callback` pattern the diarizer already uses. The exit summary now shows per-phase timing: `Post-processing complete — diarize: 45.2s, summarize: 12.1s, total: 62.5s`.
 - **Added `--diarize` flag to `scripts/resummarize.py`.** Allows re-running diarization on an interrupted session before summarization, so both can be recovered with a single command: `python3 scripts/resummarize.py <session-dir> --diarize`.
+- **Added `scarecrow reprocess` subcommand.** Re-runs diarization and summarization on existing sessions without launching the TUI or loading Parakeet. Supports `--latest` (most recent session), `--no-diarize` (summarize only), `--model`, and `--backend` flags.
 
 ## 2026-04-11
 

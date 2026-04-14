@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import sys
 import time
@@ -12,6 +13,179 @@ from pathlib import Path
 from scarecrow.runtime import configure_runtime_environment
 
 configure_runtime_environment()
+
+
+# ---------------------------------------------------------------------------
+# Subcommands — dispatched before any TUI/model setup
+# ---------------------------------------------------------------------------
+
+
+def _resolve_session_dir(args: list[str]) -> Path:
+    """Resolve a session directory from args: explicit path or --latest."""
+    from scarecrow import config
+
+    if "--latest" in args:
+        args.remove("--latest")
+        recordings = config.DEFAULT_RECORDINGS_DIR
+        if not recordings.is_dir():
+            print(f"  Recordings directory not found: {recordings}", file=sys.stderr)
+            sys.exit(1)
+        # Find most recent session by modification time
+        sessions = sorted(
+            (d for d in recordings.iterdir() if d.is_dir()),
+            key=lambda d: d.stat().st_mtime,
+            reverse=True,
+        )
+        if not sessions:
+            print(f"  No sessions found in {recordings}", file=sys.stderr)
+            sys.exit(1)
+        return sessions[0]
+
+    # Remaining args after flags are stripped should be [session-dir]
+    dirs = [a for a in args if not a.startswith("-")]
+    if len(dirs) != 1:
+        print(
+            "Usage: scarecrow reprocess <session-dir> | --latest "
+            "[--no-diarize] [--model X] [--backend X]",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    path = Path(dirs[0]).resolve()
+    if not path.is_dir():
+        print(f"  Not a directory: {path}", file=sys.stderr)
+        sys.exit(1)
+    return path
+
+
+def _count_segments(transcript: Path) -> int:
+    """Count segments by tallying segment_boundary events."""
+    n = 1
+    with transcript.open(encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                if json.loads(line).get("type") == "segment_boundary":
+                    n += 1
+            except json.JSONDecodeError:
+                pass
+    return n
+
+
+def _detect_sys_audio(session_dir: Path, n_segments: int) -> bool:
+    """Check whether the session has system audio files."""
+    for seg in range(1, n_segments + 1):
+        suffix = f"_seg{seg}" if seg > 1 else ""
+        if (session_dir / f"audio_sys{suffix}.flac").exists():
+            return True
+    return False
+
+
+def _print_progress(msg: str) -> None:
+    print(f"  {msg}", flush=True)
+
+
+def _cmd_reprocess(args: list[str]) -> None:
+    """Re-run diarization and/or summarization on an existing session."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    )
+
+    no_diarize = "--no-diarize" in args
+    if no_diarize:
+        args.remove("--no-diarize")
+
+    model = None
+    if "--model" in args:
+        idx = args.index("--model")
+        if idx + 1 >= len(args):
+            print("--model requires a value", file=sys.stderr)
+            sys.exit(1)
+        model = args[idx + 1]
+        del args[idx : idx + 2]
+
+    backend = None
+    if "--backend" in args:
+        idx = args.index("--backend")
+        if idx + 1 >= len(args):
+            print("--backend requires a value", file=sys.stderr)
+            sys.exit(1)
+        backend = args[idx + 1]
+        del args[idx : idx + 2]
+
+    session_dir = _resolve_session_dir(args)
+    transcript = session_dir / "transcript.jsonl"
+    if not transcript.exists():
+        print(f"  No transcript.jsonl in {session_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    n_segments = _count_segments(transcript)
+    print(flush=True)
+    print(f"  Reprocessing: {session_dir.name}", flush=True)
+    print(f"  Segments: {n_segments}", flush=True)
+    print(flush=True)
+
+    t0 = time.monotonic()
+
+    # Diarization
+    if not no_diarize:
+        from scarecrow.diarizer import _read_events as _diar_read_events
+        from scarecrow.diarizer import diarize_session
+
+        events = _diar_read_events(transcript)
+        sys_audio = _detect_sys_audio(session_dir, n_segments)
+
+        diar_t0 = time.monotonic()
+        diarize_session(
+            session_dir,
+            n_segments,
+            events,
+            sys_audio_enabled=sys_audio,
+            progress_callback=_print_progress,
+        )
+        diar_elapsed = time.monotonic() - diar_t0
+        print(flush=True)
+
+    # Summarization
+    from scarecrow.config import OBSIDIAN_VAULT_DIR
+    from scarecrow.summarizer import summarize_session, summarize_session_segments
+
+    output_name = f"summary_{model}.md" if model else "summary.md"
+
+    if n_segments > 1 and not model:
+        result = summarize_session_segments(
+            session_dir,
+            n_segments,
+            obsidian_dir=OBSIDIAN_VAULT_DIR,
+            backend=backend,
+            progress_callback=_print_progress,
+        )
+    else:
+        result = summarize_session(
+            session_dir,
+            obsidian_dir=OBSIDIAN_VAULT_DIR,
+            model=model,
+            output_name=output_name,
+            backend=backend,
+            progress_callback=_print_progress,
+        )
+
+    total = time.monotonic() - t0
+    print(flush=True)
+    if not no_diarize:
+        print(f"  Diarization: {diar_elapsed:.1f}s", flush=True)
+    if result:
+        print(f"  Summary: {result}", flush=True)
+    else:
+        print("  Summarization failed. Check summary.md for details.", file=sys.stderr)
+    print(f"  Total: {total:.1f}s", flush=True)
+
+
+_SUBCOMMANDS = {
+    "reprocess": _cmd_reprocess,
+}
 
 
 def _wait_for_enter_or_timeout(timeout: int = 30) -> None:
@@ -37,6 +211,11 @@ def _wait_for_enter_or_timeout(timeout: int = 30) -> None:
 
 
 def main() -> None:
+    # Dispatch subcommands before any TUI/model setup
+    if len(sys.argv) > 1 and sys.argv[1] in _SUBCOMMANDS:
+        _SUBCOMMANDS[sys.argv[1]](sys.argv[2:])
+        return
+
     log_path = Path.home() / ".cache" / "scarecrow" / "debug.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
