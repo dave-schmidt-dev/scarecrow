@@ -144,11 +144,14 @@ Two summarizer backends are available:
 
 Both backends load the model in-process — no server needed.
 
+> **Maintainer note:** On the next Scarecrow work session, upgrade `.venv`'s `mlx-vlm` from `0.4.3` to `0.4.4` (or the latest compatible patch) before chasing Gemma 4 summarizer behavior. The newer release includes Gemma 4 fixes for processor config, chunked prefill, and vision+text degradation.
+
 If `OBSIDIAN_VAULT_DIR` is set in `scarecrow/config.py` (defaults to `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Transcriptions Summaries`), summaries are automatically copied into that directory. Set it to `None` to disable. **Note:** the default path is inside iCloud Drive, so summaries will sync to the cloud if that vault exists on your machine.
 
 If the model produces only reasoning with no structured output, the summarizer automatically retries with a forced prefix. If both attempts fail, `summary.md` contains error details and a retry command:
 ```bash
 python3 scripts/resummarize.py ~/recordings/<session-dir>
+python3 scripts/resummarize.py ~/recordings/<session-dir> --diarize  # also re-run diarization
 ```
 
 ### Startup output
@@ -312,7 +315,7 @@ assets/
   scarecrow-icon.svg # app icon
 scripts/
   setup.py           # bootstrap: checks prereqs, installs deps, shows config + launch options
-  resummarize.py     # re-run summarization on an existing session
+  resummarize.py     # re-run diarization (--diarize) and/or summarization on an existing session
 examples/
   scarecrow-iterm-profile.json  # iTerm2 dynamic profile template
 tests/

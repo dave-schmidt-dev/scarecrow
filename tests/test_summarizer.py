@@ -549,7 +549,9 @@ def test_summarize_session_segments_single_delegates(tmp_path: Path) -> None:
     with patch("scarecrow.summarizer.summarize_session", mock_ss):
         result = summarize_session_segments(tmp_path, 1)
 
-    mock_ss.assert_called_once_with(tmp_path, obsidian_dir=None, backend=None)
+    mock_ss.assert_called_once_with(
+        tmp_path, obsidian_dir=None, backend=None, progress_callback=None
+    )
     assert result == tmp_path / "summary.md"
 
 
@@ -1051,5 +1053,7 @@ def test_summarize_session_segments_passes_backend(tmp_path: Path) -> None:
     with patch("scarecrow.summarizer.summarize_session", mock_ss):
         result = summarize_session_segments(tmp_path, 1, backend="mlx")
 
-    mock_ss.assert_called_once_with(tmp_path, obsidian_dir=None, backend="mlx")
+    mock_ss.assert_called_once_with(
+        tmp_path, obsidian_dir=None, backend="mlx", progress_callback=None
+    )
     assert result == tmp_path / "summary.md"

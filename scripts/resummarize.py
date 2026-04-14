@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Re-run summarization on an existing session directory.
+"""Re-run diarization and/or summarization on an existing session directory.
 
 Usage:
     python3 scripts/resummarize.py ~/recordings/2026-03-29_14-30-00
+    python3 scripts/resummarize.py ~/recordings/2026-03-29_14-30-00 --diarize
     python3 scripts/resummarize.py ~/recordings/2026-03-29_14-30-00 --model gemma4
     python3 scripts/resummarize.py ~/recordings/2026-03-29_14-30-00 --backend mlx
 """
@@ -11,10 +12,45 @@ from __future__ import annotations
 
 import logging
 import sys
+import time
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+
+
+def _pop_flag(args: list[str], flag: str) -> bool:
+    """Remove a boolean flag from args, returning True if it was present."""
+    if flag in args:
+        args.remove(flag)
+        return True
+    return False
+
+
+def _pop_option(args: list[str], flag: str) -> str | None:
+    """Remove a --key value pair from args, returning the value or None."""
+    if flag not in args:
+        return None
+    idx = args.index(flag)
+    if idx + 1 >= len(args):
+        print(f"{flag} requires a value", file=sys.stderr)
+        sys.exit(1)
+    value = args[idx + 1]
+    del args[idx : idx + 2]
+    return value
+
+
+def _print_progress(msg: str) -> None:
+    print(f"  {msg}", flush=True)
+
+
+def _detect_sys_audio(session_dir: Path, n_segments: int) -> bool:
+    """Check whether the session has system audio files."""
+    for seg in range(1, n_segments + 1):
+        suffix = f"_seg{seg}" if seg > 1 else ""
+        if (session_dir / f"audio_sys{suffix}.flac").exists():
+            return True
+    return False
 
 
 def main() -> int:
@@ -23,30 +59,15 @@ def main() -> int:
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
 
-    # Simple arg parsing: positional session-dir, optional --model/--backend
     args = sys.argv[1:]
-    model = None
-    backend = None
-
-    if "--model" in args:
-        idx = args.index("--model")
-        if idx + 1 >= len(args):
-            print("--model requires a value (e.g. gemma4)", file=sys.stderr)
-            return 1
-        model = args[idx + 1]
-        args = args[:idx] + args[idx + 2 :]
-
-    if "--backend" in args:
-        idx = args.index("--backend")
-        if idx + 1 >= len(args):
-            print("--backend requires a value (gguf or mlx)", file=sys.stderr)
-            return 1
-        backend = args[idx + 1]
-        args = args[:idx] + args[idx + 2 :]
+    diarize = _pop_flag(args, "--diarize")
+    model = _pop_option(args, "--model")
+    backend = _pop_option(args, "--backend")
 
     if len(args) != 1:
         print(
-            f"Usage: {sys.argv[0]} <session-dir> [--model gemma4] [--backend gguf|mlx]",
+            f"Usage: {sys.argv[0]} <session-dir> [--diarize] "
+            f"[--model gemma4] [--backend gguf|mlx]",
             file=sys.stderr,
         )
         return 1
@@ -80,6 +101,26 @@ def main() -> int:
             except json.JSONDecodeError:
                 pass
 
+    # Run diarization if requested
+    if diarize:
+        from scarecrow.diarizer import _read_events as _diar_read_events
+        from scarecrow.diarizer import diarize_session
+
+        events = _diar_read_events(transcript)
+        sys_audio = _detect_sys_audio(session_dir, n_segments)
+
+        print(f"Diarizing {session_dir} (segments={n_segments})...")
+        t0 = time.monotonic()
+        diarize_session(
+            session_dir,
+            n_segments,
+            events,
+            sys_audio_enabled=sys_audio,
+            progress_callback=_print_progress,
+        )
+        elapsed = time.monotonic() - t0
+        print(f"  Diarization finished in {elapsed:.1f}s")
+
     # When benchmarking with --model, write to summary_<model>.md
     output_name = f"summary_{model}.md" if model else "summary.md"
 
@@ -95,6 +136,7 @@ def main() -> int:
             n_segments,
             obsidian_dir=OBSIDIAN_VAULT_DIR,
             backend=backend,
+            progress_callback=_print_progress,
         )
     else:
         if n_segments > 1 and model:
@@ -109,6 +151,7 @@ def main() -> int:
             model=model,
             output_name=output_name,
             backend=backend,
+            progress_callback=_print_progress,
         )
 
     if result:

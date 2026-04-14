@@ -13,6 +13,7 @@ import logging
 import os
 import shutil
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from scarecrow import config
@@ -727,6 +728,7 @@ def summarize_session(
     model: str | None = None,
     output_name: str = "summary.md",
     backend: str | None = None,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> Path | None:
     """Generate summary.md for a completed session.
 
@@ -744,6 +746,12 @@ def summarize_session(
                      summaries.
         backend: ``"gguf"`` or ``"mlx"``.  Defaults to config value.
     """
+
+    def _progress(msg: str) -> None:
+        log.info(msg)
+        if progress_callback:
+            progress_callback(msg)
+
     try:
         transcript_path = session_dir / "transcript.jsonl"
         if not transcript_path.exists():
@@ -771,10 +779,11 @@ def summarize_session(
             return _write_error_summary(session_dir, str(exc))
 
         model_name = be.name
-        log.info("Loading %s for summarization...", model_name)
+        _progress(f"Loading summarization model ({model_name})…")
 
         be.load()
         try:
+            _progress("Generating summary…")
             t0 = time.monotonic()
             summary_text, total_tokens = be.generate(system_prompt, user_content)
             summarize_seconds = time.monotonic() - t0
@@ -802,7 +811,11 @@ def summarize_session(
 
         summary_path = session_dir / output_name
         summary_path.write_text(summary_text, encoding="utf-8")
-        log.info("Summary written to %s", summary_path)
+
+        _progress(
+            f"Summary complete — {summary_words} words, "
+            f"{summarize_seconds:.1f}s ({model_name})"
+        )
 
         # Only sync to Obsidian for production summaries
         if output_name == "summary.md":
@@ -876,6 +889,7 @@ def summarize_session_segments(
     *,
     obsidian_dir: Path | None = None,
     backend: str | None = None,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> Path | None:
     """Summarize a multi-segment session.
 
@@ -888,8 +902,16 @@ def summarize_session_segments(
     """
     if n_segments <= 1:
         return summarize_session(
-            session_dir, obsidian_dir=obsidian_dir, backend=backend
+            session_dir,
+            obsidian_dir=obsidian_dir,
+            backend=backend,
+            progress_callback=progress_callback,
         )
+
+    def _progress(msg: str) -> None:
+        log.info(msg)
+        if progress_callback:
+            progress_callback(msg)
 
     try:
         transcript_path = session_dir / "transcript.jsonl"
@@ -933,11 +955,7 @@ def summarize_session_segments(
         except (ValueError, FileNotFoundError) as exc:
             return _write_error_summary(session_dir, str(exc))
 
-        log.info(
-            "Loading %s for %d-segment summarization...",
-            be.name,
-            n_segments,
-        )
+        _progress(f"Loading summarization model ({be.name})…")
         be.load()
         try:
             seg_summaries: list[str] = []
@@ -947,7 +965,7 @@ def summarize_session_segments(
                     placeholder = "## Summary\n\nNo speech detected in this segment.\n"
                     (session_dir / seg_name).write_text(placeholder, encoding="utf-8")
                     continue
-                log.info("Summarizing segment %d/%d...", i, n_segments)
+                _progress(f"Summarizing segment {i}/{n_segments}…")
                 _, seg_text = _summarize_events(session_dir, seg_evs, seg_name, be)
                 if seg_text:
                     seg_summaries.append(seg_text)
@@ -959,10 +977,7 @@ def summarize_session_segments(
                 return _write_error_summary(session_dir, "No segments produced output")
 
             # Synthesis pass: merge segment summaries into one cohesive summary
-            log.info(
-                "Synthesizing overall summary from %d segments...",
-                len(seg_summaries),
-            )
+            _progress(f"Synthesizing {len(seg_summaries)} segments…")
             separator = "\n\n---\n\n"
             synthesis_input = separator.join(
                 f"### Segment {i}\n\n{s}" for i, s in enumerate(seg_summaries, 1)
@@ -1002,7 +1017,11 @@ def summarize_session_segments(
 
         summary_path = session_dir / "summary.md"
         summary_path.write_text(overall_text, encoding="utf-8")
-        log.info("Synthesized summary written to %s", summary_path)
+
+        _progress(
+            f"Summary complete — {overall_words} words, "
+            f"{synthesis_seconds:.1f}s ({be.name})"
+        )
         _sync_to_obsidian(summary_path, session_dir.name, obsidian_dir)
         return summary_path
 

@@ -2,6 +2,11 @@
 
 Bug entries are inline under their date heading. A squashed bug must reference a regression test.
 
+## 2026-04-13
+
+- **Added progress reporting to post-exit summarization pipeline.** Previously, summarization had no user-facing progress — only internal `log.info()` calls. Now emits step-by-step progress (model loading, per-segment summarization, synthesis, completion with timing) via the same `progress_callback` pattern the diarizer already uses. The exit summary now shows per-phase timing: `Post-processing complete — diarize: 45.2s, summarize: 12.1s, total: 62.5s`.
+- **Added `--diarize` flag to `scripts/resummarize.py`.** Allows re-running diarization on an interrupted session before summarization, so both can be recovered with a single command: `python3 scripts/resummarize.py <session-dir> --diarize`.
+
 ## 2026-04-11
 
 ### [BUG-20260411-rotation-pending-stuck]

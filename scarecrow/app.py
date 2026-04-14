@@ -2046,6 +2046,10 @@ class ScarecrowApp(App[None]):
             return
         session_dir = session.session_dir
         n_segments = self._current_segment
+        pipeline_t0 = time.monotonic()
+
+        def _print_progress(msg: str) -> None:
+            print(f"  {msg}", flush=True)
 
         for seg in range(1, n_segments + 1):
             label = f" (seg {seg})" if n_segments > 1 else ""
@@ -2063,7 +2067,8 @@ class ScarecrowApp(App[None]):
                     log.exception("Failed to compress sys audio segment %d", seg)
 
         if not self._skip_summary:
-            # Phase 2: Speaker diarization (optional, non-fatal)
+            # Speaker diarization (optional, non-fatal)
+            diar_t0 = time.monotonic()
             try:
                 from scarecrow.diarizer import (
                     _read_events as _diar_read_events,
@@ -2080,13 +2085,14 @@ class ScarecrowApp(App[None]):
                         n_segments,
                         events,
                         sys_audio_enabled=self._sys_audio_enabled,
-                        progress_callback=lambda msg: print(f"  {msg}", flush=True),
+                        progress_callback=_print_progress,
                     )
             except Exception:
                 log.exception("Diarization failed; summarizing without speaker labels")
+            diar_elapsed = time.monotonic() - diar_t0
 
-            # Phase 3: Summarization
-            print("  Generating summary…", flush=True)
+            # Summarization
+            summ_t0 = time.monotonic()
             try:
                 from scarecrow.summarizer import summarize_session_segments
 
@@ -2094,12 +2100,22 @@ class ScarecrowApp(App[None]):
                     session_dir,
                     n_segments,
                     obsidian_dir=self._cfg.OBSIDIAN_VAULT_DIR,
+                    progress_callback=_print_progress,
                 )
                 if result:
                     log.info("Summary: %s", result)
                     self._summary_path = result
             except Exception:
                 log.exception("Failed to generate summary")
+            summ_elapsed = time.monotonic() - summ_t0
+
+            pipeline_elapsed = time.monotonic() - pipeline_t0
+            _print_progress(
+                f"Post-processing complete — "
+                f"diarize: {diar_elapsed:.1f}s, "
+                f"summarize: {summ_elapsed:.1f}s, "
+                f"total: {pipeline_elapsed:.1f}s"
+            )
         else:
             print("  Summary skipped (quick quit).", flush=True)
 
