@@ -351,7 +351,7 @@ def main() -> None:
             else:
                 print("\n  Shutting down…", flush=True)
             try:
-                app.cleanup_after_exit()  # Phase 1 safety net (no-op if already ran)
+                app.cleanup_after_exit()  # Phase 1: flush + finalize
             except Exception:
                 logging.getLogger(__name__).exception("Phase 1 cleanup failed")
             try:

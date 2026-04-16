@@ -79,8 +79,8 @@ async def test_action_quit_does_not_call_exit_immediately() -> None:
         )
 
 
-async def test_deferred_quit_calls_stop_recording_then_exit() -> None:
-    """_deferred_quit must call _stop_recording and then exit()."""
+async def test_deferred_quit_exits_without_blocking_on_cleanup() -> None:
+    """_deferred_quit must call exit() immediately — cleanup runs post-TUI."""
     async with _app().run_test() as pilot:
         app: ScarecrowApp = pilot.app  # type: ignore[assignment]
         await pilot.pause()
@@ -92,8 +92,6 @@ async def test_deferred_quit_calls_stop_recording_then_exit() -> None:
 
         def track_stop():
             stop_called.append(True)
-            # Don't actually stop — no recorder running
-            pass
 
         def track_exit(*args, **kwargs):
             exit_called.append(True)
@@ -105,7 +103,7 @@ async def test_deferred_quit_calls_stop_recording_then_exit() -> None:
         app._deferred_quit()
         await pilot.pause()
 
-        assert len(stop_called) == 1, "_deferred_quit must call _stop_recording"
+        assert len(stop_called) == 0, "_deferred_quit must NOT call _stop_recording"
         assert len(exit_called) == 1, "_deferred_quit must call exit"
 
 
@@ -525,7 +523,7 @@ def test_cleanup_after_exit_shuts_down_batch_executor() -> None:
 
     app.cleanup_after_exit()
 
-    mock_executor.shutdown.assert_called_once_with(wait=True, cancel_futures=False)
+    mock_executor.shutdown.assert_called_once_with(wait=True, cancel_futures=True)
     assert app._batch_executor is None
 
 

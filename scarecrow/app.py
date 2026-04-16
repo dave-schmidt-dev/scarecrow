@@ -1972,7 +1972,12 @@ class ScarecrowApp(App[None]):
     def _deferred_quit(self) -> None:
         if hasattr(self, "_discard_confirm_timer"):
             self._discard_confirm_timer.stop()
-        self._stop_recording()
+        # Exit TUI immediately — Phase 1 cleanup (flush audio, shutdown
+        # executor, finalize session) runs in __main__.py's finally block
+        # where the terminal is available for progress output.  The old code
+        # called _stop_recording() here, which blocked the Textual event loop
+        # and left the TUI painted on screen with "Shutting down…" forever
+        # when a batch worker was slow to finish.
         self.exit()
 
     def _stop_recording(self) -> None:
@@ -2188,11 +2193,25 @@ class ScarecrowApp(App[None]):
 
     def _cleanup_shutdown_executor(self) -> None:
         if self._batch_executor is not None:
-            # wait=True ensures the MLX executor thread exits cleanly before
-            # the transcriber's model is released. wait=False was the original
-            # code but left the thread alive, which caused crashes if a new
-            # executor was subsequently created.
-            self._batch_executor.shutdown(wait=True, cancel_futures=False)
+            # Cancel queued futures immediately, then give the running worker
+            # a bounded grace period to finish.  The old code used
+            # wait=True / cancel_futures=False which blocked indefinitely if
+            # a batch transcription was stuck (e.g. long MLX Metal inference).
+            # During final shutdown no new executor is created, so
+            # wait=False after the grace period is safe.
+            done = threading.Event()
+
+            def _do_shutdown() -> None:
+                self._batch_executor.shutdown(wait=True, cancel_futures=True)
+                done.set()
+
+            t = threading.Thread(target=_do_shutdown, daemon=True)
+            t.start()
+            if not done.wait(timeout=10):
+                log.warning(
+                    "Batch executor did not shut down within 10 s; "
+                    "proceeding with cleanup"
+                )
             self._batch_executor = None
 
     def _cleanup_shutdown_transcriber(self, include_ui: bool) -> None:
@@ -2362,5 +2381,5 @@ class ScarecrowApp(App[None]):
 
     def on_unmount(self) -> None:
         if self._batch_executor is not None:
-            self._batch_executor.shutdown(wait=True, cancel_futures=False)
+            self._batch_executor.shutdown(wait=False, cancel_futures=True)
             self._batch_executor = None

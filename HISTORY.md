@@ -2,6 +2,15 @@
 
 Bug entries are inline under their date heading. A squashed bug must reference a regression test.
 
+## 2026-04-15
+
+### [BUG-20260415-shutdown-hang]
+
+- Symptom: After a 1:35:58 recording session, pressing Ctrl+Q showed "Shutting down…" in the TUI status bar but the app never exited. The TUI remained painted on screen indefinitely.
+- Root cause: `_deferred_quit()` called `_stop_recording()` → `cleanup_after_exit(include_ui=True)` synchronously inside a Textual timer callback, blocking the event loop. If a batch transcription worker was slow (common after long sessions), the executor shutdown at `app.py:2195` (`executor.shutdown(wait=True, cancel_futures=False)`) blocked forever — `ThreadPoolExecutor.shutdown()` has no timeout parameter. `self.exit()` was never reached.
+- Fix: (1) `_deferred_quit()` now calls `self.exit()` immediately — Phase 1 cleanup runs post-TUI in `__main__.py`'s finally block where it already existed as a safety net. (2) `_cleanup_shutdown_executor()` now uses a 10s bounded timeout via a daemon thread instead of blocking indefinitely. (3) `on_unmount()` uses non-blocking shutdown since it's a redundant safety net.
+- Regression tests: `test_app_shutdown.py::test_deferred_quit_exits_without_blocking_on_cleanup`, `test_app_shutdown.py::test_cleanup_after_exit_shuts_down_batch_executor`
+
 ## 2026-04-13
 
 - **Added progress reporting to post-exit summarization pipeline.** Previously, summarization had no user-facing progress — only internal `log.info()` calls. Now emits step-by-step progress (model loading, per-segment summarization, synthesis, completion with timing) via the same `progress_callback` pattern the diarizer already uses. The exit summary now shows per-phase timing: `Post-processing complete — diarize: 45.2s, summarize: 12.1s, total: 62.5s`.
