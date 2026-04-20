@@ -205,6 +205,54 @@ def test_main_handles_preload_batch_model_failure() -> None:
     assert exc_info.value.code == 1
 
 
+def test_reprocess_review_loop_accepts_immediately(tmp_path: Path) -> None:
+    """Reprocess review loop should stop after the first satisfied answer."""
+    from scarecrow import __main__
+
+    summary = tmp_path / "summary.md"
+    summary.write_text("## Summary\n\nDraft.\n", encoding="utf-8")
+
+    with (
+        patch("scarecrow.summary_review.prompt_for_summary_review"),
+        patch("scarecrow.task_review.prompt_for_task_review"),
+        patch("builtins.input", return_value="y"),
+    ):
+        result = __main__._review_reprocessed_summary(
+            tmp_path,
+            n_segments=1,
+            backend=None,
+            model=None,
+            initial_result=summary,
+        )
+
+    assert result == summary
+
+
+def test_reprocess_review_loop_can_review_again_then_accept(tmp_path: Path) -> None:
+    """Reprocess review loop should allow another review pass before accept."""
+    from scarecrow import __main__
+
+    summary = tmp_path / "summary.md"
+    summary.write_text("## Summary\n\nDraft.\n", encoding="utf-8")
+
+    answers = iter(["e", "y"])
+    with (
+        patch("scarecrow.summary_review.prompt_for_summary_review") as review_mock,
+        patch("scarecrow.task_review.prompt_for_task_review"),
+        patch("builtins.input", side_effect=lambda _: next(answers)),
+    ):
+        result = __main__._review_reprocessed_summary(
+            tmp_path,
+            n_segments=1,
+            backend=None,
+            model=None,
+            initial_result=summary,
+        )
+
+    assert result == summary
+    assert review_mock.call_count == 2
+
+
 @pytest.mark.integration
 @pytest.mark.skipif(
     not importlib.util.find_spec("parakeet_mlx"),

@@ -34,6 +34,8 @@ TEST_FILES=(
   tests/test_startup.py
   tests/test_suite_runner.py
   tests/test_summarizer.py
+  tests/test_summary_review.py
+  tests/test_task_review.py
   tests/test_sys_audio.py
   tests/test_audio_tap.py
   tests/test_pipeline.py

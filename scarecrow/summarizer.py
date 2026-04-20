@@ -17,6 +17,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from scarecrow import config
+from scarecrow.task_review import load_task_review
 
 log = logging.getLogger(__name__)
 
@@ -314,6 +315,52 @@ def _strip_speaker_prefixes(text: str) -> str:
     import re
 
     return re.sub(r"\[[^\]]+\]: ", "", text)
+
+
+def _validated_task_guidance(session_dir: Path) -> str:
+    """Return prompt guidance when reviewed tasks exist for this session."""
+    review = load_task_review(session_dir)
+    if review is None:
+        return ""
+
+    tasks = [
+        task.get("text", "").strip()
+        for task in review.get("tasks", [])
+        if task.get("text", "").strip()
+    ]
+    if not tasks:
+        return (
+            "\n\nValidated action items:\n"
+            "The user completed task review for this session and confirmed that "
+            "there are no valid action items. Omit the `## Action Items` section."
+        )
+
+    task_lines = "\n".join(f"- [ ] {task}" for task in tasks)
+    return (
+        "\n\nValidated action items:\n"
+        "The user reviewed the task list for this session. Use EXACTLY the "
+        "items below in `## Action Items`, preserve wording, and do not add "
+        "or infer any other action items.\n\n"
+        f"{task_lines}"
+    )
+
+
+def _review_feedback_guidance(review_feedback: str | None) -> str:
+    """Return prompt guidance from user-provided summary review feedback."""
+    if review_feedback is None:
+        return ""
+
+    feedback = review_feedback.strip()
+    if not feedback:
+        return ""
+
+    return (
+        "\n\nSummary review feedback from the user:\n"
+        "Revise the summary to address the requested corrections below. Use ONLY "
+        "facts supported by the transcript and context notes. Fix errors, add "
+        "missing details when supported, and remove unsupported claims.\n\n"
+        f"{feedback}"
+    )
 
 
 def _extract_participants(events: list[dict]) -> list[str]:
@@ -729,6 +776,7 @@ def summarize_session(
     output_name: str = "summary.md",
     backend: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
+    review_feedback: str | None = None,
 ) -> Path | None:
     """Generate summary.md for a completed session.
 
@@ -767,6 +815,8 @@ def summarize_session(
         events = _apply_speaker_labels(events, session_dir, segment=1)
 
         system_prompt, user_content, elapsed_seconds = _build_prompt(events)
+        system_prompt += _validated_task_guidance(session_dir)
+        system_prompt += _review_feedback_guidance(review_feedback)
         if not user_content.strip():
             return _write_error_summary(session_dir, "No transcribed speech found")
 
@@ -850,12 +900,15 @@ def _summarize_events(
     events: list[dict],
     output_name: str,
     be: _GgufBackend | _MlxBackend,
+    *,
+    review_feedback: str | None = None,
 ) -> tuple[Path | None, str]:
     """Summarize a list of events and write to *output_name*.
 
     Returns (path, summary_text).  The backend must already be loaded.
     """
     system_prompt, user_content, _ = _build_prompt(events)
+    system_prompt += _review_feedback_guidance(review_feedback)
     if not user_content.strip():
         return None, ""
 
@@ -890,6 +943,7 @@ def summarize_session_segments(
     obsidian_dir: Path | None = None,
     backend: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
+    review_feedback: str | None = None,
 ) -> Path | None:
     """Summarize a multi-segment session.
 
@@ -906,6 +960,7 @@ def summarize_session_segments(
             obsidian_dir=obsidian_dir,
             backend=backend,
             progress_callback=progress_callback,
+            review_feedback=review_feedback,
         )
 
     def _progress(msg: str) -> None:
@@ -966,7 +1021,13 @@ def summarize_session_segments(
                     (session_dir / seg_name).write_text(placeholder, encoding="utf-8")
                     continue
                 _progress(f"Summarizing segment {i}/{n_segments}…")
-                _, seg_text = _summarize_events(session_dir, seg_evs, seg_name, be)
+                _, seg_text = _summarize_events(
+                    session_dir,
+                    seg_evs,
+                    seg_name,
+                    be,
+                    review_feedback=review_feedback,
+                )
                 if seg_text:
                     seg_summaries.append(seg_text)
                 else:
@@ -983,9 +1044,12 @@ def summarize_session_segments(
                 f"### Segment {i}\n\n{s}" for i, s in enumerate(seg_summaries, 1)
             )
             t0 = time.monotonic()
-            raw_overall, overall_tokens = be.generate(
-                _SYNTHESIS_PROMPT, synthesis_input
+            synthesis_prompt = (
+                _SYNTHESIS_PROMPT
+                + _validated_task_guidance(session_dir)
+                + _review_feedback_guidance(review_feedback)
             )
+            raw_overall, overall_tokens = be.generate(synthesis_prompt, synthesis_input)
             synthesis_seconds = time.monotonic() - t0
         finally:
             be.close()

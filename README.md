@@ -164,16 +164,26 @@ python3 scripts/report.py                 # this week
 python3 scripts/report.py --today
 python3 scripts/report.py --day 2026-04-20
 python3 scripts/report.py --week 2026-W17
+python3 scripts/report.py --last-week
 ```
 
 Weekly reports group sessions by day, collapse brief recordings, consolidate action
-items, and include a `Follow-Up Radar` section. That radar highlights:
-- inferred follow-ups: action items the summarizer extracted from conversation that
-  were not entered as explicit `/task` notes
-- repeated follow-ups: the same normalized action item appearing in multiple sessions
+items, generate a 1-2 paragraph top-level weekly overview with the local LLM,
+and then list each session with a short 1-2 sentence brief.
 
-These are heuristics, not task-state truth, but they are intended to catch items
-that may have slipped.
+On full quit, Scarecrow now opens two terminal review steps after summary
+generation:
+- summary review: accept the draft or give correction feedback that is sent
+  back through the summarizer before it becomes the canonical session record.
+  The task section is hidden during this step to keep summary review focused.
+- task review: review tasks separately with freeform correction feedback,
+  additions, and removals; task edits are refined by the local model before
+  you accept the final list
+
+Review artifacts are persisted in the session directory:
+- `summary.generated.md` — raw LLM draft before review
+- `summary_review.json` — summary review metadata
+- `task_review.json` — reviewed task metadata
 
 ### Startup output
 
@@ -207,6 +217,9 @@ recordings/
     transcript.jsonl     # JSON Lines transcript — one event per line
     diarization_sys.json # speaker diarization sidecar (if /speakers was used)
     summary.md           # LLM-generated session summary (auto-created on shutdown)
+    summary.generated.md # raw LLM draft preserved if summary review is used
+    summary_review.json  # summary review metadata (if reviewed/canceled)
+    task_review.json     # reviewed task list metadata (if reviewed)
 ```
 
 ### Transcript format (JSON Lines)
@@ -365,6 +378,7 @@ tests/
   test_setup.py          # setup script tests
   test_startup.py        # startup smoke tests (imports, HF offline, model load)
   test_summarizer.py     # summarizer unit tests
+  test_task_review.py    # post-call task review tests
   test_suite_runner.py   # test runner infrastructure tests
   test_sys_audio.py      # system audio capture unit tests
   test_transcriber.py    # batch transcription tests

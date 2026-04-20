@@ -2110,6 +2110,34 @@ class ScarecrowApp(App[None]):
                 if result:
                     log.info("Summary: %s", result)
                     self._summary_path = result
+                    try:
+                        from scarecrow.summary_review import prompt_for_summary_review
+                        from scarecrow.task_review import prompt_for_task_review
+
+                        def _regenerate_summary(
+                            review_feedback: str | None = None,
+                        ) -> Path | None:
+                            _print_progress("Regenerating summary…")
+                            regenerated = summarize_session_segments(
+                                session_dir,
+                                n_segments,
+                                obsidian_dir=self._cfg.OBSIDIAN_VAULT_DIR,
+                                progress_callback=_print_progress,
+                                review_feedback=review_feedback,
+                            )
+                            if regenerated:
+                                self._summary_path = regenerated
+                            return regenerated
+
+                        prompt_for_summary_review(
+                            result,
+                            regenerate_fn=_regenerate_summary,
+                        )
+                        prompt_for_task_review(session_dir, result)
+                    except Exception:
+                        log.exception(
+                            "Post-summary review failed; keeping generated summary"
+                        )
             except Exception:
                 log.exception("Failed to generate summary")
             summ_elapsed = time.monotonic() - summ_t0

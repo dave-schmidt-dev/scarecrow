@@ -411,6 +411,41 @@ def test_summarize_session_success(tmp_path: Path) -> None:
     assert "500 tokens used" in content
 
 
+def test_summarize_session_passes_review_feedback_to_backend(tmp_path: Path) -> None:
+    events = [{"type": "transcript", "text": "The veteran has eight months left."}]
+    _write_transcript(tmp_path, events)
+
+    captured_system_prompts: list[str] = []
+
+    class _FakeBackend:
+        name = "fake-model"
+        footer_info = "ctx 4096"
+
+        def load(self) -> None:
+            return None
+
+        def generate(self, system_prompt: str, user_content: str) -> tuple[str, int]:
+            captured_system_prompts.append(system_prompt)
+            assert "eight months left" in user_content
+            return "## Summary\nCorrected summary", 123
+
+        def close(self) -> None:
+            return None
+
+    with patch("scarecrow.summarizer._create_backend", return_value=_FakeBackend()):
+        result = summarize_session(
+            tmp_path,
+            backend="gguf",
+            review_feedback=(
+                "Correct the benefits timeline and remove unsupported claims."
+            ),
+        )
+
+    assert result is not None
+    assert "Summary review feedback from the user" in captured_system_prompts[0]
+    assert "Correct the benefits timeline" in captured_system_prompts[0]
+
+
 def test_summarize_session_no_transcript(tmp_path: Path) -> None:
     result = summarize_session(tmp_path)
 
@@ -550,7 +585,11 @@ def test_summarize_session_segments_single_delegates(tmp_path: Path) -> None:
         result = summarize_session_segments(tmp_path, 1)
 
     mock_ss.assert_called_once_with(
-        tmp_path, obsidian_dir=None, backend=None, progress_callback=None
+        tmp_path,
+        obsidian_dir=None,
+        backend=None,
+        progress_callback=None,
+        review_feedback=None,
     )
     assert result == tmp_path / "summary.md"
 
@@ -598,6 +637,54 @@ def test_summarize_session_segments_multi(tmp_path: Path) -> None:
     assert (tmp_path / "summary_seg2.md").exists()
     # Synthesis required 3 generate calls (2 segments + 1 synthesis)
     assert call_count == 3
+
+
+def test_summarize_session_segments_passes_review_feedback(tmp_path: Path) -> None:
+    events = [
+        {"type": "transcript", "text": "Segment one content."},
+        {"type": "segment_boundary", "segment": 1, "elapsed": 3600},
+        {"type": "transcript", "text": "Segment two content."},
+    ]
+    _write_transcript(tmp_path, events)
+
+    captured_system_prompts: list[str] = []
+
+    class _FakeBackend:
+        name = "fake-model"
+        footer_info = "ctx 4096"
+
+        def load(self) -> None:
+            return None
+
+        def generate(self, system_prompt: str, user_content: str) -> tuple[str, int]:
+            captured_system_prompts.append(system_prompt)
+            if "Segment 1" in user_content:
+                return "## Summary\nOverall synthesized summary", 300
+            return "## Summary\nPer-segment summary", 200
+
+        def close(self) -> None:
+            return None
+
+    with patch("scarecrow.summarizer._create_backend", return_value=_FakeBackend()):
+        result = summarize_session_segments(
+            tmp_path,
+            2,
+            backend="gguf",
+            review_feedback=(
+                "Clarify that this was an exploratory call, not a commitment."
+            ),
+        )
+
+    assert result is not None
+    assert len(captured_system_prompts) == 3
+    assert all(
+        "Summary review feedback from the user" in prompt
+        for prompt in captured_system_prompts
+    )
+    assert any(
+        "Clarify that this was an exploratory call" in prompt
+        for prompt in captured_system_prompts
+    )
 
 
 def test_segment_boundary_ignored_in_prompt() -> None:
@@ -1054,6 +1141,10 @@ def test_summarize_session_segments_passes_backend(tmp_path: Path) -> None:
         result = summarize_session_segments(tmp_path, 1, backend="mlx")
 
     mock_ss.assert_called_once_with(
-        tmp_path, obsidian_dir=None, backend="mlx", progress_callback=None
+        tmp_path,
+        obsidian_dir=None,
+        backend="mlx",
+        progress_callback=None,
+        review_feedback=None,
     )
     assert result == tmp_path / "summary.md"

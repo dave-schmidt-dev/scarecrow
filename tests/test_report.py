@@ -15,12 +15,14 @@ from report import (  # noqa: E402
     _action_item_label,
     _fmt_duration,
     _is_notable,
+    _last_week,
     _week_label,
     _week_range,
     extract_action_item_details,
     extract_action_items,
     extract_explicit_task_notes,
     extract_first_summary_para,
+    extract_session_brief,
     find_sessions,
     format_report,
     normalize_action_item,
@@ -69,6 +71,13 @@ def test_week_label_contains_year() -> None:
     label = _week_label(monday, sunday)
     assert "2026" in label
     assert "14" in label
+
+
+def test_last_week_returns_previous_iso_week() -> None:
+    monday, sunday = _last_week()
+    assert monday.weekday() == 0
+    assert sunday.weekday() == 6
+    assert (sunday - monday).days == 6
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +269,21 @@ def test_extract_first_summary_para_truncates(tmp_path: Path) -> None:
 
 def test_extract_first_summary_para_missing_file(tmp_path: Path) -> None:
     assert extract_first_summary_para(tmp_path / "nonexistent.md") == ""
+
+
+# ---------------------------------------------------------------------------
+# extract_session_brief
+# ---------------------------------------------------------------------------
+
+
+def test_extract_session_brief_limits_to_two_sentences(tmp_path: Path) -> None:
+    summary = tmp_path / "summary.md"
+    summary.write_text(
+        "## Summary\n\nSentence one. Sentence two. Sentence three.\n",
+        encoding="utf-8",
+    )
+    brief = extract_session_brief(summary)
+    assert brief == "Sentence one. Sentence two."
 
 
 # ---------------------------------------------------------------------------
@@ -484,7 +508,7 @@ def test_footer_no_split_when_all_notable(tmp_path: Path) -> None:
     assert "1 session" in content
 
 
-def test_weekly_report_surfaces_inferred_followups(tmp_path: Path) -> None:
+def test_weekly_report_uses_requested_structure(tmp_path: Path) -> None:
     session_dir = tmp_path / "2026-04-03_10-00-00_meeting"
     session_dir.mkdir()
     _write_transcript(
@@ -507,15 +531,22 @@ def test_weekly_report_surfaces_inferred_followups(tmp_path: Path) -> None:
         "slug": "meeting",
     }
 
-    content = format_report({date(2026, 4, 3): [meta]}, "Week 14", is_daily=False)
+    content = format_report(
+        {date(2026, 4, 3): [meta]},
+        "Week 14",
+        is_daily=False,
+        overview_text="This week focused on one meeting.",
+    )
 
-    assert "## Follow-Up Radar" in content
-    assert "### Inferred Follow-Ups" in content
-    assert "Follow up with vendor" in content
-    assert "- Send recap (" not in content
+    assert "This week focused on one meeting." in content
+    assert "## Action Items" in content
+    assert "## Sessions" in content
+    assert content.index("## Action Items") < content.index("## Sessions")
+    assert "- [ ] Send recap" in content
+    assert "- **[10:00] meeting**" in content
 
 
-def test_weekly_report_surfaces_repeated_followups(tmp_path: Path) -> None:
+def test_weekly_report_lists_every_session(tmp_path: Path) -> None:
     session_a = tmp_path / "2026-04-03_10-00-00_alpha"
     session_b = tmp_path / "2026-04-04_11-00-00_beta"
     session_a.mkdir()
@@ -551,5 +582,7 @@ def test_weekly_report_surfaces_repeated_followups(tmp_path: Path) -> None:
 
     content = format_report(sessions, "Week 14", is_daily=False)
 
-    assert "### Repeated Follow-Ups" in content
-    assert "Review contract (2 sessions:" in content
+    assert "### Friday, 2026-04-03" in content
+    assert "### Saturday, 2026-04-04" in content
+    assert "- **[10:00] alpha**" in content
+    assert "- **[11:00] beta**" in content

@@ -49,6 +49,14 @@ def _this_week() -> tuple[date, date]:
     return monday, sunday
 
 
+def _last_week() -> tuple[date, date]:
+    today = date.today()
+    this_monday = today - timedelta(days=today.weekday())
+    last_monday = this_monday - timedelta(days=7)
+    last_sunday = last_monday + timedelta(days=6)
+    return last_monday, last_sunday
+
+
 def _week_label(start: date, end: date) -> str:
     iso = start.isocalendar()
     return (
@@ -238,6 +246,20 @@ def extract_first_summary_para(summary_md: Path) -> str:
     return ""
 
 
+def extract_session_brief(summary_md: Path, max_sentences: int = 2) -> str:
+    """Return a 1-2 sentence session brief from the summary section."""
+    para = extract_first_summary_para(summary_md)
+    if not para:
+        return ""
+
+    sentences = re.split(r"(?<=[.!?])\s+", para.strip())
+    selected = [sentence.strip() for sentence in sentences if sentence.strip()]
+    brief = " ".join(selected[:max_sentences]).strip()
+    if len(brief) > 400:
+        brief = brief[:397].rstrip() + "…"
+    return brief
+
+
 def extract_explicit_task_notes(session_dir: Path) -> list[dict[str, str]]:
     """Return explicit TASK notes from transcript.jsonl for a session."""
     transcript = session_dir / "transcript.jsonl"
@@ -283,51 +305,74 @@ def normalize_action_item(text: str) -> str:
     return normalized.strip()
 
 
-def collect_follow_up_signals(
-    sessions_by_day: dict[date, list[dict]],
-) -> tuple[list[tuple[str, str]], list[tuple[str, list[str]]]]:
-    """Return inferred and repeated follow-up signals for weekly reporting.
+def generate_weekly_overview(sessions_by_day: dict[date, list[dict]]) -> str:
+    """Generate a 1-2 paragraph weekly overview using the local summarizer."""
+    from scarecrow.summarizer import (
+        _compute_ctx_size,
+        _create_backend,
+        _estimate_tokens,
+    )
 
-    Inferred follow-ups are action items present in summary.md but absent from
-    explicit TASK notes in transcript.jsonl. Repeated follow-ups are exact
-    normalized matches that appear in multiple sessions during the week.
-    """
-    inferred: list[tuple[str, str]] = []
-    repeated_sources: dict[str, list[str]] = {}
-    repeated_texts: dict[str, str] = {}
+    prompt = (
+        "Summarize this week of Scarecrow sessions using ONLY the provided "
+        "session digests. Output exactly:\n\n"
+        "## Summary\n"
+        "Write 1-2 concise paragraphs covering the most important themes, "
+        "decisions, follow-ups, and classes or calls that mattered this week. "
+        "Avoid boilerplate, headings, bullets, or commentary outside the "
+        "summary section."
+    )
 
+    lines: list[str] = []
     for day in sorted(sessions_by_day):
+        lines.append(day.strftime("%A, %Y-%m-%d"))
         for meta in sessions_by_day[day]:
-            label = _action_item_label(meta)
-            explicit = {
-                item["normalized"]
-                for item in extract_explicit_task_notes(meta["dir"])
-                if item["normalized"]
-            }
-            summary_items = extract_action_item_details(meta["dir"] / "summary.md")
-            session_seen: set[str] = set()
-            for item in summary_items:
-                normalized = item["normalized"]
-                if not normalized:
-                    continue
-                if normalized not in explicit:
-                    inferred.append((label, item["text"]))
-                if normalized in session_seen:
-                    continue
-                session_seen.add(normalized)
-                repeated_sources.setdefault(normalized, []).append(label)
-                repeated_texts.setdefault(normalized, item["text"])
+            start_dt: datetime = meta["start_dt"]
+            title = (
+                meta["slug"].replace("-", " ").replace("_", " ").strip() or "recording"
+            )
+            lines.append(
+                f"- {start_dt.strftime('%H:%M')} · {title} · "
+                f"{_fmt_duration(meta['elapsed_seconds'])} · "
+                f"{meta['word_count']:,} words"
+            )
+            brief = extract_session_brief(meta["dir"] / "summary.md")
+            if not brief:
+                brief = extract_transcript_preview(meta["dir"])
+            if brief:
+                lines.append(f"  Summary: {brief}")
+            tasks = extract_action_items(meta["dir"] / "summary.md")
+            if tasks:
+                lines.append("  Tasks:")
+                lines.extend(f"  - {task}" for task in tasks)
+        lines.append("")
 
-    repeated: list[tuple[str, list[str]]] = []
-    for normalized, labels in repeated_sources.items():
-        unique_labels = list(dict.fromkeys(labels))
-        if len(unique_labels) < 2:
-            continue
-        repeated.append((repeated_texts[normalized], unique_labels))
+    user_content = "\n".join(lines).strip()
+    if not user_content:
+        return ""
 
-    repeated.sort(key=lambda entry: (-len(entry[1]), entry[0].casefold()))
-    inferred.sort(key=lambda entry: (entry[0], entry[1].casefold()))
-    return inferred, repeated
+    input_tokens = _estimate_tokens(prompt + user_content)
+    ctx_size = _compute_ctx_size(input_tokens)
+
+    try:
+        be = _create_backend(ctx_size=ctx_size)
+    except (ValueError, FileNotFoundError):
+        log.warning("Weekly overview skipped: summarizer backend unavailable")
+        return ""
+
+    try:
+        be.load()
+        raw_text, _ = be.generate(prompt, user_content)
+    except Exception:
+        log.exception("Failed to generate weekly overview")
+        return ""
+    finally:
+        be.close()
+
+    match = re.search(r"^## Summary\n(.*?)(?=^##|\Z)", raw_text, re.M | re.DOTALL)
+    if not match:
+        return ""
+    return match.group(1).strip()
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +411,7 @@ def format_report(
     sessions_by_day: dict[date, list[dict]],
     period_label: str,
     is_daily: bool = False,
+    overview_text: str = "",
 ) -> str:
     heading = "Daily Report" if is_daily else "Weekly Report"
     lines = [f"# {heading}: {period_label}", ""]
@@ -376,110 +422,121 @@ def format_report(
     total_elapsed = 0
     total_words = 0
 
-    # Collect action items across all sessions for consolidated section
     all_action_items: list[tuple[str, list[str]]] = []
-    inferred_followups, repeated_followups = collect_follow_up_signals(sessions_by_day)
+
+    if not is_daily and overview_text:
+        lines.append(overview_text.strip())
+        lines.append("")
 
     for day in sorted(sessions_by_day):
         day_sessions = sessions_by_day[day]
         if not day_sessions:
             continue
 
-        lines.append(f"## {day.strftime('%A, %Y-%m-%d')}")
-        lines.append("")
-
-        notable: list[dict] = []
-        brief_count = 0
-        brief_elapsed = 0
-        brief_words = 0
-
         for meta in day_sessions:
             total_sessions += 1
             total_elapsed += meta["elapsed_seconds"]
             total_words += meta["word_count"]
 
-            # Collect action items from every session
             items = extract_action_items(meta["dir"] / "summary.md")
             if items:
                 all_action_items.append((_action_item_label(meta), items))
-
             if _is_notable(meta):
-                notable.append(meta)
                 total_notable += 1
             else:
-                brief_count += 1
-                brief_elapsed += meta["elapsed_seconds"]
-                brief_words += meta["word_count"]
                 total_brief += 1
-
-        # Render notable sessions
-        for meta in notable:
-            start_dt: datetime = meta["start_dt"]
-            elapsed: int = meta["elapsed_seconds"]
-            words: int = meta["word_count"]
-            slug: str = meta["slug"]
-
-            title = slug.replace("-", " ").replace("_", " ").strip() if slug else ""
-            dur_str = _fmt_duration(elapsed)
-            words_str = f"{words:,}" if words else "?"
-            time_str = start_dt.strftime("%H:%M")
-
-            if title:
-                heading_line = (
-                    f"### [{time_str}] {title} - {dur_str} - {words_str} words"
-                )
-            else:
-                heading_line = f"### [{time_str}] {dur_str} - {words_str} words"
-            lines.append(heading_line)
-
-            para = extract_first_summary_para(meta["dir"] / "summary.md")
-            if not para:
-                para = extract_transcript_preview(meta["dir"])
-            if para:
-                lines.append(f"> {para}")
-            lines.append("")
-
-        # Collapse brief sessions into one line
-        if brief_count > 0:
-            noun = "recording" if brief_count == 1 else "recordings"
-            brief_w = f"{brief_words:,}" if brief_words else "0"
-            lines.append(
-                f"*+ {brief_count} brief {noun}"
-                f" \u00b7 {_fmt_duration(brief_elapsed)}"
-                f" \u00b7 {brief_w} words*"
-            )
-            lines.append("")
-
-    # Consolidated Action Items section
-    if not is_daily and (inferred_followups or repeated_followups):
-        lines.append("## Follow-Up Radar")
-        lines.append("")
-        lines.append(
-            "*Heuristics only: likely dropped follow-ups are inferred commitments "
-            "and repeated items that resurfaced across multiple sessions.*"
-        )
-        lines.append("")
-        if inferred_followups:
-            lines.append("### Inferred Follow-Ups")
-            lines.append("")
-            for label, item_text in inferred_followups:
-                lines.append(f"- {item_text} ({label})")
-            lines.append("")
-        if repeated_followups:
-            lines.append("### Repeated Follow-Ups")
-            lines.append("")
-            for item_text, labels in repeated_followups:
-                labels_str = ", ".join(labels)
-                lines.append(f"- {item_text} ({len(labels)} sessions: {labels_str})")
-            lines.append("")
 
     if all_action_items:
         lines.append("## Action Items")
         lines.append("")
         for label, items in all_action_items:
             lines.append(label)
-            lines.extend(items)
+            lines.extend(f"- [ ] {item}" for item in items)
             lines.append("")
+
+    if not is_daily:
+        lines.append("## Sessions")
+        lines.append("")
+        for day in sorted(sessions_by_day):
+            day_sessions = sessions_by_day[day]
+            if not day_sessions:
+                continue
+            lines.append(f"### {day.strftime('%A, %Y-%m-%d')}")
+            lines.append("")
+            for meta in day_sessions:
+                start_dt: datetime = meta["start_dt"]
+                elapsed: int = meta["elapsed_seconds"]
+                words: int = meta["word_count"]
+                slug: str = meta["slug"]
+                title = (
+                    slug.replace("-", " ").replace("_", " ").strip()
+                    if slug
+                    else "recording"
+                )
+                brief = extract_session_brief(meta["dir"] / "summary.md")
+                if not brief:
+                    brief = extract_transcript_preview(meta["dir"])
+                lines.append(
+                    f"- **[{start_dt.strftime('%H:%M')}] {title}** · "
+                    f"{_fmt_duration(elapsed)} · {words:,} words"
+                )
+                if brief:
+                    lines.append(f"  {brief}")
+                lines.append("")
+    else:
+        for day in sorted(sessions_by_day):
+            day_sessions = sessions_by_day[day]
+            if not day_sessions:
+                continue
+
+            lines.append(f"## {day.strftime('%A, %Y-%m-%d')}")
+            lines.append("")
+            notable: list[dict] = []
+            brief_count = 0
+            brief_elapsed = 0
+            brief_words = 0
+
+            for meta in day_sessions:
+                if _is_notable(meta):
+                    notable.append(meta)
+                else:
+                    brief_count += 1
+                    brief_elapsed += meta["elapsed_seconds"]
+                    brief_words += meta["word_count"]
+
+            for meta in notable:
+                start_dt = meta["start_dt"]
+                elapsed = meta["elapsed_seconds"]
+                words = meta["word_count"]
+                slug = meta["slug"]
+                title = slug.replace("-", " ").replace("_", " ").strip() if slug else ""
+                dur_str = _fmt_duration(elapsed)
+                words_str = f"{words:,}" if words else "?"
+                time_str = start_dt.strftime("%H:%M")
+
+                if title:
+                    lines.append(
+                        f"### [{time_str}] {title} - {dur_str} - {words_str} words"
+                    )
+                else:
+                    lines.append(f"### [{time_str}] {dur_str} - {words_str} words")
+
+                para = extract_first_summary_para(meta["dir"] / "summary.md")
+                if not para:
+                    para = extract_transcript_preview(meta["dir"])
+                if para:
+                    lines.append(f"> {para}")
+                lines.append("")
+
+            if brief_count > 0:
+                noun = "recording" if brief_count == 1 else "recordings"
+                brief_w = f"{brief_words:,}" if brief_words else "0"
+                lines.append(
+                    f"*+ {brief_count} brief {noun}"
+                    f" \u00b7 {_fmt_duration(brief_elapsed)}"
+                    f" \u00b7 {brief_w} words*"
+                )
+                lines.append("")
 
     # Footer
     lines.append("---")
@@ -542,6 +599,7 @@ def main() -> int:
     period.add_argument(
         "--this-week", action="store_true", help="Current week (default)"
     )
+    period.add_argument("--last-week", action="store_true", help="Last completed week")
     period.add_argument("--week", metavar="YYYY-WNN", help="ISO week (e.g. 2026-W14)")
     parser.add_argument("--output", metavar="PATH", help="Override output file path")
     args = parser.parse_args()
@@ -581,6 +639,11 @@ def main() -> int:
         label = _week_label(start, end)
         iso = start.isocalendar()
         filename = f"report_{iso[0]}-W{iso[1]:02d}.md"
+    elif args.last_week:
+        start, end = _last_week()
+        label = _week_label(start, end)
+        iso = start.isocalendar()
+        filename = f"report_{iso[0]}-W{iso[1]:02d}.md"
     else:
         # Default: this week
         start, end = _this_week()
@@ -606,7 +669,16 @@ def main() -> int:
         print(f"No readable sessions for {label}")
         return 0
 
-    content = format_report(sessions_by_day, label, is_daily=is_daily)
+    overview_text = ""
+    if not is_daily:
+        overview_text = generate_weekly_overview(sessions_by_day)
+
+    content = format_report(
+        sessions_by_day,
+        label,
+        is_daily=is_daily,
+        overview_text=overview_text,
+    )
 
     output_path = Path(args.output) if args.output else recordings_dir / filename
 

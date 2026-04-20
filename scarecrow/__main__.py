@@ -86,6 +86,87 @@ def _print_progress(msg: str) -> None:
     print(f"  {msg}", flush=True)
 
 
+def _summarize_existing_session(
+    session_dir: Path,
+    *,
+    n_segments: int,
+    backend: str | None,
+    model: str | None,
+    review_feedback: str | None = None,
+):
+    """Generate a summary for an existing session directory."""
+    from scarecrow.config import OBSIDIAN_VAULT_DIR
+    from scarecrow.summarizer import summarize_session, summarize_session_segments
+
+    output_name = f"summary_{model}.md" if model else "summary.md"
+    if n_segments > 1 and not model:
+        return summarize_session_segments(
+            session_dir,
+            n_segments,
+            obsidian_dir=OBSIDIAN_VAULT_DIR,
+            backend=backend,
+            progress_callback=_print_progress,
+            review_feedback=review_feedback,
+        )
+    return summarize_session(
+        session_dir,
+        obsidian_dir=OBSIDIAN_VAULT_DIR,
+        model=model,
+        output_name=output_name,
+        backend=backend,
+        progress_callback=_print_progress,
+        review_feedback=review_feedback,
+    )
+
+
+def _review_reprocessed_summary(
+    session_dir: Path,
+    *,
+    n_segments: int,
+    backend: str | None,
+    model: str | None,
+    initial_result: Path | None,
+) -> Path | None:
+    """Loop summary/task review for `reprocess` until accepted or quit."""
+    from scarecrow.summary_review import prompt_for_summary_review
+    from scarecrow.task_review import prompt_for_task_review
+
+    result = initial_result
+    if result is None:
+        return None
+
+    def _regenerate(review_feedback: str | None = None) -> Path | None:
+        print(flush=True)
+        print("  Regenerating summary…", flush=True)
+        return _summarize_existing_session(
+            session_dir,
+            n_segments=n_segments,
+            backend=backend,
+            model=model,
+            review_feedback=review_feedback,
+        )
+
+    while True:
+        prompt_for_summary_review(result, regenerate_fn=_regenerate)
+        prompt_for_task_review(session_dir, result)
+
+        answer = (
+            input(
+                "  Happy with the reviewed summary/tasks? "
+                "[Y=done / e=review again / q=quit] "
+            )
+            .strip()
+            .lower()
+        )
+        if answer in {"", "y", "yes"}:
+            return result
+        if answer in {"q", "quit"}:
+            return result
+        if answer in {"e", "edit", "review", "again", "n", "no"}:
+            continue
+        print("  Invalid choice. Use Enter/y, e, or q.", flush=True)
+
+
 def _cmd_reprocess(args: list[str]) -> None:
     """Re-run diarization and/or summarization on an existing session."""
     logging.basicConfig(
@@ -148,28 +229,19 @@ def _cmd_reprocess(args: list[str]) -> None:
         diar_elapsed = time.monotonic() - diar_t0
         print(flush=True)
 
-    # Summarization
-    from scarecrow.config import OBSIDIAN_VAULT_DIR
-    from scarecrow.summarizer import summarize_session, summarize_session_segments
-
-    output_name = f"summary_{model}.md" if model else "summary.md"
-
-    if n_segments > 1 and not model:
-        result = summarize_session_segments(
+    result = _summarize_existing_session(
+        session_dir,
+        n_segments=n_segments,
+        backend=backend,
+        model=model,
+    )
+    if result is not None and sys.stdin.isatty():
+        result = _review_reprocessed_summary(
             session_dir,
-            n_segments,
-            obsidian_dir=OBSIDIAN_VAULT_DIR,
+            n_segments=n_segments,
             backend=backend,
-            progress_callback=_print_progress,
-        )
-    else:
-        result = summarize_session(
-            session_dir,
-            obsidian_dir=OBSIDIAN_VAULT_DIR,
             model=model,
-            output_name=output_name,
-            backend=backend,
-            progress_callback=_print_progress,
+            initial_result=result,
         )
 
     total = time.monotonic() - t0
