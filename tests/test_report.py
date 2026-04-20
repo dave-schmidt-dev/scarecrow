@@ -17,10 +17,13 @@ from report import (  # noqa: E402
     _is_notable,
     _week_label,
     _week_range,
+    extract_action_item_details,
     extract_action_items,
+    extract_explicit_task_notes,
     extract_first_summary_para,
     find_sessions,
     format_report,
+    normalize_action_item,
     read_session_meta,
 )
 
@@ -186,6 +189,48 @@ def test_extract_action_items_no_section(tmp_path: Path) -> None:
 
 def test_extract_action_items_missing_file(tmp_path: Path) -> None:
     assert extract_action_items(tmp_path / "nonexistent.md") == []
+
+
+# ---------------------------------------------------------------------------
+# extract_action_item_details / extract_explicit_task_notes / normalization
+# ---------------------------------------------------------------------------
+
+
+def test_extract_action_item_details_strips_checkbox_prefix(tmp_path: Path) -> None:
+    summary = tmp_path / "summary.md"
+    summary.write_text(
+        "## Summary\nSome text.\n\n## Action Items\n- [ ] Follow up on budget\n",
+        encoding="utf-8",
+    )
+    items = extract_action_item_details(summary)
+    assert items == [
+        {
+            "raw": "- [ ] Follow up on budget",
+            "text": "Follow up on budget",
+            "normalized": "follow up on budget",
+        }
+    ]
+
+
+def test_extract_explicit_task_notes_reads_task_note_events(tmp_path: Path) -> None:
+    _write_transcript(
+        tmp_path,
+        [
+            {"type": "note", "tag": "TASK", "text": "Review contract"},
+            {"type": "note", "tag": "NOTE", "text": "Background only"},
+        ],
+    )
+    items = extract_explicit_task_notes(tmp_path)
+    assert items == [
+        {
+            "text": "Review contract",
+            "normalized": "review contract",
+        }
+    ]
+
+
+def test_normalize_action_item_collapses_case_and_punctuation() -> None:
+    assert normalize_action_item("Follow-up on Budget!!!") == "follow up on budget"
 
 
 # ---------------------------------------------------------------------------
@@ -437,3 +482,74 @@ def test_footer_no_split_when_all_notable(tmp_path: Path) -> None:
     assert "notable" not in content
     assert "brief" not in content
     assert "1 session" in content
+
+
+def test_weekly_report_surfaces_inferred_followups(tmp_path: Path) -> None:
+    session_dir = tmp_path / "2026-04-03_10-00-00_meeting"
+    session_dir.mkdir()
+    _write_transcript(
+        session_dir,
+        [
+            {"type": "session_start", "timestamp": "2026-04-03T10:00:00"},
+            {"type": "note", "tag": "TASK", "text": "Send recap"},
+        ],
+    )
+    (session_dir / "summary.md").write_text(
+        "## Summary\nStuff happened.\n\n"
+        "## Action Items\n- [ ] Send recap\n- [ ] Follow up with vendor\n",
+        encoding="utf-8",
+    )
+    meta = {
+        "dir": session_dir,
+        "start_dt": datetime(2026, 4, 3, 10, 0, 0),
+        "elapsed_seconds": 1800,
+        "word_count": 500,
+        "slug": "meeting",
+    }
+
+    content = format_report({date(2026, 4, 3): [meta]}, "Week 14", is_daily=False)
+
+    assert "## Follow-Up Radar" in content
+    assert "### Inferred Follow-Ups" in content
+    assert "Follow up with vendor" in content
+    assert "- Send recap (" not in content
+
+
+def test_weekly_report_surfaces_repeated_followups(tmp_path: Path) -> None:
+    session_a = tmp_path / "2026-04-03_10-00-00_alpha"
+    session_b = tmp_path / "2026-04-04_11-00-00_beta"
+    session_a.mkdir()
+    session_b.mkdir()
+    (session_a / "summary.md").write_text(
+        "## Summary\nA.\n\n## Action Items\n- [ ] Review contract\n",
+        encoding="utf-8",
+    )
+    (session_b / "summary.md").write_text(
+        "## Summary\nB.\n\n## Action Items\n- [ ] Review contract\n",
+        encoding="utf-8",
+    )
+    sessions = {
+        date(2026, 4, 3): [
+            {
+                "dir": session_a,
+                "start_dt": datetime(2026, 4, 3, 10, 0, 0),
+                "elapsed_seconds": 1800,
+                "word_count": 500,
+                "slug": "alpha",
+            }
+        ],
+        date(2026, 4, 4): [
+            {
+                "dir": session_b,
+                "start_dt": datetime(2026, 4, 4, 11, 0, 0),
+                "elapsed_seconds": 1200,
+                "word_count": 500,
+                "slug": "beta",
+            }
+        ],
+    }
+
+    content = format_report(sessions, "Week 14", is_daily=False)
+
+    assert "### Repeated Follow-Ups" in content
+    assert "Review contract (2 sessions:" in content

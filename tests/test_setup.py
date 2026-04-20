@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-import importlib
+import importlib.util
+import subprocess
+import sys
 
 from scripts import setup as setup_script
 
@@ -11,15 +13,21 @@ from scripts import setup as setup_script
 # optional or get dropped from pyproject.toml.
 # ---------------------------------------------------------------------------
 
-CORE_MODULES = [
+CORE_IMPORT_MODULES = [
     "textual",
-    "parakeet_mlx",
     "sounddevice",
     "soundfile",
     "numpy",
     "llama_cpp",
-    "mlx_vlm",
     "pyannote.audio",
+]
+
+# Importing MLX-backed modules can abort the interpreter at import time if the
+# host has no usable Metal device. For setup coverage we only need to assert
+# that these packages are installed and discoverable from the environment.
+CORE_DISCOVERABLE_MODULES = [
+    "parakeet_mlx",
+    "mlx_vlm",
 ]
 
 
@@ -27,13 +35,25 @@ class TestCoreDependenciesImportable:
     """Every core dependency must be importable in the test environment."""
 
     def test_core_modules_importable(self) -> None:
-        missing = []
-        for mod in CORE_MODULES:
-            try:
-                importlib.import_module(mod)
-            except ImportError:
-                missing.append(mod)
-        assert not missing, f"Core deps not importable: {missing}"
+        failures: list[str] = []
+        for mod in CORE_IMPORT_MODULES:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    (f"import importlib;importlib.import_module({mod!r})"),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                stderr = result.stderr.strip()
+                failures.append(f"{mod}: rc={result.returncode} stderr={stderr}")
+        for mod in CORE_DISCOVERABLE_MODULES:
+            if importlib.util.find_spec(mod) is None:
+                failures.append(f"{mod}: module spec not found")
+        assert not failures, "Core deps not importable:\n" + "\n".join(failures)
 
 
 def test_setup_alias_prints_project_dir(capsys) -> None:

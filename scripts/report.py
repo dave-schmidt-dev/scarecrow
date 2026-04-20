@@ -187,6 +187,11 @@ def extract_transcript_preview(session_dir: Path, max_chars: int = 200) -> str:
 
 def extract_action_items(summary_md: Path) -> list[str]:
     """Return checkbox lines from all ## Action Items sections."""
+    return [item["text"] for item in extract_action_item_details(summary_md)]
+
+
+def extract_action_item_details(summary_md: Path) -> list[dict[str, str]]:
+    """Return action items with normalized text for matching and deduping."""
     if not summary_md.exists():
         return []
     try:
@@ -194,13 +199,21 @@ def extract_action_items(summary_md: Path) -> list[str]:
     except OSError:
         return []
 
-    items: list[str] = []
+    items: list[dict[str, str]] = []
     for m in re.finditer(r"^## Action Items\n(.*?)(?=^##|\Z)", text, re.M | re.DOTALL):
-        items.extend(
-            line.strip()
-            for line in m.group(1).splitlines()
-            if line.strip().startswith("- [")
-        )
+        for line in m.group(1).splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("- ["):
+                continue
+            item_text = re.sub(r"^- \[[ xX]\]\s*", "", stripped).strip()
+            normalized = normalize_action_item(item_text)
+            items.append(
+                {
+                    "raw": stripped,
+                    "text": item_text,
+                    "normalized": normalized,
+                }
+            )
     return items
 
 
@@ -223,6 +236,98 @@ def extract_first_summary_para(summary_md: Path) -> str:
                 para = para[:297] + "…"
             return para
     return ""
+
+
+def extract_explicit_task_notes(session_dir: Path) -> list[dict[str, str]]:
+    """Return explicit TASK notes from transcript.jsonl for a session."""
+    transcript = session_dir / "transcript.jsonl"
+    if not transcript.exists():
+        return []
+
+    items: list[dict[str, str]] = []
+    try:
+        with transcript.open(encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if ev.get("type") != "note":
+                    continue
+                if ev.get("tag", "").upper() != "TASK":
+                    continue
+                text = ev.get("text", "").strip()
+                if not text:
+                    continue
+                items.append(
+                    {
+                        "text": text,
+                        "normalized": normalize_action_item(text),
+                    }
+                )
+    except OSError:
+        return []
+
+    return items
+
+
+def normalize_action_item(text: str) -> str:
+    """Normalize action item text for exact weekly matching."""
+    normalized = text.casefold().strip()
+    normalized = re.sub(r"^[\-\*\d\.\)\s]+", "", normalized)
+    normalized = re.sub(r"[^\w\s]", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized)
+    return normalized.strip()
+
+
+def collect_follow_up_signals(
+    sessions_by_day: dict[date, list[dict]],
+) -> tuple[list[tuple[str, str]], list[tuple[str, list[str]]]]:
+    """Return inferred and repeated follow-up signals for weekly reporting.
+
+    Inferred follow-ups are action items present in summary.md but absent from
+    explicit TASK notes in transcript.jsonl. Repeated follow-ups are exact
+    normalized matches that appear in multiple sessions during the week.
+    """
+    inferred: list[tuple[str, str]] = []
+    repeated_sources: dict[str, list[str]] = {}
+    repeated_texts: dict[str, str] = {}
+
+    for day in sorted(sessions_by_day):
+        for meta in sessions_by_day[day]:
+            label = _action_item_label(meta)
+            explicit = {
+                item["normalized"]
+                for item in extract_explicit_task_notes(meta["dir"])
+                if item["normalized"]
+            }
+            summary_items = extract_action_item_details(meta["dir"] / "summary.md")
+            session_seen: set[str] = set()
+            for item in summary_items:
+                normalized = item["normalized"]
+                if not normalized:
+                    continue
+                if normalized not in explicit:
+                    inferred.append((label, item["text"]))
+                if normalized in session_seen:
+                    continue
+                session_seen.add(normalized)
+                repeated_sources.setdefault(normalized, []).append(label)
+                repeated_texts.setdefault(normalized, item["text"])
+
+    repeated: list[tuple[str, list[str]]] = []
+    for normalized, labels in repeated_sources.items():
+        unique_labels = list(dict.fromkeys(labels))
+        if len(unique_labels) < 2:
+            continue
+        repeated.append((repeated_texts[normalized], unique_labels))
+
+    repeated.sort(key=lambda entry: (-len(entry[1]), entry[0].casefold()))
+    inferred.sort(key=lambda entry: (entry[0], entry[1].casefold()))
+    return inferred, repeated
 
 
 # ---------------------------------------------------------------------------
@@ -273,6 +378,7 @@ def format_report(
 
     # Collect action items across all sessions for consolidated section
     all_action_items: list[tuple[str, list[str]]] = []
+    inferred_followups, repeated_followups = collect_follow_up_signals(sessions_by_day)
 
     for day in sorted(sessions_by_day):
         day_sessions = sessions_by_day[day]
@@ -345,6 +451,28 @@ def format_report(
             lines.append("")
 
     # Consolidated Action Items section
+    if not is_daily and (inferred_followups or repeated_followups):
+        lines.append("## Follow-Up Radar")
+        lines.append("")
+        lines.append(
+            "*Heuristics only: likely dropped follow-ups are inferred commitments "
+            "and repeated items that resurfaced across multiple sessions.*"
+        )
+        lines.append("")
+        if inferred_followups:
+            lines.append("### Inferred Follow-Ups")
+            lines.append("")
+            for label, item_text in inferred_followups:
+                lines.append(f"- {item_text} ({label})")
+            lines.append("")
+        if repeated_followups:
+            lines.append("### Repeated Follow-Ups")
+            lines.append("")
+            for item_text, labels in repeated_followups:
+                labels_str = ", ".join(labels)
+                lines.append(f"- {item_text} ({len(labels)} sessions: {labels_str})")
+            lines.append("")
+
     if all_action_items:
         lines.append("## Action Items")
         lines.append("")

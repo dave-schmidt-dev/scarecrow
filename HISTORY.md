@@ -4,6 +4,9 @@ Bug entries are inline under their date heading. A squashed bug must reference a
 
 ## 2026-04-15
 
+- **Fixed test suite crash in `test_setup.py`.** Core dependency smoke tests no longer import MLX-backed packages (`parakeet_mlx`, `mlx_vlm`) directly inside the pytest process. Those imports were aborting the interpreter on hosts where MLX/Metal device discovery raises an Objective-C exception during module import. The test now imports normal Python dependencies in isolated subprocesses and verifies MLX-backed packages via `importlib.util.find_spec()`, preserving dependency coverage without taking down the suite runner.
+- **Weekly report follow-up radar.** `scripts/report.py` now distinguishes explicit `/task` notes from action items inferred by the summarizer. Weekly reports include a `## Follow-Up Radar` section that surfaces likely dropped work in two buckets: inferred follow-ups (commitments captured in `summary.md` but not typed as `/task`) and repeated follow-ups (same normalized action item appearing across multiple sessions in the same week). Added regression tests in `tests/test_report.py` for action-item parsing, TASK-note extraction, inferred follow-up detection, and repeated weekly follow-up detection.
+
 ### [BUG-20260415-shutdown-hang]
 
 - Symptom: After a 1:35:58 recording session, pressing Ctrl+Q showed "Shutting down…" in the TUI status bar but the app never exited. The TUI remained painted on screen indefinitely.

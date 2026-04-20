@@ -155,6 +155,26 @@ scarecrow reprocess ~/recordings/<dir>    # explicit session directory
 scarecrow reprocess --latest --no-diarize # re-summarize only (skip diarization)
 ```
 
+### Daily and weekly reports
+
+Scarecrow can roll up completed sessions into a Markdown report:
+
+```bash
+python3 scripts/report.py                 # this week
+python3 scripts/report.py --today
+python3 scripts/report.py --day 2026-04-20
+python3 scripts/report.py --week 2026-W17
+```
+
+Weekly reports group sessions by day, collapse brief recordings, consolidate action
+items, and include a `Follow-Up Radar` section. That radar highlights:
+- inferred follow-ups: action items the summarizer extracted from conversation that
+  were not entered as explicit `/task` notes
+- repeated follow-ups: the same normalized action item appearing in multiple sessions
+
+These are heuristics, not task-state truth, but they are intended to catch items
+that may have slipped.
+
 ### Startup output
 
 On launch, Scarecrow prints:
@@ -258,6 +278,7 @@ uv sync --reinstall-package scarecrow --no-editable
 The non-editable install means the venv has a snapshot copy of the source — edits don't take effect until you rebuild.
 
 **Do not run `pytest` directly** — always use `bash scripts/run_test_suite.sh`. The suite runner isolates each test file in its own subprocess to handle PortAudio teardown cleanly.
+Some MLX-backed dependencies can abort the interpreter during Metal device initialization on misconfigured hosts; setup smoke tests avoid importing those modules in-process and verify package discoverability instead.
 
 Pre-commit hooks run ruff (lint + format) and vulture automatically.
 
