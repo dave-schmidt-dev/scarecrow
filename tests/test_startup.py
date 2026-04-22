@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import importlib.util
 import os
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -119,25 +118,6 @@ def test_main_calls_preload_batch_model() -> None:
         __main__.main()
 
     fake_transcriber.preload_batch_model.assert_called_once()
-
-
-@pytest.mark.skip(
-    reason="Python 3.12.13 skips all .pth files in venv site-packages, "
-    "breaking uv editable installs from non-project cwd"
-)
-def test_main_module_importable_from_outside_project(tmp_path: Path) -> None:
-    """scarecrow.__main__.main must import when cwd is not the project root."""
-    import subprocess
-
-    result = subprocess.run(
-        [sys.executable, "-c", "from scarecrow.__main__ import main; main.__name__"],
-        capture_output=True,
-        text=True,
-        cwd=str(tmp_path),
-    )
-    assert result.returncode == 0, (
-        f"Import of scarecrow.__main__.main failed from {tmp_path}:\n{result.stderr}"
-    )
 
 
 # ---------------------------------------------------------------------------
