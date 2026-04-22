@@ -601,12 +601,16 @@ def test_drain_buffer_empties_after_drain(tmp_path: Path) -> None:
 
 def test_peak_level_updates_on_audio(tmp_path: Path) -> None:
     """peak_level should reflect the loudest sample in the last callback."""
+    from scarecrow.config import Config
     from scarecrow.recorder import AudioRecorder
 
+    # Explicit cfg so the test is isolated from global config mutations
+    # (e.g. context-menu tests leaving MIC_GAIN=2.0 on the singleton).
+    cfg = Config(SAMPLE_RATE=16000, RECORDING_SAMPLE_RATE=16000, MIC_GAIN=1.0)
     with patch.dict(
         "sys.modules", {"sounddevice": MagicMock(), "soundfile": MagicMock()}
     ):
-        recorder = AudioRecorder(tmp_path / "audio.wav")
+        recorder = AudioRecorder(tmp_path / "audio.wav", cfg=cfg)
         recorder.start()
 
         assert recorder.peak_level == 0.0
@@ -621,12 +625,14 @@ def test_peak_level_updates_on_audio(tmp_path: Path) -> None:
 
 def test_peak_level_zero_when_paused(tmp_path: Path) -> None:
     """peak_level should be 0 when paused."""
+    from scarecrow.config import Config
     from scarecrow.recorder import AudioRecorder
 
+    cfg = Config(SAMPLE_RATE=16000, RECORDING_SAMPLE_RATE=16000, MIC_GAIN=1.0)
     with patch.dict(
         "sys.modules", {"sounddevice": MagicMock(), "soundfile": MagicMock()}
     ):
-        recorder = AudioRecorder(tmp_path / "audio.wav")
+        recorder = AudioRecorder(tmp_path / "audio.wav", cfg=cfg)
         recorder.start()
         recorder.pause()
 

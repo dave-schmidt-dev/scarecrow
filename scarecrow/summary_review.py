@@ -70,10 +70,38 @@ def _copy_generated_summary(summary_path: Path) -> Path:
     return generated_path
 
 
+def _read_single_key(prompt: str) -> str:
+    """Read a single keypress without requiring Enter.
+
+    Falls back to ``input()`` if terminal setup fails.
+    """
+    import contextlib
+    import termios
+    import tty
+
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+    fd = sys.stdin.fileno()
+    old_settings = None
+    try:
+        old_settings = termios.tcgetattr(fd)
+        tty.setcbreak(fd)
+        ch = sys.stdin.read(1)
+    except (termios.error, OSError, ValueError):
+        return input("")
+    finally:
+        if old_settings is not None:
+            with contextlib.suppress(termios.error, OSError, ValueError):
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    sys.stdout.write(ch + "\n")
+    sys.stdout.flush()
+    return ch
+
+
 def prompt_for_summary_review(
     summary_path: Path,
     *,
-    input_fn: Callable[[str], str] = input,
+    input_fn: Callable[[str], str] | None = None,
     print_fn: Callable[..., None] = print,
     regenerate_fn: Callable[[str | None], Path | None] | None = None,
 ) -> bool:
@@ -88,6 +116,11 @@ def prompt_for_summary_review(
     if not summary_path.exists():
         return False
 
+    # When input_fn is provided (tests), use it for everything.
+    # Otherwise use single-keypress for choices, regular input for feedback.
+    choice_fn: Callable[[str], str] = input_fn or _read_single_key
+    line_fn: Callable[[str], str] = input_fn or input
+
     body, _footer = _load_summary_parts(summary_path)
     _copy_generated_summary(summary_path)
 
@@ -100,7 +133,7 @@ def prompt_for_summary_review(
 
     while True:
         try:
-            choice = input_fn("  Choice: ").strip().lower() or "a"
+            choice = choice_fn("  Choice: ").strip().lower() or "a"
         except KeyboardInterrupt:
             print_fn()
             print_fn("  Summary review canceled.")
@@ -118,7 +151,7 @@ def prompt_for_summary_review(
             lines: list[str] = []
             while True:
                 try:
-                    line = input_fn("    > ")
+                    line = line_fn("    > ")
                 except KeyboardInterrupt:
                     print_fn()
                     print_fn("  Summary feedback canceled.")

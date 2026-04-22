@@ -2,6 +2,11 @@
 
 Bug entries are inline under their date heading. A squashed bug must reference a regression test.
 
+## 2026-04-22
+
+- **Single-keypress choice in shutdown review prompts.** Summary review and task review `[a]ccept / [e]dit` prompts now respond to a single keypress without requiring Enter. Uses `tty.setcbreak()` for immediate input, with fallback to `input()` if terminal setup fails. Feedback text entry still uses regular line input. Existing test coverage unchanged via the `input_fn` injection parameter.
+- **Fixed flaky `test_peak_level_updates_on_audio`.** The test used the global config singleton which could have `MIC_GAIN=2.0` left over from context-menu preset tests that mutate it. Fixed by giving the test its own `Config(MIC_GAIN=1.0)` so it's isolated from global state.
+
 ## 2026-04-15
 
 - **Separated summary and task review UX.** Summary review no longer shows the `Action Items` section while you are validating the narrative. Summary review now opens directly on the draft with `accept` or `edit via feedback`, and task review now opens separately with the same `accept` or `edit via feedback` pattern. Task edits are refined through the local model instead of a brittle local parser.

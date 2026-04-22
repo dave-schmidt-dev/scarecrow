@@ -223,16 +223,49 @@ def _refine_tasks_with_feedback(
     return result
 
 
+def _read_single_key(prompt: str) -> str:
+    """Read a single keypress without requiring Enter.
+
+    Falls back to ``input()`` if terminal setup fails.
+    """
+    import contextlib
+    import termios
+    import tty
+
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+    fd = sys.stdin.fileno()
+    old_settings = None
+    try:
+        old_settings = termios.tcgetattr(fd)
+        tty.setcbreak(fd)
+        ch = sys.stdin.read(1)
+    except (termios.error, OSError, ValueError):
+        return input("")
+    finally:
+        if old_settings is not None:
+            with contextlib.suppress(termios.error, OSError, ValueError):
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    sys.stdout.write(ch + "\n")
+    sys.stdout.flush()
+    return ch
+
+
 def prompt_for_task_review(
     session_dir: Path,
     summary_path: Path,
     *,
-    input_fn: Callable[[str], str] = input,
+    input_fn: Callable[[str], str] | None = None,
     print_fn: Callable[..., None] = print,
 ) -> list[str] | None:
     """Prompt the user to review tasks and rewrite summary.md if confirmed."""
     if not sys.stdin.isatty():
         return None
+
+    # When input_fn is provided (tests), use it for everything.
+    # Otherwise use single-keypress for choices, regular input for feedback.
+    choice_fn: Callable[[str], str] = input_fn or _read_single_key
+    line_fn: Callable[[str], str] = input_fn or input
 
     candidates = collect_task_candidates(session_dir, summary_path)
     print_fn()
@@ -250,7 +283,7 @@ def prompt_for_task_review(
         print_fn()
         print_fn("  Options: [a]ccept, [e]dit via feedback")
         try:
-            choice = input_fn("  Choice: ").strip().lower() or "a"
+            choice = choice_fn("  Choice: ").strip().lower() or "a"
         except KeyboardInterrupt:
             print_fn()
             print_fn("  Task review canceled.")
@@ -265,7 +298,7 @@ def prompt_for_task_review(
             return [item["text"] for item in working]
         if choice in {"e", "edit"}:
             feedback_lines = _collect_feedback_lines(
-                input_fn=input_fn,
+                input_fn=line_fn,
                 print_fn=print_fn,
                 prompt=(
                     "  Describe task corrections, removals, or additions "
